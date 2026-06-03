@@ -4,7 +4,16 @@ import {
   products as mockProducts,
   suppliers as mockSuppliers,
 } from "@/lib/mock-data";
-import type { Client, Order, OrderLine, OrderStatus, Product, Supplier } from "@/lib/types";
+import type {
+  Client,
+  ImportBatch,
+  ImportError,
+  Order,
+  OrderLine,
+  OrderStatus,
+  Product,
+  Supplier,
+} from "@/lib/types";
 import { createServerSupabaseClient, hasSupabaseServerEnv } from "./server";
 
 export type OrderWorkbenchInitialData = {
@@ -12,6 +21,7 @@ export type OrderWorkbenchInitialData = {
   suppliers: Supplier[];
   products: Product[];
   orders: Order[];
+  importBatches: ImportBatch[];
   source: "supabase" | "mock";
   message: string;
 };
@@ -64,6 +74,22 @@ type OrderRow = {
   order_lines: OrderLineRow[] | null;
 };
 
+type ImportErrorRow = {
+  row_number: number | null;
+  field: string;
+  message: string;
+};
+
+type ImportBatchRow = {
+  id: string;
+  client_id: string;
+  supplier_id: string;
+  file_name: string;
+  status: "saved" | "blocked";
+  imported_at: string;
+  import_errors: ImportErrorRow[] | null;
+};
+
 export async function getOrderWorkbenchInitialData(): Promise<OrderWorkbenchInitialData> {
   if (!hasSupabaseServerEnv()) {
     return getMockInitialData("Supabase環境変数が未設定のため、サンプルデータを表示しています。");
@@ -71,7 +97,8 @@ export async function getOrderWorkbenchInitialData(): Promise<OrderWorkbenchInit
 
   try {
     const supabase = createServerSupabaseClient();
-    const [clientsResult, suppliersResult, productsResult, ordersResult] = await Promise.all([
+    const [clientsResult, suppliersResult, productsResult, ordersResult, importBatchesResult] =
+      await Promise.all([
       supabase.from("clients").select("id, name").order("name"),
       supabase.from("suppliers").select("id, client_id, name, mapping_key").order("name"),
       supabase
@@ -110,10 +137,33 @@ export async function getOrderWorkbenchInitialData(): Promise<OrderWorkbenchInit
         `,
         )
         .order("imported_at", { ascending: false }),
+      supabase
+        .from("import_batches")
+        .select(
+          `
+          id,
+          client_id,
+          supplier_id,
+          file_name,
+          status,
+          imported_at,
+          import_errors (
+            row_number,
+            field,
+            message
+          )
+        `,
+        )
+        .order("imported_at", { ascending: false })
+        .limit(20),
     ]);
 
     const firstError =
-      clientsResult.error ?? suppliersResult.error ?? productsResult.error ?? ordersResult.error;
+      clientsResult.error ??
+      suppliersResult.error ??
+      productsResult.error ??
+      ordersResult.error ??
+      importBatchesResult.error;
 
     if (firstError) {
       return getMockInitialData(
@@ -129,6 +179,7 @@ export async function getOrderWorkbenchInitialData(): Promise<OrderWorkbenchInit
       suppliers: ((suppliersResult.data ?? []) as SupplierRow[]).map(mapSupplier),
       products: ((productsResult.data ?? []) as ProductRow[]).map(mapProduct),
       orders: ((ordersResult.data ?? []) as OrderRow[]).map(mapOrder),
+      importBatches: ((importBatchesResult.data ?? []) as ImportBatchRow[]).map(mapImportBatch),
       source: "supabase",
       message: "Supabaseから読み取ったデータを表示しています。保存処理はまだ仮実装です。",
     };
@@ -146,6 +197,7 @@ function getMockInitialData(message: string): OrderWorkbenchInitialData {
     suppliers: mockSuppliers,
     products: mockProducts,
     orders: mockOrders,
+    importBatches: [],
     source: "mock",
     message,
   };
@@ -205,5 +257,25 @@ function mapOrderLine(row: OrderLineRow): OrderLine {
     taxRateSnapshot: row.tax_rate_snapshot === null ? null : Number(row.tax_rate_snapshot),
     amount: row.amount === null ? null : Number(row.amount),
     memo: row.memo ?? "",
+  };
+}
+
+function mapImportBatch(row: ImportBatchRow): ImportBatch {
+  return {
+    id: row.id,
+    clientId: row.client_id,
+    supplierId: row.supplier_id,
+    fileName: row.file_name,
+    importedAt: row.imported_at,
+    status: row.status,
+    errors: (row.import_errors ?? []).map(mapImportError),
+  };
+}
+
+function mapImportError(row: ImportErrorRow): ImportError {
+  return {
+    row: row.row_number ?? 0,
+    field: row.field,
+    message: row.message,
   };
 }

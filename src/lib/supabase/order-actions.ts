@@ -237,3 +237,87 @@ export async function undoOrderConfirmationInSupabase(params: {
     message: "受注をSupabase上でも imported に戻しました。",
   };
 }
+
+export async function deleteOrderInSupabase(params: {
+  clientId: string;
+  orderId: string;
+}): Promise<SaveOrderStatusResult> {
+  if (!params.clientId || !params.orderId) {
+    return {
+      ok: false,
+      message: "受注削除に必要な情報が不足しています。",
+    };
+  }
+
+  if (!hasSupabaseServerEnv()) {
+    return {
+      ok: true,
+      savedToSupabase: false,
+      message: "Supabase環境変数が未設定のため、削除は画面内だけに反映しました。",
+    };
+  }
+
+  const identity = orderIdentitySchema.safeParse(params);
+  if (!identity.success) {
+    return {
+      ok: false,
+      message: "受注削除に必要な情報が不足しています。",
+    };
+  }
+
+  const supabase = createServerSupabaseClient();
+  const { data: order, error: orderError } = await supabase
+    .from("orders")
+    .select("id, status")
+    .eq("client_id", identity.data.clientId)
+    .eq("id", identity.data.orderId)
+    .single();
+
+  if (orderError || !order) {
+    return {
+      ok: false,
+      message: `受注の確認に失敗しました: ${orderError?.message ?? "受注が見つかりません"}`,
+    };
+  }
+
+  if (order.status === "shipping_instructed" || order.status === "shipped") {
+    return {
+      ok: false,
+      message: "出荷指示済み、または出荷済みの受注は削除できません。",
+    };
+  }
+
+  const { error: linesDeleteError } = await supabase
+    .from("order_lines")
+    .delete()
+    .eq("client_id", identity.data.clientId)
+    .eq("order_id", identity.data.orderId);
+
+  if (linesDeleteError) {
+    return {
+      ok: false,
+      message: `受注明細の削除に失敗しました: ${linesDeleteError.message}`,
+    };
+  }
+
+  const { error: orderDeleteError } = await supabase
+    .from("orders")
+    .delete()
+    .eq("client_id", identity.data.clientId)
+    .eq("id", identity.data.orderId);
+
+  if (orderDeleteError) {
+    return {
+      ok: false,
+      message: `受注の削除に失敗しました: ${orderDeleteError.message}`,
+    };
+  }
+
+  revalidatePath("/");
+
+  return {
+    ok: true,
+    savedToSupabase: true,
+    message: "受注をSupabaseから削除しました。",
+  };
+}
