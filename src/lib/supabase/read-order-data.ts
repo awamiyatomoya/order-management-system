@@ -4,6 +4,10 @@ import {
   products as mockProducts,
   suppliers as mockSuppliers,
 } from "@/lib/mock-data";
+import {
+  deliveryDestinations as staticDeliveryDestinations,
+  type DeliveryDestination,
+} from "@/lib/delivery-destination-master";
 import type {
   Client,
   ImportBatch,
@@ -22,6 +26,7 @@ export type OrderWorkbenchInitialData = {
   products: Product[];
   orders: Order[];
   importBatches: ImportBatch[];
+  deliveryDestinations: DeliveryDestination[];
   source: "supabase" | "mock";
   message: string;
 };
@@ -88,6 +93,18 @@ type ImportBatchRow = {
   status: "saved" | "blocked";
   imported_at: string;
   import_errors: ImportErrorRow[] | null;
+};
+
+type DeliveryDestinationRow = {
+  client_id: string;
+  code: string;
+  name: string;
+  postal_code: string;
+  address1: string;
+  address2: string | null;
+  address3: string | null;
+  tel: string;
+  aliases: string[] | null;
 };
 
 export async function getOrderWorkbenchInitialData(): Promise<OrderWorkbenchInitialData> {
@@ -171,6 +188,8 @@ export async function getOrderWorkbenchInitialData(): Promise<OrderWorkbenchInit
       );
     }
 
+    const deliveryDestinations = await readDeliveryDestinations(supabase);
+
     return {
       clients: (clientsResult.data ?? []).map((client) => ({
         id: client.id,
@@ -180,6 +199,7 @@ export async function getOrderWorkbenchInitialData(): Promise<OrderWorkbenchInit
       products: ((productsResult.data ?? []) as ProductRow[]).map(mapProduct),
       orders: ((ordersResult.data ?? []) as OrderRow[]).map(mapOrder),
       importBatches: ((importBatchesResult.data ?? []) as ImportBatchRow[]).map(mapImportBatch),
+      deliveryDestinations,
       source: "supabase",
       message: "Supabaseから読み取ったデータを表示しています。保存処理はまだ仮実装です。",
     };
@@ -198,9 +218,25 @@ function getMockInitialData(message: string): OrderWorkbenchInitialData {
     products: mockProducts,
     orders: mockOrders,
     importBatches: [],
+    deliveryDestinations: staticDeliveryDestinations,
     source: "mock",
     message,
   };
+}
+
+async function readDeliveryDestinations(
+  supabase: ReturnType<typeof createServerSupabaseClient>,
+) {
+  const { data, error } = await supabase
+    .from("delivery_destinations")
+    .select("client_id, code, name, postal_code, address1, address2, address3, tel, aliases")
+    .order("code");
+
+  if (error) {
+    return staticDeliveryDestinations;
+  }
+
+  return [...staticDeliveryDestinations, ...((data ?? []) as DeliveryDestinationRow[]).map(mapDeliveryDestination)];
 }
 
 function mapSupplier(row: SupplierRow): Supplier {
@@ -269,6 +305,20 @@ function mapImportBatch(row: ImportBatchRow): ImportBatch {
     importedAt: row.imported_at,
     status: row.status,
     errors: (row.import_errors ?? []).map(mapImportError),
+  };
+}
+
+function mapDeliveryDestination(row: DeliveryDestinationRow): DeliveryDestination {
+  return {
+    clientId: row.client_id,
+    code: row.code,
+    name: row.name,
+    postalCode: row.postal_code,
+    address1: row.address1,
+    address2: row.address2 ?? "",
+    address3: row.address3 ?? "",
+    tel: row.tel,
+    aliases: row.aliases ?? [],
   };
 }
 

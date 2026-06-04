@@ -37,6 +37,11 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import {
+  buildCooolaCsv,
+  buildCooolaExportFileName,
+} from "@/lib/cooola-export";
+import type { DeliveryDestination } from "@/lib/delivery-destination-master";
+import {
   calculateLineAmount,
   buildImportDraft,
   confirmOrder,
@@ -52,6 +57,7 @@ import {
   deleteOrderInSupabase,
   undoOrderConfirmationInSupabase,
 } from "@/lib/supabase/order-actions";
+import { saveDeliveryDestination } from "@/lib/supabase/delivery-destination-actions";
 import type { OrderWorkbenchInitialData } from "@/lib/supabase/read-order-data";
 import { saveProduct } from "@/lib/supabase/product-actions";
 import type { ImportBatch, ImportError, Order, Product } from "@/lib/types";
@@ -64,6 +70,17 @@ type ProductForm = {
   wholesalePrice: string;
   taxRate: string;
   memo: string;
+};
+
+type DeliveryDestinationForm = {
+  code: string;
+  name: string;
+  postalCode: string;
+  address1: string;
+  address2: string;
+  address3: string;
+  tel: string;
+  aliases: string;
 };
 
 type PendingImport = {
@@ -114,6 +131,17 @@ const emptyProductForm: ProductForm = {
   memo: "",
 };
 
+const emptyDeliveryDestinationForm: DeliveryDestinationForm = {
+  code: "",
+  name: "",
+  postalCode: "",
+  address1: "",
+  address2: "",
+  address3: "",
+  tel: "",
+  aliases: "",
+};
+
 export function OrderWorkbench({ initialData }: { initialData: OrderWorkbenchInitialData }) {
   const initialSelection = getInitialSelection(initialData);
   const [selectedClientId, setSelectedClientId] = useState(initialSelection.clientId);
@@ -121,18 +149,25 @@ export function OrderWorkbench({ initialData }: { initialData: OrderWorkbenchIni
   const [products, setProducts] = useState<Product[]>(initialData.products);
   const [orders, setOrders] = useState<Order[]>(initialData.orders);
   const [importBatches, setImportBatches] = useState<ImportBatch[]>(initialData.importBatches);
+  const [deliveryDestinations, setDeliveryDestinations] = useState<DeliveryDestination[]>(
+    initialData.deliveryDestinations,
+  );
   const [errors, setErrors] = useState<ImportError[]>([]);
   const [pendingImport, setPendingImport] = useState<PendingImport | null>(null);
   const [pdfPreview, setPdfPreview] = useState<PdfPreview | null>(null);
   const [isPdfPreviewExpanded, setIsPdfPreviewExpanded] = useState(false);
   const [productForm, setProductForm] = useState<ProductForm>(emptyProductForm);
+  const [deliveryDestinationForm, setDeliveryDestinationForm] =
+    useState<DeliveryDestinationForm>(emptyDeliveryDestinationForm);
   const [notice, setNotice] = useState(initialData.message);
   const [productNotice, setProductNotice] = useState("");
+  const [deliveryDestinationNotice, setDeliveryDestinationNotice] = useState("");
   const [orderSearch, setOrderSearch] = useState("");
   const [orderStatusFilter, setOrderStatusFilter] = useState("all");
   const [isSavingImport, setIsSavingImport] = useState(false);
   const [savingOrderId, setSavingOrderId] = useState<string | null>(null);
   const [isSavingProduct, setIsSavingProduct] = useState(false);
+  const [isSavingDeliveryDestination, setIsSavingDeliveryDestination] = useState(false);
 
   const selectableSuppliers = initialData.suppliers.filter(
     (supplier) => supplier.clientId === selectedClientId,
@@ -147,6 +182,15 @@ export function OrderWorkbench({ initialData }: { initialData: OrderWorkbenchIni
   const selectedProducts = useMemo(
     () => products.filter((product) => product.clientId === selectedClientId),
     [products, selectedClientId],
+  );
+  const selectedDeliveryDestinations = useMemo(
+    () =>
+      dedupeDeliveryDestinations(
+        deliveryDestinations.filter(
+          (destination) => !destination.clientId || destination.clientId === selectedClientId,
+        ),
+      ),
+    [deliveryDestinations, selectedClientId],
   );
   const selectedImportBatches = useMemo(
     () => importBatches.filter((batch) => batch.clientId === selectedClientId),
@@ -230,6 +274,7 @@ export function OrderWorkbench({ initialData }: { initialData: OrderWorkbenchIni
     const parseResult = parsePdfOrderText({
       text: result.text,
       mapping: supplierMappings[selectedSupplier.mappingKey],
+      deliveryDestinations: selectedDeliveryDestinations,
     });
 
     if (parseResult.errors.length > 0) {
@@ -417,6 +462,88 @@ export function OrderWorkbench({ initialData }: { initialData: OrderWorkbenchIni
     );
   }
 
+  async function registerDeliveryDestination(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+
+    setDeliveryDestinationNotice("");
+
+    const normalizedForm = {
+      code: deliveryDestinationForm.code.trim(),
+      name: deliveryDestinationForm.name.trim(),
+      postalCode: deliveryDestinationForm.postalCode.trim(),
+      address1: deliveryDestinationForm.address1.trim(),
+      address2: deliveryDestinationForm.address2.trim(),
+      address3: deliveryDestinationForm.address3.trim(),
+      tel: deliveryDestinationForm.tel.trim(),
+      aliases: deliveryDestinationForm.aliases
+        .split(/[\n,、]/)
+        .map((alias) => alias.trim())
+        .filter(Boolean),
+    };
+
+    if (!selectedClientId) {
+      setNotice("先にクライアントを選んでください。");
+      setDeliveryDestinationNotice("先にクライアントを選んでください。");
+      return;
+    }
+
+    if (!normalizedForm.code || !normalizedForm.name || !normalizedForm.address1) {
+      const message = "配送先コード、配送先名、住所1は必須です。";
+      setNotice(message);
+      setDeliveryDestinationNotice(message);
+      return;
+    }
+
+    const nextDestination: DeliveryDestination = {
+      clientId: selectedClientId,
+      code: normalizedForm.code,
+      name: normalizedForm.name,
+      postalCode: normalizedForm.postalCode,
+      address1: normalizedForm.address1,
+      address2: normalizedForm.address2,
+      address3: normalizedForm.address3,
+      tel: normalizedForm.tel,
+      aliases: [normalizedForm.name, ...normalizedForm.aliases],
+    };
+
+    setIsSavingDeliveryDestination(true);
+    const saveResult = await saveDeliveryDestination(nextDestination);
+    setIsSavingDeliveryDestination(false);
+
+    if (!saveResult.ok) {
+      setNotice(saveResult.message);
+      setDeliveryDestinationNotice(saveResult.message);
+      return;
+    }
+
+    setDeliveryDestinations((current) => [
+      ...current.filter(
+        (destination) =>
+          !(destination.clientId === selectedClientId && destination.code === nextDestination.code),
+      ),
+      nextDestination,
+    ]);
+    setDeliveryDestinationForm(emptyDeliveryDestinationForm);
+    setNotice(`${nextDestination.code} を配送先マスターに登録しました。${saveResult.message}`);
+    setDeliveryDestinationNotice(`${nextDestination.code} を配送先マスターに登録しました。`);
+  }
+
+  function loadDeliveryDestinationToForm(destination: DeliveryDestination) {
+    setDeliveryDestinationForm({
+      code: destination.code,
+      name: destination.name,
+      postalCode: destination.postalCode,
+      address1: destination.address1,
+      address2: destination.address2,
+      address3: destination.address3,
+      tel: destination.tel,
+      aliases: destination.aliases.join("\n"),
+    });
+    setDeliveryDestinationNotice(
+      `${destination.code} をフォームに読み込みました。登録すると選択中のクライアント用マスターとして保存します。`,
+    );
+  }
+
   async function retryImportAfterProductRegistration(
     rows: Record<string, unknown>[],
     fileName: string,
@@ -469,6 +596,23 @@ export function OrderWorkbench({ initialData }: { initialData: OrderWorkbenchIni
     if (!targetOrder) {
       setNotice("対象の受注が見つかりません。");
       return;
+    }
+
+    if (action === "confirm") {
+      const confirmed = window.confirm(
+        [
+          `発注番号 ${targetOrder.orderNo} を確認済みにします。`,
+          "",
+          "確認済みにすると、この時点の商品価格・税率を受注に固定します。",
+          "後から商品マスターの価格や税率を変更しても、この受注金額は変わりません。",
+          "",
+          "よろしいですか？",
+        ].join("\n"),
+      );
+
+      if (!confirmed) {
+        return;
+      }
     }
 
     setSavingOrderId(orderId);
@@ -543,6 +687,27 @@ export function OrderWorkbench({ initialData }: { initialData: OrderWorkbenchIni
 
     setOrders((current) => current.filter((order) => order.id !== orderId));
     setNotice(saveResult.message);
+  }
+
+  function exportCooolaCsv(orderId: string) {
+    const targetOrder = orders.find((order) => order.id === orderId);
+
+    if (!targetOrder) {
+      setNotice("対象の受注が見つかりません。");
+      return;
+    }
+
+    if (targetOrder.status !== "confirmed") {
+      setNotice("メーカー向けCSVは確定済み受注だけ出力できます。");
+      return;
+    }
+
+    downloadTextFile({
+      fileName: buildCooolaExportFileName(targetOrder),
+      text: buildCooolaCsv(targetOrder, products),
+      type: "text/csv;charset=utf-8",
+    });
+    setNotice(`発注番号 ${targetOrder.orderNo} のメーカー向けCSVを出力しました。`);
   }
 
   function handleClientChange(clientId: string) {
@@ -790,6 +955,7 @@ export function OrderWorkbench({ initialData }: { initialData: OrderWorkbenchIni
                       onConfirm={() => updateOrderStatus(order.id, "confirm")}
                       onUndo={() => updateOrderStatus(order.id, "undo")}
                       onDelete={() => deleteOrder(order.id)}
+                      onExportCooola={() => exportCooolaCsv(order.id)}
                     />
                   ))}
                 </div>
@@ -874,13 +1040,53 @@ export function OrderWorkbench({ initialData }: { initialData: OrderWorkbenchIni
             </Table>
           </Panel>
 
-          <Panel title="次に作るもの">
-            <ul className="flex flex-col gap-2 text-sm text-muted-foreground">
-              <li>Supabaseのテーブル作成と `client_id` 分離</li>
-              <li>今回のブラウザ内状態をSupabase保存に差し替え</li>
-              <li>卸先マッピング設定をJSONファイルから読む処理</li>
-              <li>取込履歴とエラーのDB保存</li>
-            </ul>
+          <Panel title="配送先マスター">
+            <DeliveryDestinationRegistrationForm
+              form={deliveryDestinationForm}
+              isSaving={isSavingDeliveryDestination}
+              notice={deliveryDestinationNotice}
+              onChange={setDeliveryDestinationForm}
+              onSubmit={registerDeliveryDestination}
+            />
+
+            <div className="flex flex-col gap-2">
+              <p className="text-sm text-muted-foreground">
+                {selectedClient?.name ?? "選択中のクライアント"} で使える配送先:{" "}
+                {selectedDeliveryDestinations.length}件
+              </p>
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>コード</TableHead>
+                    <TableHead>配送先名</TableHead>
+                    <TableHead>住所</TableHead>
+                    <TableHead>TEL</TableHead>
+                    <TableHead>操作</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {selectedDeliveryDestinations.slice(0, 12).map((destination) => (
+                    <TableRow key={`${destination.clientId ?? "base"}-${destination.code}`}>
+                      <TableCell className="font-mono text-xs">{destination.code}</TableCell>
+                      <TableCell>{destination.name}</TableCell>
+                      <TableCell>
+                        {[destination.postalCode, destination.address1].filter(Boolean).join(" ")}
+                      </TableCell>
+                      <TableCell>{destination.tel}</TableCell>
+                      <TableCell>
+                        <Button
+                          type="button"
+                          size="sm"
+                          onClick={() => loadDeliveryDestinationToForm(destination)}
+                        >
+                          編集
+                        </Button>
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </div>
           </Panel>
         </section>
       </div>
@@ -962,6 +1168,67 @@ function ProductRegistrationForm({
   );
 }
 
+function DeliveryDestinationRegistrationForm({
+  form,
+  isSaving,
+  notice,
+  onChange,
+  onSubmit,
+}: {
+  form: DeliveryDestinationForm;
+  isSaving: boolean;
+  notice: string;
+  onChange: (form: DeliveryDestinationForm) => void;
+  onSubmit: (event: React.FormEvent<HTMLFormElement>) => void;
+}) {
+  return (
+    <form onSubmit={onSubmit}>
+      <FieldGroup>
+        <TextInput
+          label="配送先コード"
+          value={form.code}
+          onChange={(code) => onChange({ ...form, code })}
+        />
+        <TextInput
+          label="配送先名"
+          value={form.name}
+          onChange={(name) => onChange({ ...form, name })}
+        />
+        <TextInput
+          label="郵便番号"
+          value={form.postalCode}
+          onChange={(postalCode) => onChange({ ...form, postalCode })}
+        />
+        <TextInput
+          label="住所1"
+          value={form.address1}
+          onChange={(address1) => onChange({ ...form, address1 })}
+        />
+        <TextInput
+          label="住所2"
+          value={form.address2}
+          onChange={(address2) => onChange({ ...form, address2 })}
+        />
+        <TextInput
+          label="住所3"
+          value={form.address3}
+          onChange={(address3) => onChange({ ...form, address3 })}
+        />
+        <TextInput label="TEL" value={form.tel} onChange={(tel) => onChange({ ...form, tel })} />
+        <TextInput
+          label="別名・OCR候補"
+          value={form.aliases}
+          onChange={(aliases) => onChange({ ...form, aliases })}
+        />
+        {notice ? <p className="text-sm text-muted-foreground">{notice}</p> : null}
+        <Button type="submit" disabled={isSaving}>
+          {isSaving ? "登録中..." : "配送先を登録"}
+        </Button>
+      </FieldGroup>
+    </form>
+  );
+}
+
 function TextInput({
   label,
   value,
@@ -982,6 +1249,20 @@ function TextInput({
   );
 }
 
+function dedupeDeliveryDestinations(destinations: DeliveryDestination[]) {
+  const destinationsByCode = new Map<string, DeliveryDestination>();
+
+  destinations.forEach((destination) => {
+    const current = destinationsByCode.get(destination.code);
+
+    if (!current || (!current.clientId && destination.clientId)) {
+      destinationsByCode.set(destination.code, destination);
+    }
+  });
+
+  return Array.from(destinationsByCode.values()).sort((a, b) => a.code.localeCompare(b.code, "ja"));
+}
+
 function OrderCard({
   order,
   products,
@@ -989,6 +1270,7 @@ function OrderCard({
   onConfirm,
   onUndo,
   onDelete,
+  onExportCooola,
 }: {
   order: Order;
   products: Product[];
@@ -996,6 +1278,7 @@ function OrderCard({
   onConfirm: () => void;
   onUndo: () => void;
   onDelete: () => void;
+  onExportCooola: () => void;
 }) {
   const amount = order.lines.reduce(
     (sum, line) => sum + calculateLineAmount(order, line, products),
@@ -1033,6 +1316,15 @@ function OrderCard({
               onClick={onUndo}
             >
               {isSaving ? "保存中..." : "確定を取り消す"}
+            </Button>
+          ) : null}
+          {order.status === "confirmed" ? (
+            <Button
+              type="button"
+              disabled={isSaving}
+              onClick={onExportCooola}
+            >
+              メーカーCSV出力
             </Button>
           ) : null}
           {order.status === "imported" || order.status === "confirmed" ? (
@@ -1220,6 +1512,25 @@ async function readFileForImport(file: File): Promise<FileReadResult> {
 
 function getErrorMessage(error: unknown) {
   return error instanceof Error ? error.message : "不明なエラーです";
+}
+
+function downloadTextFile({
+  fileName,
+  text,
+  type,
+}: {
+  fileName: string;
+  text: string;
+  type: string;
+}) {
+  const blob = new Blob([`\uFEFF${text}`], { type });
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+
+  anchor.href = url;
+  anchor.download = fileName;
+  anchor.click();
+  URL.revokeObjectURL(url);
 }
 
 function getExtractionMethodLabel(method: PdfPreview["extractionMethod"]) {

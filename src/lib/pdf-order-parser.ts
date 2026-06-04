@@ -1,3 +1,8 @@
+import {
+  buildDeliveryAddress,
+  type DeliveryDestination,
+  findDeliveryDestination,
+} from "./delivery-destination-master";
 import type { ImportError, SupplierMapping } from "./types";
 
 type ParsePdfOrderTextResult = {
@@ -10,17 +15,20 @@ const datePattern =
   /\d{2,4}\s*[\/\-.年月]\s*\d{1,2}\s*[\/\-.月]\s*\d{1,2}(?!\d)\s*日?/g;
 const labelOnlyPattern =
   /^(?:発注元|発注先|お届先|お届け先|お届先住所|お届け先住所|お届先TEL|お届け先TEL|取引区分|発注番号|発注日|着荷指定|着荷指定日|口座|商品コード\/品名|人数|ケース|バラ数量|有償|景品|単価|条件区分|金額|備考|摘要|金額合計|受付日時)$/;
+const stopValuePattern =
+  /^(?:発注元|発注先|お届先|お届け先|お届先住所|お届け先住所|お届先TEL|お届け先TEL|取引区分|発注番号|発注日|着荷指定|着荷指定日|口座|商品コード\/品名|人数|ケース|バラ数量|有償|景品|単価|条件区分|金額|備考|摘要|金額合計|受付日時|受注番号|配送先コード|ご依頼主名|配送先名|配送先郵便番号|配送先住所1|配送先住所2|配送先住所3|配送先TEL|配送方法|配達指定日|時間指定|請求金額|商品コード|商品名|出荷数|単価|小計|送り状備考)$/;
 
 export function parsePdfOrderText(params: {
   text: string;
   mapping: SupplierMapping;
+  deliveryDestinations?: DeliveryDestination[];
 }): ParsePdfOrderTextResult {
   const text = normalizeOcrText(params.text);
   const lines = text
     .split(/\r?\n/)
     .map((line) => line.trim())
     .filter(Boolean);
-  const metadata = extractMetadata(text, lines, params.mapping);
+  const metadata = extractMetadata(text, lines, params.mapping, params.deliveryDestinations);
   const lineItems = extractLineItems(lines);
   const errors: ImportError[] = [];
 
@@ -56,12 +64,18 @@ export function parsePdfOrderText(params: {
       [params.mapping.columns.warehouse]: metadata.warehouse,
       [params.mapping.columns.jan]: item.jan,
       [params.mapping.columns.qty]: item.qty,
+      備考: metadata.memo,
     })),
     errors: [],
   };
 }
 
-function extractMetadata(text: string, lines: string[], mapping: SupplierMapping) {
+function extractMetadata(
+  text: string,
+  lines: string[],
+  mapping: SupplierMapping,
+  deliveryDestinations?: DeliveryDestination[],
+) {
   const dates = extractDates(text);
   const warehouseValueMap = mapping.valueMaps.warehouse ?? {};
   const orderNo =
@@ -77,37 +91,55 @@ function extractMetadata(text: string, lines: string[], mapping: SupplierMapping
       /届け先\s*[:：]?\s*([^\n]+)/,
       /お届先\s*[:：]?\s*([^\n]+)/,
     ]) || extractShipToName(lines);
-  const warehouse = extractWarehouse(text, lines, Object.keys(warehouseValueMap));
-
-  return {
-    orderNo,
-    orderDate:
-      extractDateByLabel(text, [/発注日\s*[:：]?\s*([0-9年月日/\-. ]+)/]) ?? dates[0] ?? "",
-    arrivalDueDate:
-      extractDateByLabel(text, [
-        /着荷指定日\s*[:：]?\s*([0-9年月日/\-. ]+)/,
-        /着荷指定\s*[:：]?\s*([0-9年月日/\-. ]+)/,
-        /若狗指定\s*[:：]?\s*([0-9年月日/\-. ]+)/,
-        /納品(?:予定)?日\s*[:：]?\s*([0-9年月日/\-. ]+)/,
-        /到着(?:予定)?日\s*[:：]?\s*([0-9年月日/\-. ]+)/,
-      ]) ??
-      extractDateAfterLabel(lines, ["着荷指定日", "着荷指定", "若狗指定", "着狗指定"]) ??
-      dates.find((date) => date !== dates[0]) ??
-      "",
-    shipToName: shipToName || "PDF発注書のお届け先",
-    shipToCenter: extractValue(text, [/センター名\s*[:：]?\s*([^\n]+)/]),
-    shipToAddress: extractValue(text, [
+  const shipToAddress =
+    extractValue(text, [
       /お届先住所\s*[:：]?\s*([^\n]+)/,
       /お届け先住所\s*[:：]?\s*([^\n]+)/,
       /住所\s*[:：]?\s*([^\n]+)/,
-    ]),
-    shipToTel: extractValue(text, [
+    ]) || extractBlockAfterLabel(lines, ["お届先住所", "お届け先住所", "納品先住所"], [
+      "お届先TEL",
+      "お届け先TEL",
+      "取引区分",
+      "商品コード/品名",
+    ]);
+  const shipToTel =
+    extractValue(text, [
       /お届先TEL\s*[:：]?\s*([0-9\-()]+)/,
       /お届け先TEL\s*[:：]?\s*([0-9\-()]+)/,
       /電話番号\s*[:：]?\s*([0-9\-()]+)/,
       /TEL\s*[:：]?\s*([0-9\-()]+)/i,
-    ]),
+    ]) || extractTelAfterLabel(lines, ["お届先TEL", "お届け先TEL", "TEL", "電話番号"]);
+  const shipToCode = extractDeliveryDestinationCode(lines);
+  const deliveryDestination = findDeliveryDestination({
+    code: shipToCode,
+    text,
+    destinations: deliveryDestinations,
+  });
+  const warehouse = extractWarehouse(text, lines, Object.keys(warehouseValueMap));
+  const orderDate =
+    extractDateByLabel(text, [/発注日\s*[:：]?\s*([0-9年月日/\-. ]+)/]) ?? dates[0] ?? "";
+  const arrivalDueDate =
+    extractDateByLabel(text, [
+      /着荷指定日\s*[:：]?\s*([0-9年月日/\-. ]+)/,
+      /着荷指定\s*[:：]?\s*([0-9年月日/\-. ]+)/,
+      /若狗指定\s*[:：]?\s*([0-9年月日/\-. ]+)/,
+      /納品(?:予定)?日\s*[:：]?\s*([0-9年月日/\-. ]+)/,
+      /到着(?:予定)?日\s*[:：]?\s*([0-9年月日/\-. ]+)/,
+    ]) ??
+    extractArrivalDateAfterLabel(lines, orderDate) ??
+    dates.find((date) => date !== orderDate) ??
+    "";
+
+  return {
+    orderNo,
+    orderDate,
+    arrivalDueDate,
+    shipToName: deliveryDestination?.name ?? (shipToName || "PDF発注書のお届け先"),
+    shipToCenter: deliveryDestination?.code ?? shipToCode,
+    shipToAddress: deliveryDestination ? buildDeliveryAddress(deliveryDestination) : shipToAddress,
+    shipToTel: deliveryDestination?.tel ?? normalizeTel(shipToTel),
     warehouse: warehouse || "PDF発注書",
+    memo: extractMemo(lines),
   };
 }
 
@@ -188,22 +220,30 @@ function extractDateByLabel(text: string, patterns: RegExp[]) {
   return value ? normalizeDate(value) : null;
 }
 
-function extractDateAfterLabel(lines: string[], labels: string[]) {
+function extractArrivalDateAfterLabel(lines: string[], orderDate: string) {
+  const dates = extractDatesFromLinesAfterLabel(lines, [
+    "着荷指定日",
+    "着荷指定",
+    "若狗指定",
+    "着狗指定",
+    "納品日",
+    "到着日",
+  ]);
+
+  return dates.find((date) => date !== orderDate) ?? dates[0] ?? null;
+}
+
+function extractDatesFromLinesAfterLabel(lines: string[], labels: string[]) {
   const index = lines.findIndex((line) => labels.some((label) => line.includes(label)));
 
   if (index === -1) {
-    return null;
+    return [];
   }
 
-  for (const line of lines.slice(index + 1, index + 8)) {
-    const date = line.match(datePattern)?.[0];
-
-    if (date) {
-      return normalizeDate(date);
-    }
-  }
-
-  return null;
+  return lines
+    .slice(index + 1, index + 10)
+    .flatMap((line) => [...line.matchAll(datePattern)].map((match) => normalizeDate(match[0])))
+    .filter(Boolean);
 }
 
 function extractDates(text: string) {
@@ -276,19 +316,94 @@ function extractShipToName(lines: string[]) {
     return "";
   }
 
-  for (const line of lines.slice(index + 1, index + 5)) {
+  for (const line of lines.slice(index + 1, index + 8)) {
     const trimmed = line.trim();
 
     if (/お届先住所|お届け先住所|お届先TEL|お届け先TEL|取引区分/.test(trimmed)) {
       return "";
     }
 
-    if (trimmed && !labelOnlyPattern.test(trimmed)) {
+    if (isUsableOcrValue(trimmed) && !isCodeOnlyLine(trimmed)) {
       return cleanupValue(trimmed);
     }
   }
 
   return "";
+}
+
+function extractBlockAfterLabel(lines: string[], labels: string[], stopLabels: string[]) {
+  const index = lines.findIndex((line) => labels.some((label) => line.includes(label)));
+
+  if (index === -1) {
+    return "";
+  }
+
+  const values: string[] = [];
+
+  for (const line of lines.slice(index + 1, index + 8)) {
+    const trimmed = line.trim();
+
+    if (stopLabels.some((label) => trimmed.includes(label)) || stopValuePattern.test(trimmed)) {
+      break;
+    }
+
+    if (isUsableOcrValue(trimmed)) {
+      values.push(trimmed);
+    }
+  }
+
+  return cleanupValue(values.join(""));
+}
+
+function extractTelAfterLabel(lines: string[], labels: string[]) {
+  const index = lines.findIndex((line) => labels.some((label) => line.includes(label)));
+  const searchLines = index === -1 ? lines : lines.slice(index, index + 6);
+
+  for (const line of searchLines) {
+    const tel = line.match(/0\d{1,4}-\d{1,4}-\d{3,4}/)?.[0];
+
+    if (tel) {
+      return tel;
+    }
+  }
+
+  return "";
+}
+
+function extractDeliveryDestinationCode(lines: string[]) {
+  const index = lines.findIndex((line) =>
+    ["お届先", "お届け先", "配送先", "納品先"].some((label) => line.includes(label)),
+  );
+  const searchLines = index === -1 ? lines : lines.slice(index + 1, index + 8);
+
+  return searchLines
+    .map((line) => line.match(/\d{5,}\p{Letter}?/iu)?.[0] ?? "")
+    .find(Boolean) ?? "";
+}
+
+function extractMemo(lines: string[]) {
+  const value =
+    extractBlockAfterLabel(lines, ["摘要", "備考"], ["金額合計", "受付日時"]) ||
+    lines.find((line) => /^\*[^\s]+/.test(line.trim()))?.trim() ||
+    "";
+
+  return cleanupValue(value);
+}
+
+function isUsableOcrValue(value: string) {
+  return Boolean(value) && !labelOnlyPattern.test(value);
+}
+
+function isCodeOnlyLine(value: string) {
+  return /^[A-Z0-9]{3,}$/i.test(value.replace(/[-_\s]/g, ""));
+}
+
+function normalizeTel(value: string) {
+  if (/^\d{4}-\d{2}-\d{4}$/.test(value)) {
+    return value.replace(/^(\d{3})(\d)-(\d{2})-(\d{4})$/, "$1-$2$3-$4");
+  }
+
+  return value;
 }
 
 function buildFileError(message: string): ImportError {

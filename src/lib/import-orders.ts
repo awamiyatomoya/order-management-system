@@ -21,6 +21,7 @@ type NormalizedRow = {
   warehouse: string;
   jan: string;
   qty: number;
+  memo: string;
 };
 
 export type ImportDraft = {
@@ -40,6 +41,7 @@ const normalizedRowSchema = z.object({
   warehouse: z.string().min(1, "倉庫が空です"),
   jan: z.string().min(1, "JANが空です"),
   qty: z.coerce.number().int("数量は整数にしてください").positive("数量は1以上にしてください"),
+  memo: z.string(),
 });
 
 export function buildImportDraft(params: {
@@ -188,6 +190,7 @@ function normalizeRow(row: RawRow, mapping: SupplierMapping) {
     warehouse: mapValue("warehouse", stringCell(row[mapping.columns.warehouse]), mapping),
     jan: stringCell(row[mapping.columns.jan]),
     qty: row[mapping.columns.qty],
+    memo: stringCell(row["備考"]),
   };
 }
 
@@ -248,7 +251,7 @@ function buildOrder(params: {
       unitPriceSnapshot: null,
       taxRateSnapshot: null,
       amount: null,
-      memo: "",
+      memo: row.memo,
     })),
   };
 }
