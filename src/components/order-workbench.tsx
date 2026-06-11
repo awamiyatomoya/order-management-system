@@ -336,6 +336,19 @@ const productMasterDisplayFields = [
   productMasterListFields.find((field) => field.key === "jan"),
   ...productMasterListFields.filter((field) => field.key !== "name" && field.key !== "jan"),
 ].filter((field): field is ProductFormField => Boolean(field));
+const productMasterExportSampleValues: Partial<Record<ProductFormFieldKey, string>> = {
+  formalProductName: "（例）モイスチャーローション",
+  name: "モイスチャーローション",
+  productNameKana: "モイスチャーローション",
+  manufacturerCode: "VinnaCo株式会社",
+  manufacturerName: "4901234567890",
+  jan: "5779809310123",
+  taxRate: "10%",
+  wholesalePrice: "1,200",
+  referenceRetailPrice: "2,400",
+  retailPrice: "2,400",
+  payoutRate: "50",
+};
 
 function createEmptyProductMasterExtraForm() {
   return Object.fromEntries(productMasterExtraFields.map((field) => [field.key, ""])) as Record<
@@ -2283,6 +2296,25 @@ export function OrderWorkbench({
     setNotice("セルインデータExcelを出力しました。");
   }
 
+  function exportProductMasterExcel() {
+    const worksheet = XLSX.utils.aoa_to_sheet(buildProductMasterExportRows(filteredProducts));
+    const workbook = XLSX.utils.book_new();
+
+    worksheet["!cols"] = productMasterListFields.map((field) => ({
+      wch: field.input === "textarea" ? 36 : Math.max(14, field.label.length * 2),
+    }));
+    XLSX.utils.book_append_sheet(workbook, worksheet, "商品マスタ");
+    XLSX.writeFile(
+      workbook,
+      buildProductMasterExportFileName({
+        clientName:
+          productClientFilter === "all" ? "すべて" : getClientName(productClientFilter, clients),
+        search: productSearch,
+      }),
+    );
+    setProductNotice(`${filteredProducts.length}件の商品マスタExcelを出力しました。`);
+  }
+
   function handleClientChange(clientId: string) {
     const firstSupplier = suppliers.find((supplier) => supplier.clientId === clientId);
     setSelectedClientId(clientId);
@@ -2820,15 +2852,26 @@ export function OrderWorkbench({
                   </Button>
                 </div>
               ) : (
-                <Button
-                  type="button"
-                  size="sm"
-                  variant="outline"
-                  disabled={products.length === 0}
-                  onClick={startProductMasterEdit}
-                >
-                  編集
-                </Button>
+                <div className="flex flex-wrap gap-2">
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    disabled={filteredProducts.length === 0}
+                    onClick={exportProductMasterExcel}
+                  >
+                    絞り込み結果をExcel出力
+                  </Button>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    disabled={products.length === 0}
+                    onClick={startProductMasterEdit}
+                  >
+                    編集
+                  </Button>
+                </div>
               )
             }
           >
@@ -4806,6 +4849,67 @@ function getProductMasterDisplayValue(product: Product, key: ProductFormFieldKey
   }
 
   return String(value);
+}
+
+function buildProductMasterExportRows(products: Product[]) {
+  const categoryRow: string[] = [];
+  const headerRow = productMasterListFields.map((field) => field.label);
+  const descriptionRow = productMasterListFields.map((field) => field.description ?? "");
+  const sampleRow = productMasterListFields.map((field) => productMasterExportSampleValues[field.key] ?? "");
+
+  productFormSections.forEach((section) => {
+    section.fields.forEach((_, index) => {
+      categoryRow.push(index === 0 ? section.title : "");
+    });
+  });
+
+  return [
+    ["商品マスタ"],
+    categoryRow,
+    headerRow,
+    descriptionRow,
+    sampleRow,
+    ...products.map((product) =>
+      productMasterListFields.map((field) => getProductMasterExportValue(product, field.key)),
+    ),
+  ];
+}
+
+function getProductMasterExportValue(product: Product, key: ProductFormFieldKey) {
+  if (key === "wholesalePrice") {
+    return product.wholesalePrice;
+  }
+
+  if (key === "taxRate") {
+    return formatTaxRate(product.taxRate);
+  }
+
+  if (key === "retailPrice") {
+    return product.retailPrice ?? "";
+  }
+
+  if (key === "payoutRate") {
+    return product.payoutRate === null ? "" : formatRatePercentInput(product.payoutRate);
+  }
+
+  const value = product[key];
+  return value === null || value === undefined ? "" : value;
+}
+
+function buildProductMasterExportFileName({
+  clientName,
+  search,
+}: {
+  clientName: string;
+  search: string;
+}) {
+  const date = new Date().toISOString().slice(0, 10).replaceAll("-", "");
+  const suffix = [clientName, search.trim()]
+    .map((value) => value.replace(/[\\/:*?"<>|]/g, "").trim())
+    .filter(Boolean)
+    .join("_");
+
+  return `商品マスタ_${suffix || "全件"}_${date}.xlsx`;
 }
 
 function getDeliveryWholesalerName(destination: Pick<DeliveryDestination, "wholesalerName" | "name" | "aliases" | "code">) {
