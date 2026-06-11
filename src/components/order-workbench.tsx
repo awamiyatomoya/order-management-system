@@ -331,6 +331,11 @@ const productFormSections: ProductFormSection[] = [
 ];
 
 const productMasterListFields = productFormSections.flatMap((section) => section.fields);
+const productMasterDisplayFields = [
+  productMasterListFields.find((field) => field.key === "name"),
+  productMasterListFields.find((field) => field.key === "jan"),
+  ...productMasterListFields.filter((field) => field.key !== "name" && field.key !== "jan"),
+].filter((field): field is ProductFormField => Boolean(field));
 
 function createEmptyProductMasterExtraForm() {
   return Object.fromEntries(productMasterExtraFields.map((field) => [field.key, ""])) as Record<
@@ -2816,7 +2821,7 @@ export function OrderWorkbench({
                 <TableHeader>
                   <TableRow>
                     <TableHead className="w-[160px]">クライアント</TableHead>
-                    {productMasterListFields.map((field) => (
+                    {(isEditingProductMaster ? productMasterListFields : productMasterDisplayFields).map((field) => (
                       <TableHead key={String(field.key)} className="min-w-[150px]">
                         {field.label}
                       </TableHead>
@@ -2874,7 +2879,7 @@ export function OrderWorkbench({
                     : pagedProducts.map((product) => (
                         <TableRow key={buildProductKey(product.clientId, product.jan)}>
                           <TableCell>{getClientName(product.clientId, clients)}</TableCell>
-                          {productMasterListFields.map((field) => (
+                          {productMasterDisplayFields.map((field) => (
                             <ProductMasterTableCell
                               key={String(field.key)}
                               field={field}
