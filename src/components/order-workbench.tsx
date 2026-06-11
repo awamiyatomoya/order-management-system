@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { ChevronLeft, ChevronRight, ListFilter, LoaderCircle, Search, Trash2 } from "lucide-react";
+import { Check, ChevronLeft, ChevronRight, Copy, ListFilter, LoaderCircle, Search, Trash2 } from "lucide-react";
 import Papa from "papaparse";
 import { useId, useMemo, useRef, useState } from "react";
 import * as XLSX from "xlsx";
@@ -2406,6 +2406,12 @@ export function OrderWorkbench({
           </div>
         </header>
 
+        {initialData.source !== "supabase" ? (
+          <div className="rounded-lg border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive">
+            {initialData.message}
+          </div>
+        ) : null}
+
         {view === "orders" ? (
           <ClientSelectorBar
             clients={clients}
@@ -4308,8 +4314,11 @@ function ProductMasterTableCell({
 }) {
   if (!isEditing || field.key === "jan") {
     return (
-      <TableCell className={field.key === "jan" ? "font-mono text-xs" : ""}>
-        <span className="whitespace-pre-wrap">{value || "未設定"}</span>
+      <TableCell className="h-12 max-w-[220px] align-middle">
+        <CopyableTableValue
+          value={value}
+          className={field.key === "jan" ? "font-mono text-xs" : ""}
+        />
       </TableCell>
     );
   }
@@ -4347,6 +4356,58 @@ function ProductMasterTableCell({
         onChange={(event) => onChange?.(event.target.value)}
       />
     </TableCell>
+  );
+}
+
+function CopyableTableValue({
+  value,
+  className = "",
+}: {
+  value: string;
+  className?: string;
+}) {
+  const [copied, setCopied] = useState(false);
+  const displayValue = value || "未設定";
+  const canCopy = Boolean(value);
+
+  async function copyValue() {
+    if (!canCopy) {
+      return;
+    }
+
+    try {
+      await navigator.clipboard.writeText(value);
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 1200);
+    } catch {
+      window.prompt("コピーしてください", value);
+    }
+  }
+
+  return (
+    <div className="flex min-w-0 items-center gap-1">
+      <span
+        className={`block min-w-0 flex-1 truncate ${className}`}
+        title={displayValue}
+      >
+        {displayValue}
+      </span>
+      {canCopy ? (
+        <button
+          type="button"
+          className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-muted-foreground hover:bg-muted hover:text-foreground"
+          onClick={copyValue}
+          aria-label={`${displayValue} をコピー`}
+          title="コピー"
+        >
+          {copied ? (
+            <Check className="h-3.5 w-3.5" aria-hidden="true" />
+          ) : (
+            <Copy className="h-3.5 w-3.5" aria-hidden="true" />
+          )}
+        </button>
+      ) : null}
+    </div>
   );
 }
 
