@@ -9,7 +9,7 @@ export default async function SellInPage({
   searchParams: Promise<{ clientId?: string }>;
 }) {
   const { clientId } = await searchParams;
-  const initialData = await getOrderWorkbenchInitialData();
+  const initialData = await getOrderWorkbenchInitialData("sellIn");
 
   return <OrderWorkbench initialData={initialData} view="sellIn" initialClientId={clientId} />;
 }

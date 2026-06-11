@@ -9,7 +9,7 @@ export default async function HistoryPage({
   searchParams: Promise<{ clientId?: string }>;
 }) {
   const { clientId } = await searchParams;
-  const initialData = await getOrderWorkbenchInitialData();
+  const initialData = await getOrderWorkbenchInitialData("history");
 
   return <OrderWorkbench initialData={initialData} view="history" initialClientId={clientId} />;
 }

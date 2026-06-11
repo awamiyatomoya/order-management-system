@@ -9,7 +9,7 @@ export default async function DeliveryDestinationsPage({
   searchParams: Promise<{ clientId?: string }>;
 }) {
   const { clientId } = await searchParams;
-  const initialData = await getOrderWorkbenchInitialData();
+  const initialData = await getOrderWorkbenchInitialData("deliveryDestinations");
 
   return (
     <OrderWorkbench

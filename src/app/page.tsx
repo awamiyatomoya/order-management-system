@@ -9,7 +9,7 @@ export default async function Home({
   searchParams: Promise<{ clientId?: string }>;
 }) {
   const { clientId } = await searchParams;
-  const initialData = await getOrderWorkbenchInitialData();
+  const initialData = await getOrderWorkbenchInitialData("orders");
 
   return <OrderWorkbench initialData={initialData} initialClientId={clientId} />;
 }

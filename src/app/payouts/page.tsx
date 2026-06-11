@@ -9,7 +9,7 @@ export default async function PayoutsPage({
   searchParams: Promise<{ clientId?: string }>;
 }) {
   const { clientId } = await searchParams;
-  const initialData = await getOrderWorkbenchInitialData();
+  const initialData = await getOrderWorkbenchInitialData("payouts");
 
   return <OrderWorkbench initialData={initialData} view="payouts" initialClientId={clientId} />;
 }

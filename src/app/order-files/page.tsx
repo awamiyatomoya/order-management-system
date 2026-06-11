@@ -9,7 +9,7 @@ export default async function OrderFilesPage({
   searchParams: Promise<{ clientId?: string }>;
 }) {
   const { clientId } = await searchParams;
-  const initialData = await getOrderWorkbenchInitialData();
+  const initialData = await getOrderWorkbenchInitialData("orderFiles");
 
   return <OrderWorkbench initialData={initialData} view="orderFiles" initialClientId={clientId} />;
 }

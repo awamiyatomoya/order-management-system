@@ -1,4 +1,3 @@
-import { calculatePayoutLineAmount } from "@/lib/import-orders";
 import {
   deliveryDestinations as staticDeliveryDestinations,
   type DeliveryDestination,
@@ -28,13 +27,19 @@ const productSelectColumns = [
   "retail_price",
   "payout_rate",
   "flags",
-].join(", ");
-
-const productMasterExtraSelectColumns = [
-  "client_id",
-  "jan",
   ...productMasterExtraFields.map((field) => field.column),
 ].join(", ");
+
+export type OrderWorkbenchDataScope =
+  | "orders"
+  | "clients"
+  | "products"
+  | "deliveryDestinations"
+  | "stores"
+  | "orderFiles"
+  | "payouts"
+  | "sellIn"
+  | "history";
 
 export type OrderWorkbenchInitialData = {
   clients: Client[];
@@ -145,7 +150,9 @@ type StoreRow = {
   aliases: string[] | null;
 };
 
-export async function getOrderWorkbenchInitialData(): Promise<OrderWorkbenchInitialData> {
+export async function getOrderWorkbenchInitialData(
+  scope: OrderWorkbenchDataScope = "orders",
+): Promise<OrderWorkbenchInitialData> {
   if (!hasSupabaseServerEnv()) {
     return getEmptyInitialData(
       "Supabase環境変数が未設定のため、データを表示できません。サンプルデータへの自動切り替えは無効です。",
@@ -154,73 +161,32 @@ export async function getOrderWorkbenchInitialData(): Promise<OrderWorkbenchInit
 
   try {
     const supabase = createServerSupabaseClient();
-    const [clientsResult, suppliersResult, productsResult, ordersResult, importBatchesResult] =
-      await Promise.all([
-      supabase.from("clients").select("id, name").order("name"),
-      supabase.from("suppliers").select("id, client_id, name, mapping_key").order("name"),
-      supabase
-        .from("products")
-        .select(productSelectColumns)
-        .order("name"),
-      supabase
-        .from("orders")
-        .select(
-          `
-          id,
-          client_id,
-          supplier_id,
-          order_no,
-          order_date,
-          arrival_due_date,
-          delivery_due_date,
-          ship_to_name,
-          ship_to_center,
-          ship_to_address,
-          ship_to_tel,
-          warehouse,
-          status,
-          source_file,
-          imported_at,
-          order_lines (
-            id,
-            line_no,
-            jan,
-            qty,
-            unit_price_snapshot,
-            tax_rate_snapshot,
-            amount,
-            memo
-          )
-        `,
-        )
-        .order("imported_at", { ascending: false }),
-      supabase
-        .from("import_batches")
-        .select(
-          `
-          id,
-          client_id,
-          supplier_id,
-          file_name,
-          status,
-          imported_at,
-          import_errors (
-            row_number,
-            field,
-            message
-          )
-        `,
-        )
-        .order("imported_at", { ascending: false })
-        .limit(20),
+    const requirements = getDataRequirements(scope);
+    const [
+      clientsResult,
+      suppliersResult,
+      productsResult,
+      ordersResult,
+      importBatchesResult,
+      deliveryDestinations,
+      stores,
+    ] = await Promise.all([
+      requirements.clients ? readClients(supabase) : null,
+      requirements.suppliers ? readSuppliers(supabase) : null,
+      requirements.products ? readProducts(supabase) : null,
+      requirements.orders ? readOrders(supabase) : null,
+      requirements.importBatches ? readImportBatches(supabase) : null,
+      requirements.deliveryDestinations ? readDeliveryDestinations(supabase) : [],
+      requirements.stores ? readStores(supabase) : [],
     ]);
 
-    const firstError =
-      clientsResult.error ??
-      suppliersResult.error ??
-      productsResult.error ??
-      ordersResult.error ??
-      importBatchesResult.error;
+    const firstError = [
+      clientsResult?.error,
+      suppliersResult?.error,
+      productsResult?.error,
+      ordersResult?.error,
+      importBatchesResult?.error,
+    ].find(Boolean);
 
     if (firstError) {
       return getEmptyInitialData(
@@ -228,24 +194,14 @@ export async function getOrderWorkbenchInitialData(): Promise<OrderWorkbenchInit
       );
     }
 
-    const [deliveryDestinations, stores] = await Promise.all([
-      readDeliveryDestinations(supabase),
-      readStores(supabase),
-    ]);
-    const clients = ((clientsResult.data ?? []) as ClientRow[]).map(mapClient);
-    const products = ((productsResult.data ?? []) as unknown as ProductRow[]).map(mapProduct);
-    const orders = ((ordersResult.data ?? []) as OrderRow[]).map(mapOrder);
-    const importBatches = ((importBatchesResult.data ?? []) as ImportBatchRow[]).map(mapImportBatch);
-    await attachClientFbpFeeRates(supabase, clients);
-    await attachProductMasterExtraFields(supabase, products);
-    await attachPayoutFields(supabase, products, orders);
-    await backfillMissingPayoutSnapshots(supabase, clients, products, orders);
-    await attachOrderFilePaths(supabase, orders, importBatches);
-    await attachOrderFileUrls(supabase, orders, importBatches);
+    const clients = ((clientsResult?.data ?? []) as ClientRow[]).map(mapClient);
+    const products = ((productsResult?.data ?? []) as unknown as ProductRow[]).map(mapProduct);
+    const orders = ((ordersResult?.data ?? []) as OrderRow[]).map(mapOrder);
+    const importBatches = ((importBatchesResult?.data ?? []) as ImportBatchRow[]).map(mapImportBatch);
 
     return {
       clients,
-      suppliers: ((suppliersResult.data ?? []) as SupplierRow[]).map(mapSupplier),
+      suppliers: ((suppliersResult?.data ?? []) as SupplierRow[]).map(mapSupplier),
       products,
       orders,
       importBatches,
@@ -262,6 +218,18 @@ export async function getOrderWorkbenchInitialData(): Promise<OrderWorkbenchInit
   }
 }
 
+function getDataRequirements(scope: OrderWorkbenchDataScope) {
+  return {
+    clients: scope !== "stores",
+    suppliers: scope === "orders",
+    products: scope === "orders" || scope === "products" || scope === "sellIn" || scope === "payouts" || scope === "history",
+    orders: scope === "orders" || scope === "sellIn" || scope === "payouts" || scope === "orderFiles" || scope === "history",
+    importBatches: scope === "orderFiles" || scope === "history",
+    deliveryDestinations: scope === "orders" || scope === "deliveryDestinations",
+    stores: scope === "orders" || scope === "sellIn" || scope === "stores",
+  };
+}
+
 function getEmptyInitialData(message: string): OrderWorkbenchInitialData {
   return {
     clients: [],
@@ -274,6 +242,81 @@ function getEmptyInitialData(message: string): OrderWorkbenchInitialData {
     source: "error",
     message,
   };
+}
+
+function readClients(supabase: ReturnType<typeof createServerSupabaseClient>) {
+  return supabase.from("clients").select("id, name, fbp_fee_rate").order("name");
+}
+
+function readSuppliers(supabase: ReturnType<typeof createServerSupabaseClient>) {
+  return supabase.from("suppliers").select("id, client_id, name, mapping_key").order("name");
+}
+
+function readProducts(supabase: ReturnType<typeof createServerSupabaseClient>) {
+  return supabase.from("products").select(productSelectColumns).order("name");
+}
+
+function readOrders(supabase: ReturnType<typeof createServerSupabaseClient>) {
+  return supabase
+    .from("orders")
+    .select(
+      `
+      id,
+      client_id,
+      supplier_id,
+      order_no,
+      order_date,
+      arrival_due_date,
+      delivery_due_date,
+      ship_to_name,
+      ship_to_center,
+      ship_to_address,
+      ship_to_tel,
+      warehouse,
+      status,
+      source_file,
+      source_file_path,
+      imported_at,
+      order_lines (
+        id,
+        line_no,
+        jan,
+        qty,
+        unit_price_snapshot,
+        tax_rate_snapshot,
+        amount,
+        retail_price_snapshot,
+        payout_rate_snapshot,
+        fbp_fee_rate_snapshot,
+        payout_amount,
+        memo
+      )
+    `,
+    )
+    .order("imported_at", { ascending: false });
+}
+
+function readImportBatches(supabase: ReturnType<typeof createServerSupabaseClient>) {
+  return supabase
+    .from("import_batches")
+    .select(
+      `
+      id,
+      client_id,
+      supplier_id,
+      file_name,
+      file_storage_path,
+      status,
+      imported_at,
+      import_errors (
+        row_number,
+        field,
+        message
+      )
+    `,
+    )
+    .order("imported_at", { ascending: false })
+    .limit(20);
 }
 
 async function readStores(
@@ -296,7 +339,7 @@ async function readDeliveryDestinations(
 ) {
   const { data, error } = await supabase
     .from("delivery_destinations")
-    .select("client_id, code, name, postal_code, address1, address2, address3, tel, aliases")
+    .select("client_id, code, wholesaler_name, name, postal_code, address1, address2, address3, tel, aliases")
     .order("code");
 
   if (error) {
@@ -307,8 +350,6 @@ async function readDeliveryDestinations(
     ...staticDeliveryDestinations,
     ...((data ?? []) as DeliveryDestinationRow[]).map(mapDeliveryDestination),
   ];
-  await attachWholesalerNames(supabase, destinations);
-
   return destinations;
 }
 
@@ -426,282 +467,6 @@ function mapImportBatch(row: ImportBatchRow): ImportBatch {
   };
 }
 
-async function attachClientFbpFeeRates(
-  supabase: ReturnType<typeof createServerSupabaseClient>,
-  clients: Client[],
-) {
-  const { data, error } = await supabase.from("clients").select("id, fbp_fee_rate");
-
-  if (error) {
-    return;
-  }
-
-  const ratesByClientId = new Map(
-    (
-      (data ?? []) as {
-        id: string;
-        fbp_fee_rate: number | string | null;
-      }[]
-    ).map((row) => [row.id, row.fbp_fee_rate === null ? 0.08 : Number(row.fbp_fee_rate)]),
-  );
-
-  clients.forEach((client) => {
-    client.fbpFeeRate = ratesByClientId.get(client.id) ?? client.fbpFeeRate;
-  });
-}
-
-async function attachPayoutFields(
-  supabase: ReturnType<typeof createServerSupabaseClient>,
-  products: Product[],
-  orders: Order[],
-) {
-  const [productsResult, linesResult] = await Promise.all([
-    supabase.from("products").select("client_id, jan, retail_price, payout_rate"),
-    supabase
-      .from("order_lines")
-      .select("id, retail_price_snapshot, payout_rate_snapshot, fbp_fee_rate_snapshot, payout_amount"),
-  ]);
-
-  if (!productsResult.error) {
-    const payoutFieldsByProduct = new Map(
-      (
-        (productsResult.data ?? []) as {
-          client_id: string;
-          jan: string;
-          retail_price: number | string | null;
-          payout_rate: number | string | null;
-        }[]
-      ).map((row) => [
-        `${row.client_id}:${row.jan}`,
-        {
-          retailPrice: row.retail_price === null ? null : Number(row.retail_price),
-          payoutRate: row.payout_rate === null ? null : Number(row.payout_rate),
-        },
-      ]),
-    );
-
-    products.forEach((product) => {
-      const payoutFields = payoutFieldsByProduct.get(`${product.clientId}:${product.jan}`);
-
-      if (payoutFields) {
-        product.retailPrice = payoutFields.retailPrice;
-        product.payoutRate = payoutFields.payoutRate;
-      }
-    });
-  }
-
-  if (!linesResult.error) {
-    const payoutFieldsByLine = new Map(
-      (
-        (linesResult.data ?? []) as {
-          id: string;
-          retail_price_snapshot: number | string | null;
-          payout_rate_snapshot: number | string | null;
-          fbp_fee_rate_snapshot: number | string | null;
-          payout_amount: number | string | null;
-        }[]
-      ).map((row) => [
-        row.id,
-        {
-          retailPriceSnapshot:
-            row.retail_price_snapshot === null ? null : Number(row.retail_price_snapshot),
-          payoutRateSnapshot:
-            row.payout_rate_snapshot === null ? null : Number(row.payout_rate_snapshot),
-          fbpFeeRateSnapshot:
-            row.fbp_fee_rate_snapshot === null ? null : Number(row.fbp_fee_rate_snapshot),
-          payoutAmount: row.payout_amount === null ? null : Number(row.payout_amount),
-        },
-      ]),
-    );
-
-    orders.forEach((order) => {
-      order.lines.forEach((line) => {
-        const payoutFields = payoutFieldsByLine.get(line.id);
-
-        if (payoutFields) {
-          line.retailPriceSnapshot = payoutFields.retailPriceSnapshot;
-          line.payoutRateSnapshot = payoutFields.payoutRateSnapshot;
-          line.fbpFeeRateSnapshot = payoutFields.fbpFeeRateSnapshot;
-          line.payoutAmount = payoutFields.payoutAmount;
-        }
-      });
-    });
-  }
-}
-
-async function attachProductMasterExtraFields(
-  supabase: ReturnType<typeof createServerSupabaseClient>,
-  products: Product[],
-) {
-  const { data, error } = await supabase.from("products").select(productMasterExtraSelectColumns);
-
-  if (error) {
-    return;
-  }
-
-  const extraFieldsByProduct = new Map(
-    ((data ?? []) as unknown as ProductRow[]).map((row) => [
-      `${row.client_id}:${row.jan}`,
-      Object.fromEntries(
-        productMasterExtraFields.map((field) => [
-          field.key,
-          normalizeProductMasterField(row[field.column]),
-        ]),
-      ),
-    ]),
-  );
-
-  products.forEach((product) => {
-    const extraFields = extraFieldsByProduct.get(`${product.clientId}:${product.jan}`);
-
-    if (extraFields) {
-      Object.assign(product, extraFields);
-    }
-  });
-}
-
-async function backfillMissingPayoutSnapshots(
-  supabase: ReturnType<typeof createServerSupabaseClient>,
-  clients: Client[],
-  products: Product[],
-  orders: Order[],
-) {
-  const productsByKey = new Map(products.map((product) => [`${product.clientId}:${product.jan}`, product]));
-  const clientsById = new Map(clients.map((client) => [client.id, client]));
-  const updates: PromiseLike<{ error: { message: string } | null }>[] = [];
-
-  orders
-    .filter((order) => order.status === "confirmed" || order.status === "shipped")
-    .forEach((order) => {
-      const client = clientsById.get(order.clientId);
-      const fbpFeeRate = client?.fbpFeeRate ?? 0.08;
-
-      order.lines.forEach((line) => {
-        if (
-          line.retailPriceSnapshot !== null &&
-          line.payoutRateSnapshot !== null &&
-          line.fbpFeeRateSnapshot !== null &&
-          line.payoutAmount !== null
-        ) {
-          return;
-        }
-
-        const product = productsByKey.get(`${order.clientId}:${line.jan}`);
-        if (!product || product.retailPrice === null || product.payoutRate === null) {
-          return;
-        }
-
-        const payoutAmount = calculatePayoutLineAmount({
-          qty: line.qty,
-          retailPrice: product.retailPrice,
-          payoutRate: product.payoutRate,
-          fbpFeeRate,
-        });
-
-        if (payoutAmount === null) {
-          return;
-        }
-
-        line.retailPriceSnapshot = product.retailPrice;
-        line.payoutRateSnapshot = product.payoutRate;
-        line.fbpFeeRateSnapshot = fbpFeeRate;
-        line.payoutAmount = payoutAmount;
-        updates.push(
-          supabase
-            .from("order_lines")
-            .update({
-              retail_price_snapshot: product.retailPrice,
-              payout_rate_snapshot: product.payoutRate,
-              fbp_fee_rate_snapshot: fbpFeeRate,
-              payout_amount: payoutAmount,
-            })
-            .eq("client_id", order.clientId)
-            .eq("id", line.id),
-        );
-      });
-    });
-
-  const results = await Promise.all(updates);
-  const firstError = results.find((result) => result.error)?.error;
-
-  if (firstError) {
-    console.warn("Failed to backfill payout snapshots:", firstError.message);
-  }
-}
-
-async function attachOrderFilePaths(
-  supabase: ReturnType<typeof createServerSupabaseClient>,
-  orders: Order[],
-  importBatches: ImportBatch[],
-) {
-  const [orderPathsResult, batchPathsResult] = await Promise.all([
-    supabase.from("orders").select("id, source_file_path"),
-    supabase.from("import_batches").select("id, file_storage_path"),
-  ]);
-
-  if (!orderPathsResult.error) {
-    const pathsByOrderId = new Map(
-      ((orderPathsResult.data ?? []) as { id: string; source_file_path: string | null }[]).map(
-        (row) => [row.id, row.source_file_path],
-      ),
-    );
-    orders.forEach((order) => {
-      order.sourceFilePath = pathsByOrderId.get(order.id) ?? undefined;
-    });
-  }
-
-  if (!batchPathsResult.error) {
-    const pathsByBatchId = new Map(
-      ((batchPathsResult.data ?? []) as { id: string; file_storage_path: string | null }[]).map(
-        (row) => [row.id, row.file_storage_path],
-      ),
-    );
-    importBatches.forEach((batch) => {
-      batch.fileStoragePath = pathsByBatchId.get(batch.id) ?? undefined;
-    });
-  }
-}
-
-async function attachOrderFileUrls(
-  supabase: ReturnType<typeof createServerSupabaseClient>,
-  orders: Order[],
-  importBatches: ImportBatch[],
-) {
-  const paths = Array.from(
-    new Set(
-      [
-        ...orders.map((order) => order.sourceFilePath),
-        ...importBatches.map((batch) => batch.fileStoragePath),
-      ].filter((path): path is string => Boolean(path)),
-    ),
-  );
-
-  if (paths.length === 0) {
-    return;
-  }
-
-  const urlsByPath = new Map<string, string>();
-  await Promise.all(
-    paths.map(async (path) => {
-      const { data } = await supabase.storage.from("order-files").createSignedUrl(path, 60 * 60);
-      if (data?.signedUrl) {
-        urlsByPath.set(path, data.signedUrl);
-      }
-    }),
-  );
-
-  orders.forEach((order) => {
-    if (order.sourceFilePath) {
-      order.sourceFileUrl = urlsByPath.get(order.sourceFilePath);
-    }
-  });
-  importBatches.forEach((batch) => {
-    if (batch.fileStoragePath) {
-      batch.fileUrl = urlsByPath.get(batch.fileStoragePath);
-    }
-  });
-}
-
 function mapDeliveryDestination(row: DeliveryDestinationRow): DeliveryDestination {
   return {
     clientId: row.client_id,
@@ -715,47 +480,6 @@ function mapDeliveryDestination(row: DeliveryDestinationRow): DeliveryDestinatio
     tel: row.tel,
     aliases: row.aliases ?? [],
   };
-}
-
-async function attachWholesalerNames(
-  supabase: ReturnType<typeof createServerSupabaseClient>,
-  destinations: DeliveryDestination[],
-) {
-  const { data, error } = await supabase
-    .from("delivery_destinations")
-    .select("client_id, code, wholesaler_name");
-
-  if (error) {
-    return;
-  }
-
-  const namesByKey = new Map(
-    ((data ?? []) as { client_id: string; code: string; wholesaler_name: string | null }[]).map(
-      (row) => [`${row.client_id}:${row.code}`, row.wholesaler_name ?? ""],
-    ),
-  );
-
-  destinations.forEach((destination) => {
-    if (!destination.clientId) {
-      destination.wholesalerName = inferWholesalerName(destination);
-      return;
-    }
-
-    destination.wholesalerName =
-      namesByKey.get(`${destination.clientId}:${destination.code}`) ||
-      destination.wholesalerName ||
-      inferWholesalerName(destination);
-  });
-}
-
-function inferWholesalerName(destination: DeliveryDestination) {
-  const text = [destination.code, destination.name, ...destination.aliases].join(" ");
-
-  if (/大山|オオヤマ|ｵｵﾔﾏ/i.test(text)) {
-    return "大山";
-  }
-
-  return "";
 }
 
 function mapImportError(row: ImportErrorRow): ImportError {
