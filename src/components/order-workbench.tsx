@@ -572,6 +572,14 @@ function normalizeJanCell(value: unknown) {
     .replace(/\s/g, "")
     .replace(/\.0$/, "");
 
+  if (/^\d+(?:\.\d+)?e\+?\d+$/i.test(normalizedValue)) {
+    const numericValue = Number(normalizedValue);
+
+    if (Number.isFinite(numericValue)) {
+      return numericValue.toFixed(0);
+    }
+  }
+
   return normalizedValue;
 }
 
