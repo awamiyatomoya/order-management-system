@@ -5079,8 +5079,15 @@ function buildProductMasterExportRows(products: Product[]) {
 function styleProductMasterWorksheet(worksheet: XLSXStyle.WorkSheet) {
   const range = XLSXStyle.utils.decode_range(worksheet["!ref"] ?? "A1:A1");
   const lastColumn = XLSXStyle.utils.encode_col(range.e.c);
+  const sectionRanges = getProductMasterExportSectionRanges();
 
-  worksheet["!merges"] = [{ s: { r: 0, c: 0 }, e: { r: 0, c: range.e.c } }];
+  worksheet["!merges"] = [
+    { s: { r: 0, c: 0 }, e: { r: 0, c: range.e.c } },
+    ...sectionRanges.map((sectionRange) => ({
+      s: { r: 1, c: sectionRange.start },
+      e: { r: 1, c: sectionRange.end },
+    })),
+  ];
   worksheet["!autofilter"] = { ref: `A3:${lastColumn}${range.e.r + 1}` };
   worksheet["!freeze"] = { xSplit: 0, ySplit: 3 };
   worksheet["!rows"] = [
@@ -5095,6 +5102,7 @@ function styleProductMasterWorksheet(worksheet: XLSXStyle.WorkSheet) {
     for (let column = range.s.c; column <= range.e.c; column += 1) {
       const cellAddress = XLSXStyle.utils.encode_cell({ r: row, c: column });
       const cell = worksheet[cellAddress] ?? { t: "s", v: "" };
+      const sectionColor = getProductMasterExportSectionColor(column);
       worksheet[cellAddress] = cell;
 
       cell.s = {
@@ -5108,6 +5116,7 @@ function styleProductMasterWorksheet(worksheet: XLSXStyle.WorkSheet) {
           left: { style: "thin", color: { rgb: "D9E2F3" } },
           right: { style: "thin", color: { rgb: "D9E2F3" } },
         },
+        fill: row >= 4 ? { patternType: "solid", fgColor: { rgb: sectionColor.data } } : undefined,
       };
 
       if (row === 0) {
@@ -5120,27 +5129,54 @@ function styleProductMasterWorksheet(worksheet: XLSXStyle.WorkSheet) {
       } else if (row === 1) {
         cell.s = {
           ...cell.s,
-          font: { bold: true, color: { rgb: "1F4E78" } },
-          fill: { patternType: "solid", fgColor: { rgb: "D9EAF7" } },
+          font: { bold: true, color: { rgb: "FFFFFF" } },
+          fill: { patternType: "solid", fgColor: { rgb: sectionColor.dark } },
           alignment: { horizontal: "center", vertical: "center" },
         };
       } else if (row === 2) {
         cell.s = {
           ...cell.s,
           font: { bold: true, color: { rgb: "FFFFFF" } },
-          fill: { patternType: "solid", fgColor: { rgb: "5B9BD5" } },
+          fill: { patternType: "solid", fgColor: { rgb: sectionColor.medium } },
           alignment: { horizontal: "center", vertical: "center", wrapText: true },
         };
       } else if (row === 3) {
         cell.s = {
           ...cell.s,
           font: { color: { rgb: "666666" }, sz: 10 },
-          fill: { patternType: "solid", fgColor: { rgb: "F2F2F2" } },
+          fill: { patternType: "solid", fgColor: { rgb: sectionColor.light } },
           alignment: { vertical: "top", wrapText: true },
         };
       }
     }
   }
+}
+
+function getProductMasterExportSectionRanges() {
+  let start = 0;
+
+  return productFormSections.map((section) => {
+    const end = start + section.fields.length - 1;
+    const sectionRange = { start, end };
+    start = end + 1;
+    return sectionRange;
+  });
+}
+
+function getProductMasterExportSectionColor(column: number) {
+  const sectionRanges = getProductMasterExportSectionRanges();
+  const sectionIndex = Math.max(
+    0,
+    sectionRanges.findIndex((sectionRange) => column >= sectionRange.start && column <= sectionRange.end),
+  );
+  const colors = [
+    { dark: "1F4E78", medium: "5B9BD5", light: "DDEBF7", data: "F8FBFE" },
+    { dark: "548235", medium: "70AD47", light: "E2F0D9", data: "FAFCF7" },
+    { dark: "9E480E", medium: "ED7D31", light: "FCE4D6", data: "FFFAF6" },
+    { dark: "7030A0", medium: "A64DFF", light: "EADCF8", data: "FCF8FF" },
+  ];
+
+  return colors[sectionIndex] ?? colors[0];
 }
 
 function getProductMasterExportValue(product: Product, key: ProductFormFieldKey) {
