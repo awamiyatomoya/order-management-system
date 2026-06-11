@@ -474,16 +474,22 @@ async function parseProductMasterExcel(
         .map(({ index, key }) => [key, normalizeProductMasterExcelCell(row[index], key)])
         .filter(([, value]) => value !== ""),
     ) as Partial<Record<keyof ProductForm, string>>;
-    const jan = normalizeJanCell(values.jan);
+    const productNameFromExcel = values.name || values.formalProductName || values.productNameKana || "";
+    const existingProduct = findExistingProductForProductMasterExcelRow({
+      clientId,
+      currentProducts,
+      jan: values.jan,
+      productName: productNameFromExcel,
+      formalProductName: values.formalProductName,
+      productNameKana: values.productNameKana,
+    });
+    const jan = normalizeJanCell(values.jan) || existingProduct?.jan || "";
 
     if (!jan) {
-      errors.push(`${rowNumber}行目: JANコードが空です`);
+      errors.push(`${rowNumber}行目: JANコードが空です。既存商品を更新する場合も、商品名で1件に特定できる必要があります。`);
       return;
     }
 
-    const existingProduct = currentProducts.find(
-      (product) => product.clientId === clientId && product.jan === jan,
-    );
     const productName = values.name || values.formalProductName || existingProduct?.name || "";
 
     if (!productName) {
@@ -542,6 +548,58 @@ function createEmptyProduct(jan: string, clientId: string, name: string): Produc
     payoutRate: null,
     memo: "",
   };
+}
+
+function findExistingProductForProductMasterExcelRow({
+  clientId,
+  currentProducts,
+  jan,
+  productName,
+  formalProductName,
+  productNameKana,
+}: {
+  clientId: string;
+  currentProducts: Product[];
+  jan?: string;
+  productName?: string;
+  formalProductName?: string;
+  productNameKana?: string;
+}) {
+  const normalizedJan = normalizeJanCell(jan);
+  const clientProducts = currentProducts.filter((product) => product.clientId === clientId);
+
+  if (normalizedJan) {
+    return clientProducts.find((product) => product.jan === normalizedJan);
+  }
+
+  const candidateNames = [productName, formalProductName, productNameKana]
+    .map(normalizeProductMasterNameForMatching)
+    .filter(Boolean);
+
+  if (candidateNames.length === 0) {
+    return undefined;
+  }
+
+  const matches = clientProducts.filter((product) => {
+    const productNames = [
+      product.name,
+      product.formalProductName,
+      product.productNameKana,
+    ]
+      .map(normalizeProductMasterNameForMatching)
+      .filter(Boolean);
+
+    return candidateNames.some((candidateName) => productNames.includes(candidateName));
+  });
+
+  return matches.length === 1 ? matches[0] : undefined;
+}
+
+function normalizeProductMasterNameForMatching(value: unknown) {
+  return String(value ?? "")
+    .replace(/\s/g, "")
+    .trim()
+    .toLowerCase();
 }
 
 function normalizeProductMasterHeader(value: unknown) {
