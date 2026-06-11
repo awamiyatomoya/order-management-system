@@ -1,9 +1,3 @@
-import {
-  clients as mockClients,
-  orders as mockOrders,
-  products as mockProducts,
-  suppliers as mockSuppliers,
-} from "@/lib/mock-data";
 import { calculatePayoutLineAmount } from "@/lib/import-orders";
 import {
   deliveryDestinations as staticDeliveryDestinations,
@@ -50,7 +44,7 @@ export type OrderWorkbenchInitialData = {
   importBatches: ImportBatch[];
   deliveryDestinations: DeliveryDestination[];
   stores: Store[];
-  source: "supabase" | "mock" | "error";
+  source: "supabase" | "error";
   message: string;
 };
 
@@ -153,13 +147,9 @@ type StoreRow = {
 
 export async function getOrderWorkbenchInitialData(): Promise<OrderWorkbenchInitialData> {
   if (!hasSupabaseServerEnv()) {
-    if (isProductionRuntime()) {
-      return getEmptyInitialData(
-        "Supabase環境変数が未設定のため、データを表示できません。サンプルデータへの自動切り替えは無効です。",
-      );
-    }
-
-    return getMockInitialData("Supabase環境変数が未設定のため、サンプルデータを表示しています。");
+    return getEmptyInitialData(
+      "Supabase環境変数が未設定のため、データを表示できません。サンプルデータへの自動切り替えは無効です。",
+    );
   }
 
   try {
@@ -233,14 +223,8 @@ export async function getOrderWorkbenchInitialData(): Promise<OrderWorkbenchInit
       importBatchesResult.error;
 
     if (firstError) {
-      if (isProductionRuntime()) {
-        return getEmptyInitialData(
-          `Supabase読み取りに失敗したため、データを表示できません。サンプルデータへの自動切り替えは無効です: ${firstError.message}`,
-        );
-      }
-
-      return getMockInitialData(
-        `Supabase読み取りに失敗したため、サンプルデータを表示しています: ${firstError.message}`,
+      return getEmptyInitialData(
+        `Supabase読み取りに失敗したため、データを表示できません。サンプルデータへの自動切り替えは無効です: ${firstError.message}`,
       );
     }
 
@@ -272,21 +256,10 @@ export async function getOrderWorkbenchInitialData(): Promise<OrderWorkbenchInit
     };
   } catch (error) {
     const message = error instanceof Error ? error.message : "不明なエラー";
-
-    if (isProductionRuntime()) {
-      return getEmptyInitialData(
-        `Supabase読み取りに失敗したため、データを表示できません。サンプルデータへの自動切り替えは無効です: ${message}`,
-      );
-    }
-
-    return getMockInitialData(
-      `Supabase読み取りに失敗したため、サンプルデータを表示しています: ${message}`,
+    return getEmptyInitialData(
+      `Supabase読み取りに失敗したため、データを表示できません。サンプルデータへの自動切り替えは無効です: ${message}`,
     );
   }
-}
-
-function isProductionRuntime() {
-  return process.env.NODE_ENV === "production";
 }
 
 function getEmptyInitialData(message: string): OrderWorkbenchInitialData {
@@ -299,20 +272,6 @@ function getEmptyInitialData(message: string): OrderWorkbenchInitialData {
     deliveryDestinations: [],
     stores: [],
     source: "error",
-    message,
-  };
-}
-
-function getMockInitialData(message: string): OrderWorkbenchInitialData {
-  return {
-    clients: mockClients,
-    suppliers: mockSuppliers,
-    products: mockProducts,
-    orders: mockOrders,
-    importBatches: [],
-    deliveryDestinations: staticDeliveryDestinations,
-    stores: [],
-    source: "mock",
     message,
   };
 }

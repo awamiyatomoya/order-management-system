@@ -44,8 +44,8 @@ import {
   buildImportDraft,
   confirmOrderWithPayoutFee,
 } from "@/lib/import-orders";
-import { supplierMappings } from "@/lib/mock-data";
 import { parsePdfOrderText } from "@/lib/pdf-order-parser";
+import { supplierMappings } from "@/lib/supplier-mappings";
 import {
   productMasterExtraFields,
   type ProductMasterExtraKey,
