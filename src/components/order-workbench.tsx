@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { Check, ChevronLeft, ChevronRight, Copy, ListFilter, LoaderCircle, Search, Trash2 } from "lucide-react";
 import Papa from "papaparse";
-import { useId, useMemo, useRef, useState } from "react";
+import { useEffect, useId, useMemo, useRef, useState } from "react";
 import * as XLSX from "xlsx";
 import * as XLSXStyle from "xlsx-js-style";
 import { Badge } from "@/components/ui/badge";
@@ -68,7 +68,12 @@ import {
 } from "@/lib/supabase/order-actions";
 import { saveDeliveryDestination } from "@/lib/supabase/delivery-destination-actions";
 import type { OrderWorkbenchInitialData } from "@/lib/supabase/read-order-data";
-import { deleteProduct, saveProduct } from "@/lib/supabase/product-actions";
+import {
+  deleteProduct,
+  fetchProductMasterProducts,
+  fetchProductsForProductMasterImport,
+  saveProduct,
+} from "@/lib/supabase/product-actions";
 import { saveStore } from "@/lib/supabase/store-actions";
 import type { Client, ImportBatch, ImportError, Order, Product, Store, Supplier } from "@/lib/types";
 import { createId } from "@/lib/uuid";
@@ -236,7 +241,7 @@ const emptyStoreForm: StoreForm = {
   aliases: "",
 };
 const defaultSupplierMappingKey = "sample-cosme-wholesale";
-const masterPageSize = 20;
+const masterPageSize = 50;
 const taxRateOptions = [
   { label: "10%", value: "0.1" },
   { label: "8%", value: "0.08" },
@@ -732,6 +737,7 @@ export function OrderWorkbench({
   const [selectedClientId, setSelectedClientId] = useState(initialSelection.clientId);
   const [selectedSupplierId, setSelectedSupplierId] = useState(initialSelection.supplierId);
   const [products, setProducts] = useState<Product[]>(initialData.products);
+  const [productTotalCount, setProductTotalCount] = useState(initialData.productTotalCount);
   const [orders, setOrders] = useState<Order[]>(initialData.orders);
   const [importBatches, setImportBatches] = useState<ImportBatch[]>(initialData.importBatches);
   const [deliveryDestinations, setDeliveryDestinations] = useState<DeliveryDestination[]>(
@@ -779,6 +785,7 @@ export function OrderWorkbench({
   const [isSavingImport, setIsSavingImport] = useState(false);
   const [savingOrderId, setSavingOrderId] = useState<string | null>(null);
   const [isSavingProduct, setIsSavingProduct] = useState(false);
+  const [isLoadingProductPage, setIsLoadingProductPage] = useState(false);
   const [isImportingProductMaster, setIsImportingProductMaster] = useState(false);
   const [isSavingDeliveryDestination, setIsSavingDeliveryDestination] = useState(false);
   const [isSavingStore, setIsSavingStore] = useState(false);
@@ -794,6 +801,7 @@ export function OrderWorkbench({
   >([]);
   const [isEditingStoreMaster, setIsEditingStoreMaster] = useState(false);
   const [storeMasterDrafts, setStoreMasterDrafts] = useState<StoreMasterDraft[]>([]);
+  const skippedInitialProductPageLoadRef = useRef(false);
   const setNotice = (..._messages: string[]) => {
     void _messages;
   };
@@ -994,6 +1002,10 @@ export function OrderWorkbench({
     [selectedOrders],
   );
   const filteredProducts = useMemo(() => {
+    if (view === "products") {
+      return products;
+    }
+
     const keyword = productSearch.trim().toLowerCase();
 
     return products.filter((product) => {
@@ -1013,7 +1025,7 @@ export function OrderWorkbench({
 
       return matchesClient && matchesKeyword;
     });
-  }, [clients, productClientFilter, productSearch, products]);
+  }, [clients, productClientFilter, productSearch, products, view]);
   const exportCandidateProducts = useMemo(() => {
     const keyword = productExportSearch.trim().toLowerCase();
 
@@ -1049,10 +1061,13 @@ export function OrderWorkbench({
   );
   const pagedProducts = useMemo(
     () =>
-      paginateItems(filteredProducts, productPage).items,
-    [filteredProducts, productPage],
+      view === "products" ? filteredProducts : paginateItems(filteredProducts, productPage).items,
+    [filteredProducts, productPage, view],
   );
-  const normalizedProductPage = paginateItems(filteredProducts, productPage).page;
+  const normalizedProductPage =
+    view === "products" ? productPage : paginateItems(filteredProducts, productPage).page;
+  const productPaginationTotalItems =
+    view === "products" ? productTotalCount : filteredProducts.length;
   const selectedWholesalerOptions = useMemo(
     () =>
       Array.from(
@@ -1085,6 +1100,55 @@ export function OrderWorkbench({
     filteredDeliveryDestinations,
     deliveryDestinationPage,
   ).page;
+
+  useEffect(() => {
+    if (view !== "products") {
+      return;
+    }
+
+    if (!skippedInitialProductPageLoadRef.current) {
+      skippedInitialProductPageLoadRef.current = true;
+      return;
+    }
+
+    let isActive = true;
+    const timeoutId = window.setTimeout(async () => {
+      setIsLoadingProductPage(true);
+      try {
+        const result = await fetchProductMasterProducts({
+          clientId: productClientFilter,
+          search: productSearch,
+          page: productPage,
+          pageSize: masterPageSize,
+        });
+
+        if (!isActive) {
+          return;
+        }
+
+        if (!result.ok) {
+          setProductNotice(result.message);
+          return;
+        }
+
+        setProducts(result.products);
+        setProductTotalCount(result.totalCount);
+      } catch (error) {
+        if (isActive) {
+          setProductNotice(`商品マスタの読み込みに失敗しました: ${getErrorMessage(error)}`);
+        }
+      } finally {
+        if (isActive) {
+          setIsLoadingProductPage(false);
+        }
+      }
+    }, 250);
+
+    return () => {
+      isActive = false;
+      window.clearTimeout(timeoutId);
+    };
+  }, [productClientFilter, productPage, productSearch, view]);
 
   function handleFileChange(file: File | null) {
     if (!file) {
@@ -1495,7 +1559,9 @@ export function OrderWorkbench({
     setProductNotice(`${file.name} を読み込んでいます。`);
 
     try {
-      const parsed = await parseProductMasterExcel(file, productRegistrationClientId, products);
+      const existingProductsResult = await fetchProductsForProductMasterImport(productRegistrationClientId);
+      const existingProducts = existingProductsResult.ok ? existingProductsResult.products : products;
+      const parsed = await parseProductMasterExcel(file, productRegistrationClientId, existingProducts);
 
       if (parsed.products.length === 0) {
         setProductNotice(
@@ -2927,7 +2993,7 @@ export function OrderWorkbench({
                     type="button"
                     size="sm"
                     variant="outline"
-                    disabled={filteredProducts.length === 0}
+                    disabled={productPaginationTotalItems === 0 || isLoadingProductPage}
                     onClick={openProductMasterExportPanel}
                   >
                     Excel出力
@@ -2936,7 +3002,7 @@ export function OrderWorkbench({
                     type="button"
                     size="sm"
                     variant="outline"
-                    disabled={products.length === 0}
+                    disabled={products.length === 0 || isLoadingProductPage}
                     onClick={startProductMasterEdit}
                   >
                     編集
@@ -2946,6 +3012,13 @@ export function OrderWorkbench({
             }
           >
             {productNotice ? <p className="text-sm text-muted-foreground">{productNotice}</p> : null}
+            {view === "products" ? (
+              <p className="text-sm text-muted-foreground">
+                {isLoadingProductPage
+                  ? "商品マスタを読み込んでいます..."
+                  : `${productPaginationTotalItems.toLocaleString()}件中 ${products.length.toLocaleString()}件を表示しています。`}
+              </p>
+            ) : null}
             {isEditingProductMaster ? (
               <p className="text-sm text-muted-foreground">
                 受注明細で使用されている商品は、過去の受注データを守るため削除できません。商品名・下代（税抜）・税率などの編集はできます。
@@ -3142,7 +3215,16 @@ export function OrderWorkbench({
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {isEditingProductMaster
+                  {isLoadingProductPage ? (
+                    <TableRow>
+                      <TableCell
+                        colSpan={2 + productMasterDisplayFields.length}
+                        className="text-muted-foreground"
+                      >
+                        商品マスタを読み込んでいます...
+                      </TableCell>
+                    </TableRow>
+                  ) : isEditingProductMaster
                     ? productMasterDrafts.map((draft, index) => (
                         <TableRow key={buildProductKey(draft.originalClientId, draft.originalJan)}>
                           <TableCell>{getClientName(draft.originalClientId, clients)}</TableCell>
@@ -3204,7 +3286,7 @@ export function OrderWorkbench({
             </Table>
             </div>
             <MasterPagination
-              totalItems={filteredProducts.length}
+              totalItems={productPaginationTotalItems}
               page={normalizedProductPage}
               onPageChange={setProductPage}
             />

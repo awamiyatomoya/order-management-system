@@ -4,6 +4,7 @@ import { revalidatePath } from "next/cache";
 import { z } from "zod";
 import { productMasterExtraFields } from "@/lib/product-master-fields";
 import type { Product } from "@/lib/types";
+import { mapProduct, productSelectColumns, type ProductRow } from "./read-order-data";
 import { createServerSupabaseClient, hasSupabaseServerEnv } from "./server";
 
 const productSchema = z.object({
@@ -29,6 +30,120 @@ export type SaveProductResult =
       ok: false;
       message: string;
     };
+
+export type FetchProductsResult =
+  | {
+      ok: true;
+      products: Product[];
+      totalCount: number;
+    }
+  | {
+      ok: false;
+      products: Product[];
+      totalCount: number;
+      message: string;
+    };
+
+export async function fetchProductMasterProducts({
+  clientId,
+  search,
+  page,
+  pageSize,
+}: {
+  clientId: string;
+  search: string;
+  page: number;
+  pageSize: number;
+}): Promise<FetchProductsResult> {
+  if (!hasSupabaseServerEnv()) {
+    return {
+      ok: false,
+      products: [],
+      totalCount: 0,
+      message: "Supabase環境変数が未設定のため、商品マスタを読み込めません。",
+    };
+  }
+
+  const normalizedPageSize = Math.min(Math.max(pageSize, 1), 200);
+  const normalizedPage = Math.max(page, 0);
+  const from = normalizedPage * normalizedPageSize;
+  const to = from + normalizedPageSize - 1;
+  const supabase = createServerSupabaseClient();
+  let query = supabase
+    .from("products")
+    .select(productSelectColumns, { count: "exact" })
+    .order("name")
+    .range(from, to);
+
+  if (clientId !== "all") {
+    query = query.eq("client_id", clientId);
+  }
+
+  const keyword = search.trim();
+  if (keyword) {
+    const pattern = `%${keyword.replaceAll("%", "").replaceAll(",", " ")}%`;
+    const textColumns = [
+      "jan",
+      "name",
+      "internal_sku",
+      "cooola_code",
+      ...productMasterExtraFields
+        .filter((field) => field.type === "text")
+        .map((field) => field.column),
+    ];
+    query = query.or(textColumns.map((column) => `${column}.ilike.${pattern}`).join(","));
+  }
+
+  const { data, error, count } = await query;
+
+  if (error) {
+    return {
+      ok: false,
+      products: [],
+      totalCount: 0,
+      message: `商品マスタの読み込みに失敗しました: ${error.message}`,
+    };
+  }
+
+  return {
+    ok: true,
+    products: ((data ?? []) as unknown as ProductRow[]).map(mapProduct),
+    totalCount: count ?? 0,
+  };
+}
+
+export async function fetchProductsForProductMasterImport(clientId: string): Promise<FetchProductsResult> {
+  if (!hasSupabaseServerEnv()) {
+    return {
+      ok: false,
+      products: [],
+      totalCount: 0,
+      message: "Supabase環境変数が未設定のため、既存の商品マスタを読み込めません。",
+    };
+  }
+
+  const supabase = createServerSupabaseClient();
+  const { data, error, count } = await supabase
+    .from("products")
+    .select(productSelectColumns, { count: "exact" })
+    .eq("client_id", clientId)
+    .order("name");
+
+  if (error) {
+    return {
+      ok: false,
+      products: [],
+      totalCount: 0,
+      message: `既存の商品マスタの読み込みに失敗しました: ${error.message}`,
+    };
+  }
+
+  return {
+    ok: true,
+    products: ((data ?? []) as unknown as ProductRow[]).map(mapProduct),
+    totalCount: count ?? 0,
+  };
+}
 
 export async function saveProduct(product: Product): Promise<SaveProductResult> {
   const result = productSchema.safeParse(product);

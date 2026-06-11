@@ -16,7 +16,7 @@ import type {
 import { productMasterExtraFields } from "@/lib/product-master-fields";
 import { createServerSupabaseClient, hasSupabaseServerEnv } from "./server";
 
-const productSelectColumns = [
+export const productSelectColumns = [
   "client_id",
   "jan",
   "internal_sku",
@@ -45,6 +45,7 @@ export type OrderWorkbenchInitialData = {
   clients: Client[];
   suppliers: Supplier[];
   products: Product[];
+  productTotalCount: number;
   orders: Order[];
   importBatches: ImportBatch[];
   deliveryDestinations: DeliveryDestination[];
@@ -53,7 +54,7 @@ export type OrderWorkbenchInitialData = {
   message: string;
 };
 
-type ProductRow = {
+export type ProductRow = {
   client_id: string;
   jan: string;
   internal_sku: string | null;
@@ -173,7 +174,7 @@ export async function getOrderWorkbenchInitialData(
     ] = await Promise.all([
       requirements.clients ? readClients(supabase) : null,
       requirements.suppliers ? readSuppliers(supabase) : null,
-      requirements.products ? readProducts(supabase) : null,
+      requirements.products ? readProducts(supabase, { limit: scope === "products" ? 50 : undefined }) : null,
       requirements.orders ? readOrders(supabase) : null,
       requirements.importBatches ? readImportBatches(supabase) : null,
       requirements.deliveryDestinations ? readDeliveryDestinations(supabase) : [],
@@ -196,6 +197,7 @@ export async function getOrderWorkbenchInitialData(
 
     const clients = ((clientsResult?.data ?? []) as ClientRow[]).map(mapClient);
     const products = ((productsResult?.data ?? []) as unknown as ProductRow[]).map(mapProduct);
+    const productTotalCount = productsResult?.count ?? products.length;
     const orders = ((ordersResult?.data ?? []) as OrderRow[]).map(mapOrder);
     const importBatches = ((importBatchesResult?.data ?? []) as ImportBatchRow[]).map(mapImportBatch);
 
@@ -203,6 +205,7 @@ export async function getOrderWorkbenchInitialData(
       clients,
       suppliers: ((suppliersResult?.data ?? []) as SupplierRow[]).map(mapSupplier),
       products,
+      productTotalCount,
       orders,
       importBatches,
       deliveryDestinations,
@@ -235,6 +238,7 @@ function getEmptyInitialData(message: string): OrderWorkbenchInitialData {
     clients: [],
     suppliers: [],
     products: [],
+    productTotalCount: 0,
     orders: [],
     importBatches: [],
     deliveryDestinations: [],
@@ -252,8 +256,17 @@ function readSuppliers(supabase: ReturnType<typeof createServerSupabaseClient>) 
   return supabase.from("suppliers").select("id, client_id, name, mapping_key").order("name");
 }
 
-function readProducts(supabase: ReturnType<typeof createServerSupabaseClient>) {
-  return supabase.from("products").select(productSelectColumns).order("name");
+function readProducts(
+  supabase: ReturnType<typeof createServerSupabaseClient>,
+  options: { limit?: number } = {},
+) {
+  const query = supabase.from("products").select(productSelectColumns, { count: "exact" }).order("name");
+
+  if (options.limit) {
+    return query.range(0, options.limit - 1);
+  }
+
+  return query;
 }
 
 function readOrders(supabase: ReturnType<typeof createServerSupabaseClient>) {
@@ -378,7 +391,7 @@ function mapStore(row: StoreRow): Store {
   };
 }
 
-function mapProduct(row: ProductRow): Product {
+export function mapProduct(row: ProductRow): Product {
   const extraFields = Object.fromEntries(
     productMasterExtraFields.map((field) => [
       field.key,
