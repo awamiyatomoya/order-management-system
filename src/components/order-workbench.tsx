@@ -5,6 +5,7 @@ import { Check, ChevronLeft, ChevronRight, Copy, ListFilter, LoaderCircle, Searc
 import Papa from "papaparse";
 import { useId, useMemo, useRef, useState } from "react";
 import * as XLSX from "xlsx";
+import * as XLSXStyle from "xlsx-js-style";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -336,19 +337,6 @@ const productMasterDisplayFields = [
   productMasterListFields.find((field) => field.key === "jan"),
   ...productMasterListFields.filter((field) => field.key !== "name" && field.key !== "jan"),
 ].filter((field): field is ProductFormField => Boolean(field));
-const productMasterExportSampleValues: Partial<Record<ProductFormFieldKey, string>> = {
-  formalProductName: "（例）モイスチャーローション",
-  name: "モイスチャーローション",
-  productNameKana: "モイスチャーローション",
-  manufacturerCode: "VinnaCo株式会社",
-  manufacturerName: "4901234567890",
-  jan: "5779809310123",
-  taxRate: "10%",
-  wholesalePrice: "1,200",
-  referenceRetailPrice: "2,400",
-  retailPrice: "2,400",
-  payoutRate: "50",
-};
 
 function createEmptyProductMasterExtraForm() {
   return Object.fromEntries(productMasterExtraFields.map((field) => [field.key, ""])) as Record<
@@ -439,7 +427,7 @@ const productMasterNumericKeys = new Set<keyof ProductForm>([
   "caseVolumeL",
   "caseWeightG",
 ]);
-const productMasterDataStartRow = 6;
+const productMasterDescriptionRowsAfterHeader = 1;
 
 async function parseProductMasterExcel(
   file: File,
@@ -474,7 +462,7 @@ async function parseProductMasterExcel(
     .filter((entry): entry is { index: number; key: keyof ProductForm } => Boolean(entry.key));
   const products: Product[] = [];
   const errors: string[] = [];
-  const dataStartIndex = Math.max(headerRowIndex + 1, productMasterDataStartRow - 1);
+  const dataStartIndex = getProductMasterDataStartIndex(rows, headerRowIndex);
 
   rows.slice(dataStartIndex).forEach((row, rowOffset) => {
     if (isEmptyProductMasterExcelRow(row)) {
@@ -561,6 +549,18 @@ function createEmptyProduct(jan: string, clientId: string, name: string): Produc
     payoutRate: null,
     memo: "",
   };
+}
+
+function getProductMasterDataStartIndex(rows: unknown[][], headerRowIndex: number) {
+  const firstPossibleDataIndex = headerRowIndex + productMasterDescriptionRowsAfterHeader + 1;
+  const firstPossibleDataRow = rows[firstPossibleDataIndex] ?? [];
+  const rowText = firstPossibleDataRow.map((cell) => String(cell ?? "")).join(" ");
+
+  if (/（例）|\(例\)|例）|サンプル/i.test(rowText)) {
+    return firstPossibleDataIndex + 1;
+  }
+
+  return firstPossibleDataIndex;
 }
 
 function findExistingProductForProductMasterExcelRow({
@@ -761,6 +761,10 @@ export function OrderWorkbench({
   const [sellInSearch, setSellInSearch] = useState("");
   const [productSearch, setProductSearch] = useState("");
   const [productClientFilter, setProductClientFilter] = useState("all");
+  const [isProductExportPanelOpen, setIsProductExportPanelOpen] = useState(false);
+  const [productExportClientFilter, setProductExportClientFilter] = useState("all");
+  const [productExportSearch, setProductExportSearch] = useState("");
+  const [selectedProductExportKeys, setSelectedProductExportKeys] = useState<string[]>([]);
   const [productRegistrationClientId, setProductRegistrationClientId] =
     useState(initialSelection.clientId);
   const [deliveryWholesalerFilter, setDeliveryWholesalerFilter] = useState("all");
@@ -1010,6 +1014,39 @@ export function OrderWorkbench({
       return matchesClient && matchesKeyword;
     });
   }, [clients, productClientFilter, productSearch, products]);
+  const exportCandidateProducts = useMemo(() => {
+    const keyword = productExportSearch.trim().toLowerCase();
+
+    return products.filter((product) => {
+      const matchesClient =
+        productExportClientFilter === "all" || product.clientId === productExportClientFilter;
+      const matchesKeyword =
+        !keyword ||
+        [
+          product.jan,
+          product.name,
+          product.formalProductName,
+          product.productNameKana,
+          getClientName(product.clientId, clients),
+        ]
+          .join(" ")
+          .toLowerCase()
+          .includes(keyword);
+
+      return matchesClient && matchesKeyword;
+    });
+  }, [clients, productExportClientFilter, productExportSearch, products]);
+  const selectedProductExportKeySet = useMemo(
+    () => new Set(selectedProductExportKeys),
+    [selectedProductExportKeys],
+  );
+  const selectedProductExportProducts = useMemo(
+    () =>
+      products.filter((product) =>
+        selectedProductExportKeySet.has(buildProductKey(product.clientId, product.jan)),
+      ),
+    [products, selectedProductExportKeySet],
+  );
   const pagedProducts = useMemo(
     () =>
       paginateItems(filteredProducts, productPage).items,
@@ -2296,23 +2333,56 @@ export function OrderWorkbench({
     setNotice("セルインデータExcelを出力しました。");
   }
 
+  function openProductMasterExportPanel() {
+    setProductExportClientFilter(productClientFilter);
+    setProductExportSearch(productSearch);
+    setSelectedProductExportKeys(filteredProducts.map((product) => buildProductKey(product.clientId, product.jan)));
+    setIsProductExportPanelOpen(true);
+  }
+
+  function toggleProductExportSelection(product: Product, checked: boolean) {
+    const productKey = buildProductKey(product.clientId, product.jan);
+
+    setSelectedProductExportKeys((current) =>
+      checked
+        ? Array.from(new Set([...current, productKey]))
+        : current.filter((key) => key !== productKey),
+    );
+  }
+
+  function selectAllProductExportCandidates() {
+    const candidateKeys = exportCandidateProducts.map((product) => buildProductKey(product.clientId, product.jan));
+    setSelectedProductExportKeys((current) => Array.from(new Set([...current, ...candidateKeys])));
+  }
+
+  function clearProductExportSelection() {
+    setSelectedProductExportKeys([]);
+  }
+
   function exportProductMasterExcel() {
-    const worksheet = XLSX.utils.aoa_to_sheet(buildProductMasterExportRows(filteredProducts));
-    const workbook = XLSX.utils.book_new();
+    if (selectedProductExportProducts.length === 0) {
+      setProductNotice("Excel出力する商品を選択してください。");
+      return;
+    }
+
+    const worksheet = XLSXStyle.utils.aoa_to_sheet(buildProductMasterExportRows(selectedProductExportProducts));
+    const workbook = XLSXStyle.utils.book_new();
 
     worksheet["!cols"] = productMasterListFields.map((field) => ({
       wch: field.input === "textarea" ? 36 : Math.max(14, field.label.length * 2),
     }));
-    XLSX.utils.book_append_sheet(workbook, worksheet, "商品マスタ");
-    XLSX.writeFile(
+    styleProductMasterWorksheet(worksheet);
+    XLSXStyle.utils.book_append_sheet(workbook, worksheet, "商品マスタ");
+    XLSXStyle.writeFile(
       workbook,
       buildProductMasterExportFileName({
         clientName:
-          productClientFilter === "all" ? "すべて" : getClientName(productClientFilter, clients),
-        search: productSearch,
+          productExportClientFilter === "all" ? "すべて" : getClientName(productExportClientFilter, clients),
+        search: productExportSearch,
       }),
     );
-    setProductNotice(`${filteredProducts.length}件の商品マスタExcelを出力しました。`);
+    setProductNotice(`${selectedProductExportProducts.length}件の商品マスタExcelを出力しました。`);
+    setIsProductExportPanelOpen(false);
   }
 
   function handleClientChange(clientId: string) {
@@ -2858,9 +2928,9 @@ export function OrderWorkbench({
                     size="sm"
                     variant="outline"
                     disabled={filteredProducts.length === 0}
-                    onClick={exportProductMasterExcel}
+                    onClick={openProductMasterExportPanel}
                   >
-                    絞り込み結果をExcel出力
+                    Excel出力
                   </Button>
                   <Button
                     type="button"
@@ -2925,6 +2995,139 @@ export function OrderWorkbench({
                 />
               </Field>
             </div>
+            {isProductExportPanelOpen ? (
+              <div className="grid gap-4 rounded-lg border bg-muted/20 p-4">
+                <div className="flex flex-col gap-1">
+                  <h3 className="text-sm font-medium">Excel出力する商品を選択</h3>
+                  <p className="text-xs text-muted-foreground">
+                    クライアント名と商品名で絞り込み、チェックした商品だけをアップロード用フォーマットで出力します。
+                  </p>
+                </div>
+                <div className="grid gap-3 md:grid-cols-[240px_minmax(0,1fr)]">
+                  <Field>
+                    <FieldLabel>クライアント</FieldLabel>
+                    <Select
+                      items={[
+                        { label: "すべて", value: "all" },
+                        ...clients.map((client) => ({
+                          label: client.name,
+                          value: client.id,
+                        })),
+                      ]}
+                      value={productExportClientFilter}
+                      onValueChange={(value) => setProductExportClientFilter(value ?? "all")}
+                    >
+                      <SelectTrigger className="w-full">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectGroup>
+                          <SelectItem value="all">すべて</SelectItem>
+                          {clients.map((client) => (
+                            <SelectItem key={client.id} value={client.id}>
+                              {client.name}
+                            </SelectItem>
+                          ))}
+                        </SelectGroup>
+                      </SelectContent>
+                    </Select>
+                  </Field>
+                  <Field>
+                    <FieldLabel>商品名・JAN検索</FieldLabel>
+                    <SearchInput
+                      value={productExportSearch}
+                      placeholder="商品名・JANコード"
+                      onChange={setProductExportSearch}
+                    />
+                  </Field>
+                </div>
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <p className="text-xs text-muted-foreground">
+                    候補 {exportCandidateProducts.length}件 / 選択 {selectedProductExportProducts.length}件
+                  </p>
+                  <div className="flex flex-wrap gap-2">
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="outline"
+                      disabled={exportCandidateProducts.length === 0}
+                      onClick={selectAllProductExportCandidates}
+                    >
+                      候補をすべて選択
+                    </Button>
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="outline"
+                      disabled={selectedProductExportProducts.length === 0}
+                      onClick={clearProductExportSelection}
+                    >
+                      選択解除
+                    </Button>
+                    <Button
+                      type="button"
+                      size="sm"
+                      disabled={selectedProductExportProducts.length === 0}
+                      onClick={exportProductMasterExcel}
+                    >
+                      選択商品をExcel出力
+                    </Button>
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="outline"
+                      onClick={() => setIsProductExportPanelOpen(false)}
+                    >
+                      閉じる
+                    </Button>
+                  </div>
+                </div>
+                <div className="max-h-[320px] overflow-auto rounded-md border bg-background">
+                  <Table>
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead className="w-[56px]">選択</TableHead>
+                        <TableHead>クライアント</TableHead>
+                        <TableHead>商品名</TableHead>
+                        <TableHead>JANコード</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {exportCandidateProducts.length === 0 ? (
+                        <TableRow>
+                          <TableCell colSpan={4} className="text-muted-foreground">
+                            条件に合う商品がありません。
+                          </TableCell>
+                        </TableRow>
+                      ) : (
+                        exportCandidateProducts.map((product) => {
+                          const productKey = buildProductKey(product.clientId, product.jan);
+
+                          return (
+                            <TableRow key={productKey}>
+                              <TableCell>
+                                <input
+                                  type="checkbox"
+                                  className="h-4 w-4"
+                                  checked={selectedProductExportKeySet.has(productKey)}
+                                  onChange={(event) =>
+                                    toggleProductExportSelection(product, event.target.checked)
+                                  }
+                                  aria-label={`${product.name} をExcel出力対象にする`}
+                                />
+                              </TableCell>
+                              <TableCell>{getClientName(product.clientId, clients)}</TableCell>
+                              <TableCell>{product.name}</TableCell>
+                              <TableCell className="font-mono text-xs">{product.jan}</TableCell>
+                            </TableRow>
+                          );
+                        })
+                      )}
+                    </TableBody>
+                  </Table>
+                </div>
+              </div>
+            ) : null}
             <div className="overflow-x-auto">
             <Table className="min-w-[3600px]">
                 <TableHeader>
@@ -4855,7 +5058,6 @@ function buildProductMasterExportRows(products: Product[]) {
   const categoryRow: string[] = [];
   const headerRow = productMasterListFields.map((field) => field.label);
   const descriptionRow = productMasterListFields.map((field) => field.description ?? "");
-  const sampleRow = productMasterListFields.map((field) => productMasterExportSampleValues[field.key] ?? "");
 
   productFormSections.forEach((section) => {
     section.fields.forEach((_, index) => {
@@ -4868,11 +5070,77 @@ function buildProductMasterExportRows(products: Product[]) {
     categoryRow,
     headerRow,
     descriptionRow,
-    sampleRow,
     ...products.map((product) =>
       productMasterListFields.map((field) => getProductMasterExportValue(product, field.key)),
     ),
   ];
+}
+
+function styleProductMasterWorksheet(worksheet: XLSXStyle.WorkSheet) {
+  const range = XLSXStyle.utils.decode_range(worksheet["!ref"] ?? "A1:A1");
+  const lastColumn = XLSXStyle.utils.encode_col(range.e.c);
+
+  worksheet["!merges"] = [{ s: { r: 0, c: 0 }, e: { r: 0, c: range.e.c } }];
+  worksheet["!autofilter"] = { ref: `A3:${lastColumn}${range.e.r + 1}` };
+  worksheet["!freeze"] = { xSplit: 0, ySplit: 3 };
+  worksheet["!rows"] = [
+    { hpt: 28 },
+    { hpt: 22 },
+    { hpt: 24 },
+    { hpt: 42 },
+    ...Array(Math.max(0, range.e.r - 3)).fill({ hpt: 22 }),
+  ];
+
+  for (let row = range.s.r; row <= range.e.r; row += 1) {
+    for (let column = range.s.c; column <= range.e.c; column += 1) {
+      const cellAddress = XLSXStyle.utils.encode_cell({ r: row, c: column });
+      const cell = worksheet[cellAddress] ?? { t: "s", v: "" };
+      worksheet[cellAddress] = cell;
+
+      cell.s = {
+        alignment: {
+          vertical: "center",
+          wrapText: row === 3,
+        },
+        border: {
+          top: { style: "thin", color: { rgb: "D9E2F3" } },
+          bottom: { style: "thin", color: { rgb: "D9E2F3" } },
+          left: { style: "thin", color: { rgb: "D9E2F3" } },
+          right: { style: "thin", color: { rgb: "D9E2F3" } },
+        },
+      };
+
+      if (row === 0) {
+        cell.s = {
+          ...cell.s,
+          font: { bold: true, color: { rgb: "FFFFFF" }, sz: 16 },
+          fill: { patternType: "solid", fgColor: { rgb: "1F4E78" } },
+          alignment: { horizontal: "left", vertical: "center" },
+        };
+      } else if (row === 1) {
+        cell.s = {
+          ...cell.s,
+          font: { bold: true, color: { rgb: "1F4E78" } },
+          fill: { patternType: "solid", fgColor: { rgb: "D9EAF7" } },
+          alignment: { horizontal: "center", vertical: "center" },
+        };
+      } else if (row === 2) {
+        cell.s = {
+          ...cell.s,
+          font: { bold: true, color: { rgb: "FFFFFF" } },
+          fill: { patternType: "solid", fgColor: { rgb: "5B9BD5" } },
+          alignment: { horizontal: "center", vertical: "center", wrapText: true },
+        };
+      } else if (row === 3) {
+        cell.s = {
+          ...cell.s,
+          font: { color: { rgb: "666666" }, sz: 10 },
+          fill: { patternType: "solid", fgColor: { rgb: "F2F2F2" } },
+          alignment: { vertical: "top", wrapText: true },
+        };
+      }
+    }
+  }
 }
 
 function getProductMasterExportValue(product: Product, key: ProductFormFieldKey) {
