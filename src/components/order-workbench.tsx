@@ -426,6 +426,7 @@ const productMasterNumericKeys = new Set<keyof ProductForm>([
   "caseVolumeL",
   "caseWeightG",
 ]);
+const productMasterDataStartRow = 6;
 
 async function parseProductMasterExcel(
   file: File,
@@ -460,13 +461,14 @@ async function parseProductMasterExcel(
     .filter((entry): entry is { index: number; key: keyof ProductForm } => Boolean(entry.key));
   const products: Product[] = [];
   const errors: string[] = [];
+  const dataStartIndex = Math.max(headerRowIndex + 1, productMasterDataStartRow - 1);
 
-  rows.slice(headerRowIndex + 1).forEach((row, rowOffset) => {
+  rows.slice(dataStartIndex).forEach((row, rowOffset) => {
     if (isEmptyProductMasterExcelRow(row)) {
       return;
     }
 
-    const rowNumber = headerRowIndex + rowOffset + 2;
+    const rowNumber = dataStartIndex + rowOffset + 1;
     const values = Object.fromEntries(
       headerEntries
         .map(({ index, key }) => [key, normalizeProductMasterExcelCell(row[index], key)])
