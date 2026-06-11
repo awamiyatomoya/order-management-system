@@ -95,21 +95,6 @@
   --radius-4xl: calc(var(--radius) * 2.6);
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --card: #18181b;
-    --muted: #27272a;
-    --muted-foreground: #a1a1aa;
-    --border: #3f3f46;
-    --danger: #fca5a5;
-    --danger-background: #450a0a;
-    --warning: #fde68a;
-    --warning-background: #422006;
-    --success: #86efac;
-    --success-background: #052e16;
-  }
-}
-
 .dark {
   --background: oklch(0.145 0 0);
   --foreground: oklch(0.985 0 0);

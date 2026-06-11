@@ -1,6 +1,7 @@
 export type DeliveryDestination = {
   clientId?: string;
   code: string;
+  wholesalerName?: string;
   name: string;
   postalCode: string;
   address1: string;
@@ -305,10 +306,14 @@ export function buildDeliveryAddress(destination: DeliveryDestination) {
 }
 
 function normalizeCode(value: string) {
-  return value
+  const normalized = value
     .normalize("NFKC")
     .replace(/[^\p{Letter}\p{Number}]/gu, "")
     .toUpperCase();
+
+  return normalized.replace(/[\u3041-\u3096]/g, (char) =>
+    String.fromCharCode(char.charCodeAt(0) + 0x60),
+  );
 }
 
 function normalizeText(value: string) {

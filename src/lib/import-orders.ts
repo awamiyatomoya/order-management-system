@@ -7,6 +7,7 @@ import type {
   Supplier,
   SupplierMapping,
 } from "./types";
+import { createId } from "./uuid";
 
 type RawRow = Record<string, unknown>;
 
@@ -38,7 +39,7 @@ const normalizedRowSchema = z.object({
   shipToCenter: z.string(),
   shipToAddress: z.string(),
   shipToTel: z.string(),
-  warehouse: z.string().min(1, "倉庫が空です"),
+  warehouse: z.string(),
   jan: z.string().min(1, "JANが空です"),
   qty: z.coerce.number().int("数量は整数にしてください").positive("数量は1以上にしてください"),
   memo: z.string(),
@@ -146,6 +147,14 @@ export function buildImportDraft(params: {
 }
 
 export function confirmOrder(order: Order, products: Product[]): Order {
+  return confirmOrderWithPayoutFee(order, products, 0.08);
+}
+
+export function confirmOrderWithPayoutFee(
+  order: Order,
+  products: Product[],
+  fbpFeeRate: number,
+): Order {
   return {
     ...order,
     status: "confirmed",
@@ -155,12 +164,24 @@ export function confirmOrder(order: Order, products: Product[]): Order {
       );
       const unitPrice = product?.wholesalePrice ?? 0;
       const taxRate = product?.taxRate ?? 0;
+      const hasPayoutTerms = product?.retailPrice != null && product?.payoutRate != null;
+      const retailPrice = hasPayoutTerms ? product?.retailPrice ?? null : null;
+      const payoutRate = hasPayoutTerms ? product?.payoutRate ?? null : null;
 
       return {
         ...line,
         unitPriceSnapshot: unitPrice,
         taxRateSnapshot: taxRate,
         amount: unitPrice * line.qty,
+        retailPriceSnapshot: retailPrice,
+        payoutRateSnapshot: payoutRate,
+        fbpFeeRateSnapshot: hasPayoutTerms ? fbpFeeRate : null,
+        payoutAmount: calculatePayoutLineAmount({
+          qty: line.qty,
+          retailPrice,
+          payoutRate,
+          fbpFeeRate,
+        }),
       };
     }),
   };
@@ -176,6 +197,23 @@ export function calculateLineAmount(order: Order, line: OrderLine, products: Pro
   );
 
   return (product?.wholesalePrice ?? 0) * line.qty;
+}
+
+export function calculatePayoutLineAmount(params: {
+  qty: number;
+  retailPrice: number | null;
+  payoutRate: number | null;
+  fbpFeeRate: number;
+}) {
+  if (params.retailPrice === null || params.payoutRate === null) {
+    return null;
+  }
+
+  if (params.payoutRate <= params.fbpFeeRate) {
+    return null;
+  }
+
+  return Math.floor(params.retailPrice * params.qty * (params.payoutRate - params.fbpFeeRate));
 }
 
 function normalizeRow(row: RawRow, mapping: SupplierMapping) {
@@ -228,7 +266,7 @@ function buildOrder(params: {
   const first = params.rows[0];
 
   return {
-    id: crypto.randomUUID(),
+    id: createId(),
     clientId: params.clientId,
     supplierId: params.supplierId,
     orderNo: params.orderNo,
@@ -244,13 +282,17 @@ function buildOrder(params: {
     sourceFile: params.sourceFile,
     importedAt: params.importedAt,
     lines: params.rows.map((row, index) => ({
-      id: crypto.randomUUID(),
+      id: createId(),
       lineNo: index + 1,
       jan: row.jan,
       qty: row.qty,
       unitPriceSnapshot: null,
       taxRateSnapshot: null,
       amount: null,
+      retailPriceSnapshot: null,
+      payoutRateSnapshot: null,
+      fbpFeeRateSnapshot: null,
+      payoutAmount: null,
       memo: row.memo,
     })),
   };

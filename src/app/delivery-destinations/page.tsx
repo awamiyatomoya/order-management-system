@@ -3,7 +3,7 @@ import { getOrderWorkbenchInitialData } from "@/lib/supabase/read-order-data";
 
 export const dynamic = "force-dynamic";
 
-export default async function Home({
+export default async function DeliveryDestinationsPage({
   searchParams,
 }: {
   searchParams: Promise<{ clientId?: string }>;
@@ -11,5 +11,11 @@ export default async function Home({
   const { clientId } = await searchParams;
   const initialData = await getOrderWorkbenchInitialData();
 
-  return <OrderWorkbench initialData={initialData} initialClientId={clientId} />;
+  return (
+    <OrderWorkbench
+      initialData={initialData}
+      view="deliveryDestinations"
+      initialClientId={clientId}
+    />
+  );
 }

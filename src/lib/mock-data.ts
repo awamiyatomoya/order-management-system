@@ -1,8 +1,8 @@
 import type { Client, Order, Product, Supplier, SupplierMapping } from "./types";
 
 export const clients: Client[] = [
-  { id: "client-cocone", name: "cocone" },
-  { id: "client-hagukumi", name: "はぐくみプラス" },
+  { id: "client-cocone", name: "cocone", fbpFeeRate: 0.08 },
+  { id: "client-hagukumi", name: "はぐくみプラス", fbpFeeRate: 0.08 },
 ];
 
 export const suppliers: Supplier[] = [
@@ -23,6 +23,8 @@ export const products: Product[] = [
     name: "cocone クレイクリームシャンプー",
     wholesalePrice: 1800,
     taxRate: 0.1,
+    retailPrice: 3780,
+    payoutRate: 0.5,
     memo: "",
   },
   {
@@ -33,6 +35,8 @@ export const products: Product[] = [
     name: "cocone モイスチャートリートメント",
     wholesalePrice: 1200,
     taxRate: 0.1,
+    retailPrice: 2800,
+    payoutRate: 0.5,
     memo: "",
   },
 ];

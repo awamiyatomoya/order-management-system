@@ -1,3 +1,5 @@
+import type { ProductMasterExtraKey } from "./product-master-fields";
+
 export type OrderStatus =
   | "imported"
   | "confirmed"
@@ -7,6 +9,7 @@ export type OrderStatus =
 export type Client = {
   id: string;
   name: string;
+  fbpFeeRate: number;
 };
 
 export type Supplier = {
@@ -24,7 +27,15 @@ export type Product = {
   name: string;
   wholesalePrice: number;
   taxRate: number;
+  retailPrice: number | null;
+  payoutRate: number | null;
   memo: string;
+} & Partial<Record<ProductMasterExtraKey, string | number | null>>;
+
+export type Store = {
+  id: string;
+  name: string;
+  aliases: string[];
 };
 
 export type OrderLine = {
@@ -35,6 +46,10 @@ export type OrderLine = {
   unitPriceSnapshot: number | null;
   taxRateSnapshot: number | null;
   amount: number | null;
+  retailPriceSnapshot: number | null;
+  payoutRateSnapshot: number | null;
+  fbpFeeRateSnapshot: number | null;
+  payoutAmount: number | null;
   memo: string;
 };
 
@@ -53,6 +68,8 @@ export type Order = {
   warehouse: string;
   status: OrderStatus;
   sourceFile: string;
+  sourceFilePath?: string;
+  sourceFileUrl?: string;
   importedAt: string;
   lines: OrderLine[];
 };
@@ -68,6 +85,8 @@ export type ImportBatch = {
   fileName: string;
   clientId: string;
   supplierId: string;
+  fileStoragePath?: string;
+  fileUrl?: string;
   importedAt: string;
   status: "saved" | "blocked";
   errors: ImportError[];

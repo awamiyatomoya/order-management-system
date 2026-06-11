@@ -14,9 +14,9 @@ const janPattern = /(?:\d[\s-]*){13}/g;
 const datePattern =
   /\d{2,4}\s*[\/\-.年月]\s*\d{1,2}\s*[\/\-.月]\s*\d{1,2}(?!\d)\s*日?/g;
 const labelOnlyPattern =
-  /^(?:発注元|発注先|お届先|お届け先|お届先住所|お届け先住所|お届先TEL|お届け先TEL|取引区分|発注番号|発注日|着荷指定|着荷指定日|口座|商品コード\/品名|人数|ケース|バラ数量|有償|景品|単価|条件区分|金額|備考|摘要|金額合計|受付日時)$/;
+  /^(?:発注元|発注先|お届先|お届け先|お届先住所|お届け先住所|お届先TEL|お届け先TEL|取引区分|発注番号|発注日|着荷指定|着荷指定日|指定到着日|到着指定日|配達指定日|お届け指定日|納品希望日|口座|商品コード\/品名|人数|ケース|バラ数量|有償|景品|単価|条件区分|金額|備考|摘要|金額合計|受付日時)$/;
 const stopValuePattern =
-  /^(?:発注元|発注先|お届先|お届け先|お届先住所|お届け先住所|お届先TEL|お届け先TEL|取引区分|発注番号|発注日|着荷指定|着荷指定日|口座|商品コード\/品名|人数|ケース|バラ数量|有償|景品|単価|条件区分|金額|備考|摘要|金額合計|受付日時|受注番号|配送先コード|ご依頼主名|配送先名|配送先郵便番号|配送先住所1|配送先住所2|配送先住所3|配送先TEL|配送方法|配達指定日|時間指定|請求金額|商品コード|商品名|出荷数|単価|小計|送り状備考)$/;
+  /^(?:発注元|発注先|お届先|お届け先|お届先住所|お届け先住所|お届先TEL|お届け先TEL|取引区分|発注番号|発注日|着荷指定|着荷指定日|指定到着日|到着指定日|配達指定日|お届け指定日|納品希望日|口座|商品コード\/品名|人数|ケース|バラ数量|有償|景品|単価|条件区分|金額|備考|摘要|金額合計|受付日時|受注番号|配送先コード|ご依頼主名|配送先名|配送先郵便番号|配送先住所1|配送先住所2|配送先住所3|配送先TEL|配送方法|配達指定日|時間指定|請求金額|商品コード|商品名|出荷数|単価|小計|送り状備考)$/;
 
 export function parsePdfOrderText(params: {
   text: string;
@@ -78,12 +78,16 @@ function extractMetadata(
 ) {
   const dates = extractDates(text);
   const warehouseValueMap = mapping.valueMaps.warehouse ?? {};
+  const orderTableMetadata = extractOrderTableMetadata(lines);
   const orderNo =
+    orderTableMetadata.orderNo ||
     extractValue(text, [
       /発注\s*(?:No|NO|番号|書番号)\s*[:：]?\s*([A-Z0-9][A-Z0-9\-_/]*)/i,
       /注文\s*(?:No|NO|番号)\s*[:：]?\s*([A-Z0-9][A-Z0-9\-_/]*)/i,
       /NO\.\s*([A-Z0-9][A-Z0-9\-_/]*)/i,
-    ]) || extractValueAfterLabel(lines, ["発注番号", "注文番号"]);
+    ]) ||
+    extractOrderNoFromHeaderRows(lines) ||
+    extractValueAfterLabel(lines, ["発注番号", "注文番号"]);
   const shipToName =
     extractValue(text, [
       /お届け先会社名\s*[:：]?\s*([^\n]+)/,
@@ -117,28 +121,36 @@ function extractMetadata(
   });
   const warehouse = extractWarehouse(text, lines, Object.keys(warehouseValueMap));
   const orderDate =
-    extractDateByLabel(text, [/発注日\s*[:：]?\s*([0-9年月日/\-. ]+)/]) ?? dates[0] ?? "";
+    orderTableMetadata.orderDate ||
+    (extractDateByLabel(text, [/発注日\s*[:：]?\s*([0-9年月日/\-. ]+)/]) ?? dates[0] ?? "");
   const arrivalDueDate =
-    extractDateByLabel(text, [
-      /着荷指定日\s*[:：]?\s*([0-9年月日/\-. ]+)/,
-      /着荷指定\s*[:：]?\s*([0-9年月日/\-. ]+)/,
-      /若狗指定\s*[:：]?\s*([0-9年月日/\-. ]+)/,
-      /納品(?:予定)?日\s*[:：]?\s*([0-9年月日/\-. ]+)/,
-      /到着(?:予定)?日\s*[:：]?\s*([0-9年月日/\-. ]+)/,
-    ]) ??
-    extractArrivalDateAfterLabel(lines, orderDate) ??
-    dates.find((date) => date !== orderDate) ??
-    "";
+    orderTableMetadata.arrivalDueDate ||
+    (extractDateByLabel(text, [
+        /着荷指定日\s*[:：]?\s*([0-9年月日/\-. ]+)/,
+        /着荷指定\s*[:：]?\s*([0-9年月日/\-. ]+)/,
+        /若荷指定\s*[:：]?\s*([0-9年月日/\-. ]+)/,
+        /若狗指定\s*[:：]?\s*([0-9年月日/\-. ]+)/,
+        /指定\s*到着日\s*[:：]?\s*([0-9年月日/\-. ]+)/,
+        /到着\s*指定日\s*[:：]?\s*([0-9年月日/\-. ]+)/,
+        /配達\s*指定日\s*[:：]?\s*([0-9年月日/\-. ]+)/,
+        /お届け\s*指定日\s*[:：]?\s*([0-9年月日/\-. ]+)/,
+        /納品\s*希望日\s*[:：]?\s*([0-9年月日/\-. ]+)/,
+        /納品(?:予定)?日\s*[:：]?\s*([0-9年月日/\-. ]+)/,
+        /到着(?:予定)?日\s*[:：]?\s*([0-9年月日/\-. ]+)/,
+      ]) ??
+      extractArrivalDateAfterLabel(lines, orderDate) ??
+      dates.find((date) => date !== orderDate) ??
+      "");
 
   return {
     orderNo,
     orderDate,
     arrivalDueDate,
-    shipToName: deliveryDestination?.name ?? (shipToName || "PDF発注書のお届け先"),
+    shipToName: deliveryDestination?.name ?? (shipToName || "お届け先未判定"),
     shipToCenter: deliveryDestination?.code ?? shipToCode,
     shipToAddress: deliveryDestination ? buildDeliveryAddress(deliveryDestination) : shipToAddress,
     shipToTel: deliveryDestination?.tel ?? normalizeTel(shipToTel),
-    warehouse: warehouse || "PDF発注書",
+    warehouse,
     memo: extractMemo(lines),
   };
 }
@@ -180,8 +192,12 @@ function extractQtyFromFollowingLines(lines: string[], startIndex: number) {
 
 function extractQty(text: string) {
   const normalized = text.replace(/,/g, "");
+  if (isLikelyNonQuantityLine(normalized)) {
+    return null;
+  }
+
   const labeled = normalized.match(/(?:数量|個数|発注数|注文数)\D{0,8}(\d{1,5})/);
-  const fallback = normalized.match(/(?:^|\D)(\d{1,5})(?:\D|$)/);
+  const fallback = normalized.match(/(?:^|\D)(\d{1,4})(?:\D|$)/);
   const value = Number(labeled?.[1] ?? fallback?.[1]);
 
   if (!Number.isInteger(value) || value <= 0) {
@@ -189,6 +205,26 @@ function extractQty(text: string) {
   }
 
   return value;
+}
+
+function isLikelyNonQuantityLine(value: string) {
+  if (/NO\.?\s*\d{5,}/i.test(value)) {
+    return true;
+  }
+
+  if (/\d{2,4}[\/\-.年月]\d{1,2}[\/\-.月]\d{1,2}/.test(value)) {
+    return true;
+  }
+
+  if (/0\d{1,4}-\d{1,4}-?\d{0,4}/.test(value)) {
+    return true;
+  }
+
+  if (/(?:発注番号|受付日時|金額合計|単価|小計|摘要|備考)/.test(value)) {
+    return true;
+  }
+
+  return false;
 }
 
 function dedupeLineItems(items: { jan: string; qty: number }[]) {
@@ -224,13 +260,72 @@ function extractArrivalDateAfterLabel(lines: string[], orderDate: string) {
   const dates = extractDatesFromLinesAfterLabel(lines, [
     "着荷指定日",
     "着荷指定",
+    "若荷指定",
     "若狗指定",
     "着狗指定",
+    "指定到着日",
+    "到着指定日",
+    "配達指定日",
+    "お届け指定日",
+    "納品希望日",
     "納品日",
     "到着日",
   ]);
 
   return dates.find((date) => date !== orderDate) ?? dates[0] ?? null;
+}
+
+function extractOrderTableMetadata(lines: string[]) {
+  const empty = { orderNo: "", orderDate: "", arrivalDueDate: "" };
+  const headerIndex = lines.findIndex((_, index) => {
+    const headerWindow = lines.slice(index, index + 6).join(" ");
+
+    return (
+      headerWindow.includes("発注番号") &&
+      headerWindow.includes("発注日") &&
+      /着荷指定|着荷|到着指定|指定到着|配達指定/.test(headerWindow)
+    );
+  });
+
+  if (headerIndex === -1) {
+    return empty;
+  }
+
+  const valueLines = lines.slice(headerIndex, headerIndex + 16);
+  const valueText = valueLines.join(" ");
+  const datesFromWindow = [...valueText.matchAll(datePattern)]
+    .map((match) => normalizeDate(match[0]))
+    .filter(Boolean);
+  const orderNoFromWindow = extractOrderNoCandidate(valueText);
+
+  if (orderNoFromWindow && datesFromWindow.length >= 2) {
+    return {
+      orderNo: orderNoFromWindow,
+      orderDate: datesFromWindow[0],
+      arrivalDueDate: datesFromWindow[1],
+    };
+  }
+
+  for (const line of valueLines) {
+    const dates = [...line.matchAll(datePattern)].map((match) => normalizeDate(match[0])).filter(Boolean);
+    const orderNo = extractOrderNoCandidate(line);
+
+    if (orderNo && dates.length >= 2) {
+      return {
+        orderNo,
+        orderDate: dates[0],
+        arrivalDueDate: dates[1],
+      };
+    }
+  }
+
+  return empty;
+}
+
+function extractOrderNoCandidate(value: string) {
+  const withoutDates = value.replace(datePattern, " ");
+
+  return withoutDates.match(/\b\d{5,10}\b/)?.[0] ?? "";
 }
 
 function extractDatesFromLinesAfterLabel(lines: string[], labels: string[]) {
@@ -241,7 +336,7 @@ function extractDatesFromLinesAfterLabel(lines: string[], labels: string[]) {
   }
 
   return lines
-    .slice(index + 1, index + 10)
+    .slice(index, index + 10)
     .flatMap((line) => [...line.matchAll(datePattern)].map((match) => normalizeDate(match[0])))
     .filter(Boolean);
 }
@@ -305,6 +400,31 @@ function extractValueAfterLabel(lines: string[], labels: string[]) {
   });
 
   return value ? cleanupValue(value) : "";
+}
+
+function extractOrderNoFromHeaderRows(lines: string[]) {
+  const index = lines.findIndex((line) => line.includes("発注番号") || line.includes("注文番号"));
+
+  if (index === -1) {
+    return "";
+  }
+
+  const searchLines = lines.slice(index + 1, index + 16);
+
+  for (const [lineIndex, line] of searchLines.entries()) {
+    const normalized = line.replace(/[^\d]/g, "");
+
+    if (!/^\d{5,10}$/.test(normalized) || isLikelyNonQuantityLine(line)) {
+      continue;
+    }
+
+    const followingLines = searchLines.slice(lineIndex + 1, lineIndex + 4).join("\n");
+    if (extractDates(followingLines).length > 0) {
+      return normalized;
+    }
+  }
+
+  return "";
 }
 
 function extractShipToName(lines: string[]) {

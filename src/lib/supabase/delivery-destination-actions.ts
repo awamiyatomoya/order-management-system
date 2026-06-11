@@ -8,6 +8,7 @@ import { createServerSupabaseClient, hasSupabaseServerEnv } from "./server";
 const deliveryDestinationSchema = z.object({
   clientId: z.string().min(1),
   code: z.string().min(1),
+  wholesalerName: z.string().optional(),
   name: z.string().min(1),
   postalCode: z.string(),
   address1: z.string().min(1),
@@ -53,6 +54,7 @@ export async function saveDeliveryDestination(
     {
       client_id: result.data.clientId,
       code: result.data.code,
+      wholesaler_name: result.data.wholesalerName ?? "",
       name: result.data.name,
       postal_code: result.data.postalCode,
       address1: result.data.address1,
