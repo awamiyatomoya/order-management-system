@@ -19,7 +19,6 @@ export type ProductMasterExtraKey =
   | "caseVolumeL"
   | "caseWeightG"
   | "receiptProductName"
-  | "productWeight"
   | "productFeatures"
   | "productCatchcopy"
   | "usageInstructions"
@@ -57,7 +56,6 @@ export const productMasterExtraFields = [
   { key: "caseVolumeL", column: "case_volume_l", type: "number" },
   { key: "caseWeightG", column: "case_weight_g", type: "number" },
   { key: "receiptProductName", column: "receipt_product_name", type: "text" },
-  { key: "productWeight", column: "product_weight", type: "text" },
   { key: "productFeatures", column: "product_features", type: "text" },
   { key: "productCatchcopy", column: "product_catchcopy", type: "text" },
   { key: "usageInstructions", column: "usage_instructions", type: "text" },

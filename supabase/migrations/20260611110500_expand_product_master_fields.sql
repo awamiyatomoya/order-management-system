@@ -19,7 +19,6 @@ alter table public.products
   add column if not exists case_volume_l numeric(12, 3),
   add column if not exists case_weight_g numeric(12, 2),
   add column if not exists receipt_product_name text,
-  add column if not exists product_weight text,
   add column if not exists product_features text,
   add column if not exists product_catchcopy text,
   add column if not exists usage_instructions text,

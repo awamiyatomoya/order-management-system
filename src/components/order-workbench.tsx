@@ -330,6 +330,8 @@ const productFormSections: ProductFormSection[] = [
   },
 ];
 
+const productMasterListFields = productFormSections.flatMap((section) => section.fields);
+
 function createEmptyProductMasterExtraForm() {
   return Object.fromEntries(productMasterExtraFields.map((field) => [field.key, ""])) as Record<
     ProductMasterExtraKey,
@@ -504,10 +506,6 @@ async function parseProductMasterExcel(
     };
 
     for (const field of productMasterExtraFields) {
-      if (field.key === "productWeight") {
-        continue;
-      }
-
       const value = values[field.key];
 
       if (value === undefined) {
@@ -2806,17 +2804,15 @@ export function OrderWorkbench({
               </Field>
             </div>
             <div className="overflow-x-auto">
-            <Table className="min-w-[1260px]">
+            <Table className="min-w-[3600px]">
                 <TableHeader>
                   <TableRow>
                     <TableHead className="w-[160px]">クライアント</TableHead>
-                    <TableHead className="w-[140px]">JAN</TableHead>
-                    <TableHead className="min-w-[280px]">商品名</TableHead>
-                    <TableHead className="w-[190px]">COOOLaコード</TableHead>
-                    <TableHead className="w-[120px]">下代（税抜）</TableHead>
-                    <TableHead className="w-[96px]">税率</TableHead>
-                    <TableHead className="w-[120px]">上代（税抜）</TableHead>
-                    <TableHead className="w-[96px]">掛け率</TableHead>
+                    {productMasterListFields.map((field) => (
+                      <TableHead key={String(field.key)} className="min-w-[150px]">
+                        {field.label}
+                      </TableHead>
+                    ))}
                     {isEditingProductMaster ? <TableHead className="w-[240px]">削除</TableHead> : null}
                   </TableRow>
                 </TableHeader>
@@ -2825,67 +2821,19 @@ export function OrderWorkbench({
                     ? productMasterDrafts.map((draft, index) => (
                         <TableRow key={buildProductKey(draft.originalClientId, draft.originalJan)}>
                           <TableCell>{getClientName(draft.originalClientId, clients)}</TableCell>
-                          <TableCell className="font-mono text-xs">{draft.jan}</TableCell>
-                          <TableCell>
-                            <Input
-                              value={draft.name}
-                              className="min-w-[260px]"
-                              onChange={(event) =>
-                                updateProductMasterDraft(index, { name: event.target.value })
-                              }
-                            />
-                          </TableCell>
-                          <TableCell>
-                            <Input
-                              value={draft.cooolaCode}
-                              onChange={(event) =>
+                          {productMasterListFields.map((field) => (
+                            <ProductMasterTableCell
+                              key={String(field.key)}
+                              field={field}
+                              value={draft[field.key]}
+                              isEditing
+                              onChange={(value) =>
                                 updateProductMasterDraft(index, {
-                                  cooolaCode: event.target.value,
-                                })
+                                  [field.key]: value,
+                                } as Partial<ProductMasterDraft>)
                               }
                             />
-                          </TableCell>
-                          <TableCell>
-                            <Input
-                              value={draft.wholesalePrice}
-                              className="w-[96px]"
-                              onChange={(event) =>
-                                updateProductMasterDraft(index, {
-                                  wholesalePrice: event.target.value,
-                                })
-                              }
-                            />
-                          </TableCell>
-                          <TableCell>
-                            <TaxRateSelect
-                              value={draft.taxRate}
-                              triggerClassName="w-[88px]"
-                              onChange={(taxRate) => updateProductMasterDraft(index, { taxRate })}
-                            />
-                          </TableCell>
-                          <TableCell>
-                            <Input
-                              value={draft.retailPrice}
-                              className="w-[104px]"
-                              onChange={(event) =>
-                                updateProductMasterDraft(index, {
-                                  retailPrice: event.target.value,
-                                })
-                              }
-                            />
-                          </TableCell>
-                          <TableCell>
-                            <Input
-                              value={draft.payoutRate}
-                              className="w-[80px]"
-                              placeholder="50"
-                              onChange={(event) =>
-                                updateProductMasterDraft(index, {
-                                  payoutRate: event.target.value,
-                                })
-                              }
-                            />
-                          </TableCell>
+                          ))}
                           <TableCell>
                             <div className="flex items-center gap-2">
                               <Button
@@ -2918,13 +2866,13 @@ export function OrderWorkbench({
                     : pagedProducts.map((product) => (
                         <TableRow key={buildProductKey(product.clientId, product.jan)}>
                           <TableCell>{getClientName(product.clientId, clients)}</TableCell>
-                          <TableCell className="font-mono text-xs">{product.jan}</TableCell>
-                          <TableCell>{product.name}</TableCell>
-                          <TableCell>{product.cooolaCode}</TableCell>
-                          <TableCell>{product.wholesalePrice.toLocaleString()}円</TableCell>
-                          <TableCell>{formatTaxRate(product.taxRate)}</TableCell>
-                          <TableCell>{formatNullableCurrency(product.retailPrice)}</TableCell>
-                          <TableCell>{formatNullableRate(product.payoutRate)}</TableCell>
+                          {productMasterListFields.map((field) => (
+                            <ProductMasterTableCell
+                              key={String(field.key)}
+                              field={field}
+                              value={getProductMasterDisplayValue(product, field.key)}
+                            />
+                          ))}
                         </TableRow>
                       ))}
                 </TableBody>
@@ -4334,6 +4282,61 @@ function ProductFormFieldRow({
   );
 }
 
+function ProductMasterTableCell({
+  field,
+  value,
+  isEditing = false,
+  onChange,
+}: {
+  field: ProductFormField;
+  value: string;
+  isEditing?: boolean;
+  onChange?: (value: string) => void;
+}) {
+  if (!isEditing || field.key === "jan") {
+    return (
+      <TableCell className={field.key === "jan" ? "font-mono text-xs" : ""}>
+        <span className="whitespace-pre-wrap">{value || "未設定"}</span>
+      </TableCell>
+    );
+  }
+
+  if (field.input === "taxRate") {
+    return (
+      <TableCell>
+        <TaxRateSelect
+          value={value}
+          triggerClassName="w-[96px]"
+          onChange={(nextValue) => onChange?.(nextValue)}
+        />
+      </TableCell>
+    );
+  }
+
+  if (field.input === "textarea") {
+    return (
+      <TableCell>
+        <textarea
+          value={value}
+          rows={3}
+          className="min-w-[240px] rounded-md border border-input bg-transparent px-3 py-2 text-sm shadow-xs outline-none transition-[color,box-shadow] focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50"
+          onChange={(event) => onChange?.(event.target.value)}
+        />
+      </TableCell>
+    );
+  }
+
+  return (
+    <TableCell>
+      <Input
+        value={value}
+        className={field.key === "name" || field.key === "formalProductName" ? "min-w-[240px]" : "w-[150px]"}
+        onChange={(event) => onChange?.(event.target.value)}
+      />
+    </TableCell>
+  );
+}
+
 function DeliveryDestinationRegistrationForm({
   form,
   isSaving,
@@ -4643,6 +4646,32 @@ function createProductMasterDraft(product: Product): ProductMasterDraft {
     memo: product.memo,
     ...productMasterExtraToForm(product),
   };
+}
+
+function getProductMasterDisplayValue(product: Product, key: ProductFormFieldKey) {
+  if (key === "wholesalePrice") {
+    return `${product.wholesalePrice.toLocaleString()}円`;
+  }
+
+  if (key === "taxRate") {
+    return formatTaxRate(product.taxRate);
+  }
+
+  if (key === "retailPrice") {
+    return formatNullableCurrency(product.retailPrice);
+  }
+
+  if (key === "payoutRate") {
+    return formatNullableRate(product.payoutRate);
+  }
+
+  const value = product[key];
+
+  if (value === null || value === undefined || value === "") {
+    return "";
+  }
+
+  return String(value);
 }
 
 function getDeliveryWholesalerName(destination: Pick<DeliveryDestination, "wholesalerName" | "name" | "aliases" | "code">) {
