@@ -349,9 +349,9 @@ const productMasterImageField: ProductFormField = {
   input: "image",
 };
 const productMasterDisplayFields = [
+  productMasterImageField,
   productMasterListFields.find((field) => field.key === "name"),
   productMasterListFields.find((field) => field.key === "jan"),
-  productMasterImageField,
   ...productMasterListFields.filter(
     (field) => field.key !== "name" && field.key !== "jan" && field.key !== "productImagePath",
   ),
@@ -3273,9 +3273,11 @@ export function OrderWorkbench({
             <Table className="min-w-[3600px]">
                 <TableHeader>
                   <TableRow>
-                    <TableHead className="w-[160px]">クライアント</TableHead>
                     {productMasterDisplayFields.map((field) => (
-                      <TableHead key={String(field.key)} className="min-w-[150px]">
+                      <TableHead
+                        key={String(field.key)}
+                        className={field.key === "productImagePath" ? "w-[140px]" : "min-w-[150px]"}
+                      >
                         {field.label}
                       </TableHead>
                     ))}
@@ -3286,7 +3288,7 @@ export function OrderWorkbench({
                   {isLoadingProductPage ? (
                     <TableRow>
                       <TableCell
-                        colSpan={2 + productMasterDisplayFields.length}
+                        colSpan={productMasterDisplayFields.length + (isEditingProductMaster ? 1 : 0)}
                         className="text-muted-foreground"
                       >
                         商品マスタを読み込んでいます...
@@ -3295,7 +3297,6 @@ export function OrderWorkbench({
                   ) : isEditingProductMaster
                     ? productMasterDrafts.map((draft, index) => (
                         <TableRow key={buildProductKey(draft.originalClientId, draft.originalJan)}>
-                          <TableCell>{getClientName(draft.originalClientId, clients)}</TableCell>
                           {productMasterDisplayFields.map((field) => (
                             <ProductMasterTableCell
                               key={String(field.key)}
@@ -3354,7 +3355,6 @@ export function OrderWorkbench({
                       ))
                     : pagedProducts.map((product) => (
                         <TableRow key={buildProductKey(product.clientId, product.jan)}>
-                          <TableCell>{getClientName(product.clientId, clients)}</TableCell>
                           {productMasterDisplayFields.map((field) => (
                             <ProductMasterTableCell
                               key={String(field.key)}
