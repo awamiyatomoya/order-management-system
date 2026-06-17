@@ -1875,10 +1875,11 @@ export function OrderWorkbench({
   }
 
   async function saveProductMasterDrafts() {
-    const nextProducts: Product[] = [];
+    const productUpdates: Array<{ product: Product; previousJan?: string }> = [];
 
     for (const draft of productMasterDrafts) {
       const normalizedProduct = normalizeProductDraft(draft, draft.originalClientId);
+      const janChanged = normalizedProduct.product.jan !== draft.originalJan;
       const draftClient = clients.find((client) => client.id === draft.originalClientId);
       const draftClientFbpFeeRate = draftClient?.fbpFeeRate ?? 0.08;
 
@@ -1888,6 +1889,19 @@ export function OrderWorkbench({
         !draft.wholesalePrice.trim()
       ) {
         setProductNotice("JAN、商品名、下代（税抜）は必須です。");
+        return;
+      }
+
+      if (
+        janChanged &&
+        products.some(
+          (product) =>
+            product.clientId === draft.originalClientId &&
+            product.jan === normalizedProduct.product.jan &&
+            product.jan !== draft.originalJan,
+        )
+      ) {
+        setProductNotice(`JANコード ${normalizedProduct.product.jan} は同じクライアントですでに登録されています。`);
         return;
       }
 
@@ -1936,12 +1950,15 @@ export function OrderWorkbench({
         (product) => product.clientId === draft.originalClientId && product.jan === draft.originalJan,
       );
 
-      if (!currentProduct || hasProductChanged(currentProduct, normalizedProduct.product)) {
-        nextProducts.push(normalizedProduct.product);
+      if (!currentProduct || hasProductChanged(currentProduct, normalizedProduct.product) || janChanged) {
+        productUpdates.push({
+          product: normalizedProduct.product,
+          previousJan: janChanged ? draft.originalJan : undefined,
+        });
       }
     }
 
-    if (nextProducts.length === 0) {
+    if (productUpdates.length === 0) {
       setProductNotice("変更はありません。");
       setIsEditingProductMaster(false);
       return;
@@ -1949,8 +1966,8 @@ export function OrderWorkbench({
 
     setIsSavingProduct(true);
 
-    for (const product of nextProducts) {
-      const saveResult = await saveProduct(product);
+    for (const { product, previousJan } of productUpdates) {
+      const saveResult = await saveProduct(product, { previousJan });
 
       if (!saveResult.ok) {
         setIsSavingProduct(false);
@@ -1961,19 +1978,52 @@ export function OrderWorkbench({
     }
 
     setIsSavingProduct(false);
-    setProducts((current) =>
-      current.map((product) => {
-        const nextProduct = nextProducts.find(
-          (candidate) => candidate.clientId === product.clientId && candidate.jan === product.jan,
+    setProducts((current) => {
+      let nextProducts = [...current];
+
+      for (const { product, previousJan } of productUpdates) {
+        if (previousJan) {
+          nextProducts = nextProducts.filter(
+            (item) => !(item.clientId === product.clientId && item.jan === previousJan),
+          );
+        }
+
+        const existingIndex = nextProducts.findIndex(
+          (item) => item.clientId === product.clientId && item.jan === product.jan,
         );
 
-        return nextProduct ?? product;
-      }),
+        if (existingIndex >= 0) {
+          nextProducts[existingIndex] = product;
+        } else {
+          nextProducts.push(product);
+        }
+      }
+
+      return nextProducts;
+    });
+    setOrders((current) =>
+      current.map((order) => ({
+        ...order,
+        lines: order.lines.map((line) => {
+          const update = productUpdates.find(
+            ({ product, previousJan }) =>
+              previousJan &&
+              order.clientId === product.clientId &&
+              line.jan === previousJan,
+          );
+
+          if (!update?.previousJan) {
+            return line;
+          }
+
+          return { ...line, jan: update.product.jan };
+        }),
+      })),
     );
     setProductMasterDrafts([]);
     setIsEditingProductMaster(false);
-    setProductNotice(`${nextProducts.length}件の商品マスタを更新しました。`);
-    setNotice(`${nextProducts.length}件の商品マスタを更新しました。`);
+    setProductNotice(`${productUpdates.length}件の商品マスタを更新しました。`);
+    setNotice(`${productUpdates.length}件の商品マスタを更新しました。`);
   }
 
   async function removeProductFromMaster(clientId: string, jan: string) {
@@ -4700,7 +4750,7 @@ function ProductMasterTableCell({
   isEditing?: boolean;
   onChange?: (value: string) => void;
 }) {
-  if (!isEditing || field.key === "jan") {
+  if (!isEditing) {
     return (
       <TableCell className="h-12 max-w-[220px] align-middle">
         <CopyableTableValue
@@ -4740,7 +4790,13 @@ function ProductMasterTableCell({
     <TableCell>
       <Input
         value={value}
-        className={field.key === "name" || field.key === "formalProductName" ? "min-w-[240px]" : "w-[150px]"}
+        className={
+          field.key === "name" || field.key === "formalProductName"
+            ? "min-w-[240px]"
+            : field.key === "jan"
+              ? "w-[180px] font-mono text-xs"
+              : "w-[150px]"
+        }
         onChange={(event) => onChange?.(event.target.value)}
       />
     </TableCell>
@@ -5315,7 +5371,7 @@ function getDeliveryWholesalerName(destination: Pick<DeliveryDestination, "whole
 function normalizeProductDraft(draft: ProductMasterDraft, clientId: string) {
   return {
     product: {
-      jan: draft.originalJan.trim(),
+      jan: normalizeJanCell(draft.jan),
       clientId,
       internalSku: draft.internalSku.trim(),
       cooolaCode: draft.cooolaCode.trim(),
@@ -5340,6 +5396,7 @@ function getClientName(clientId: string, clients: Client[]) {
 
 function hasProductChanged(current: Product, next: Product) {
   return (
+    current.jan !== next.jan ||
     current.name !== next.name ||
     current.internalSku !== next.internalSku ||
     current.cooolaCode !== next.cooolaCode ||

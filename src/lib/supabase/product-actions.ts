@@ -145,7 +145,10 @@ export async function fetchProductsForProductMasterImport(clientId: string): Pro
   };
 }
 
-export async function saveProduct(product: Product): Promise<SaveProductResult> {
+export async function saveProduct(
+  product: Product,
+  options?: { previousJan?: string },
+): Promise<SaveProductResult> {
   const result = productSchema.safeParse(product);
 
   if (!result.success) {
@@ -164,6 +167,32 @@ export async function saveProduct(product: Product): Promise<SaveProductResult> 
   }
 
   const supabase = createServerSupabaseClient();
+  const previousJan = options?.previousJan?.trim();
+  const janChanged = Boolean(previousJan && previousJan !== result.data.jan);
+
+  if (janChanged) {
+    const { data: conflictingProduct, error: conflictError } = await supabase
+      .from("products")
+      .select("jan")
+      .eq("client_id", result.data.clientId)
+      .eq("jan", result.data.jan)
+      .maybeSingle();
+
+    if (conflictError) {
+      return {
+        ok: false,
+        message: `JANコードの変更前確認に失敗しました: ${conflictError.message}`,
+      };
+    }
+
+    if (conflictingProduct) {
+      return {
+        ok: false,
+        message: `JANコード ${result.data.jan} は同じクライアントですでに登録されています。`,
+      };
+    }
+  }
+
   const extraPayload = Object.fromEntries(
     productMasterExtraFields.map((field) => [
       field.column,
@@ -213,13 +242,49 @@ export async function saveProduct(product: Product): Promise<SaveProductResult> 
     };
   }
 
+  if (janChanged && previousJan) {
+    const { error: orderLineError } = await supabase
+      .from("order_lines")
+      .update({ jan: result.data.jan })
+      .eq("client_id", result.data.clientId)
+      .eq("jan", previousJan);
+
+    if (orderLineError) {
+      await supabase
+        .from("products")
+        .delete()
+        .eq("client_id", result.data.clientId)
+        .eq("jan", result.data.jan);
+
+      return {
+        ok: false,
+        message: `JANコード変更時の受注明細更新に失敗しました: ${orderLineError.message}`,
+      };
+    }
+
+    const { error: deleteError } = await supabase
+      .from("products")
+      .delete()
+      .eq("client_id", result.data.clientId)
+      .eq("jan", previousJan);
+
+    if (deleteError) {
+      return {
+        ok: false,
+        message: `JANコード変更後の旧商品削除に失敗しました: ${deleteError.message}`,
+      };
+    }
+  }
+
   revalidatePath("/");
 
   return {
     ok: true,
     savedToSupabase: true,
     message: savedExtraFields
-      ? "Supabaseの商品マスタに登録しました。"
+      ? janChanged
+        ? "Supabaseの商品マスタを更新し、JANコードを変更しました。"
+        : "Supabaseの商品マスタに登録しました。"
       : "Supabaseの商品マスタに登録しました。追加項目を保存するには商品マスタ拡張マイグレーションを適用してください。",
   };
 }
