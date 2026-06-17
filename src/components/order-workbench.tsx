@@ -4962,7 +4962,7 @@ function ProductMasterTableCell({
 }) {
   if (field.input === "image") {
     return (
-      <TableCell className="w-[80px] min-w-[80px] align-middle py-2.5">
+      <TableCell className="w-[88px] min-w-[88px] align-middle py-2.5">
         <ProductImageField
           imageUrl={imageUrl}
           compact
@@ -5100,7 +5100,7 @@ function ProductImagePreview({
   imageUrl?: string;
   compact?: boolean;
 }) {
-  const frameClass = compact ? "h-16 w-16" : "h-24 w-24";
+  const frameClass = compact ? "h-[72px] w-[72px]" : "h-24 w-24";
   const buttonClass = compact
     ? "h-6 px-2 text-[10px] leading-none"
     : "h-7 px-2.5 text-xs leading-none";
@@ -5110,7 +5110,7 @@ function ProductImagePreview({
       className={`relative flex items-center justify-center overflow-hidden rounded-md border border-dashed bg-muted/30 ${frameClass}`}
     >
       {imageUrl ? (
-        <img src={imageUrl} alt="商品画像" className="h-full w-full object-cover" />
+        <img src={imageUrl} alt="商品画像" className="h-full w-full bg-white object-contain" />
       ) : null}
       {imageUrl ? (
         <div className="absolute inset-0 flex items-center justify-center bg-black/35 opacity-0 transition-opacity group-hover:opacity-100">

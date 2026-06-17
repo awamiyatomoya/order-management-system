@@ -2,6 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 import { z } from "zod";
+import { normalizeProductImageForUpload } from "@/lib/normalize-product-image";
 import { productMasterExtraFields } from "@/lib/product-master-fields";
 import type { Product } from "@/lib/types";
 import { mapProduct, productSelectColumns, type ProductRow, attachProductImageUrls } from "./read-order-data";
@@ -194,12 +195,22 @@ export async function uploadProductImage(formData: FormData): Promise<UploadProd
   }
 
   const supabase = createServerSupabaseClient();
+  let processedImage: Buffer;
+
+  try {
+    processedImage = await normalizeProductImageForUpload(file);
+  } catch {
+    return {
+      ok: false,
+      message: "画像の処理に失敗しました。別の画像をお試しください。",
+    };
+  }
+
   const fileName = sanitizeProductImageFileName(file.name);
   const folder = jan || "draft";
   const path = `${clientId}/${folder}/${crypto.randomUUID()}-${fileName}`;
-  const contentType = file.type || guessProductImageContentType(fileName);
-  const { error } = await supabase.storage.from("product-images").upload(path, file, {
-    contentType,
+  const { error } = await supabase.storage.from("product-images").upload(path, processedImage, {
+    contentType: "image/jpeg",
     upsert: false,
   });
 
@@ -405,29 +416,12 @@ function normalizeProductMasterColumnValue(
 function sanitizeProductImageFileName(fileName: string) {
   const normalized = fileName
     .normalize("NFKC")
+    .replace(/\.[^.]+$/i, "")
     .replace(/[^A-Za-z0-9._-]+/g, "_")
     .replace(/_+/g, "_")
     .replace(/^_+|_+$/g, "");
 
-  return normalized || "product-image.jpg";
-}
-
-function guessProductImageContentType(fileName: string) {
-  const lowerName = fileName.toLowerCase();
-
-  if (lowerName.endsWith(".png")) {
-    return "image/png";
-  }
-
-  if (lowerName.endsWith(".webp")) {
-    return "image/webp";
-  }
-
-  if (lowerName.endsWith(".gif")) {
-    return "image/gif";
-  }
-
-  return "image/jpeg";
+  return `${normalized || "product-image"}.jpg`;
 }
 
 export async function deleteProduct(params: {
