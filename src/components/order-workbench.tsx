@@ -4962,7 +4962,7 @@ function ProductMasterTableCell({
 }) {
   if (field.input === "image") {
     return (
-      <TableCell className="w-[72px] min-w-[72px] align-middle">
+      <TableCell className="w-[80px] min-w-[80px] align-middle py-2.5">
         <ProductImageField
           imageUrl={imageUrl}
           compact
@@ -5100,8 +5100,10 @@ function ProductImagePreview({
   imageUrl?: string;
   compact?: boolean;
 }) {
-  const frameClass = compact ? "h-14 w-14" : "h-24 w-24";
-  const actionLabel = imageUrl ? "変更" : "選択";
+  const frameClass = compact ? "h-16 w-16" : "h-24 w-24";
+  const buttonClass = compact
+    ? "h-6 px-2 text-[10px] leading-none"
+    : "h-7 px-2.5 text-xs leading-none";
 
   return (
     <div
@@ -5110,13 +5112,21 @@ function ProductImagePreview({
       {imageUrl ? (
         <img src={imageUrl} alt="商品画像" className="h-full w-full object-cover" />
       ) : null}
-      <span
-        className={`absolute inset-0 flex items-center justify-center text-center text-[10px] font-medium leading-tight text-muted-foreground ${
-          imageUrl ? "bg-black/35 text-white opacity-0 transition-opacity group-hover:opacity-100" : ""
-        }`}
-      >
-        {actionLabel}
-      </span>
+      {imageUrl ? (
+        <div className="absolute inset-0 flex items-center justify-center bg-black/35 opacity-0 transition-opacity group-hover:opacity-100">
+          <span
+            className={`inline-flex items-center justify-center rounded-md border border-input bg-background font-medium shadow-xs ${buttonClass}`}
+          >
+            変更
+          </span>
+        </div>
+      ) : (
+        <span
+          className={`inline-flex items-center justify-center rounded-md border border-input bg-background font-medium text-foreground shadow-xs ${buttonClass}`}
+        >
+          選択
+        </span>
+      )}
     </div>
   );
 }
@@ -5135,19 +5145,31 @@ function ProductImageField({
   onClear?: () => void;
 }) {
   const inputId = useId();
+  const openFilePicker = () => {
+    if (!disabled) {
+      document.getElementById(inputId)?.click();
+    }
+  };
 
   return (
-    <div className="relative inline-block">
+    <div className={`relative inline-block ${compact ? "py-1.5" : ""}`}>
       <label
         htmlFor={disabled ? undefined : inputId}
         className={`group inline-block ${disabled ? "" : "cursor-pointer"}`}
       >
         <ProductImagePreview imageUrl={imageUrl} compact={compact} />
       </label>
+      {!compact ? (
+        <div className="mt-2">
+          <Button type="button" size="sm" variant="outline" disabled={disabled} onClick={openFilePicker}>
+            画像を選択
+          </Button>
+        </div>
+      ) : null}
       {imageUrl && onClear && !disabled ? (
         <button
           type="button"
-          className="absolute -right-1 -top-1 flex h-4 w-4 items-center justify-center rounded-full border bg-background text-[10px] leading-none text-muted-foreground shadow-sm hover:text-foreground"
+          className="absolute -right-1 top-1 flex h-4 w-4 items-center justify-center rounded-full border bg-background text-[10px] leading-none text-muted-foreground shadow-sm hover:text-foreground"
           aria-label="画像を削除"
           onClick={(event) => {
             event.preventDefault();
