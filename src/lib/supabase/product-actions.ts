@@ -4,7 +4,7 @@ import { revalidatePath } from "next/cache";
 import { z } from "zod";
 import { productMasterExtraFields } from "@/lib/product-master-fields";
 import type { Product } from "@/lib/types";
-import { mapProduct, productSelectColumns, type ProductRow } from "./read-order-data";
+import { mapProduct, productSelectColumns, type ProductRow, attachProductImageUrls } from "./read-order-data";
 import { createServerSupabaseClient, hasSupabaseServerEnv } from "./server";
 
 const productSchema = z.object({
@@ -24,6 +24,18 @@ export type SaveProductResult =
   | {
       ok: true;
       savedToSupabase: boolean;
+      message: string;
+    }
+  | {
+      ok: false;
+      message: string;
+    };
+
+export type UploadProductImageResult =
+  | {
+      ok: true;
+      path: string;
+      url?: string;
       message: string;
     }
   | {
@@ -107,7 +119,9 @@ export async function fetchProductMasterProducts({
 
   return {
     ok: true,
-    products: ((data ?? []) as unknown as ProductRow[]).map(mapProduct),
+    products: await attachProductImageUrls(
+      ((data ?? []) as unknown as ProductRow[]).map(mapProduct),
+    ),
     totalCount: count ?? 0,
   };
 }
@@ -140,8 +154,71 @@ export async function fetchProductsForProductMasterImport(clientId: string): Pro
 
   return {
     ok: true,
-    products: ((data ?? []) as unknown as ProductRow[]).map(mapProduct),
+    products: await attachProductImageUrls(
+      ((data ?? []) as unknown as ProductRow[]).map(mapProduct),
+    ),
     totalCount: count ?? 0,
+  };
+}
+
+export async function uploadProductImage(formData: FormData): Promise<UploadProductImageResult> {
+  const clientId = String(formData.get("clientId") ?? "");
+  const jan = String(formData.get("jan") ?? "").trim();
+  const file = formData.get("file");
+
+  if (!clientId || !(file instanceof File) || file.size === 0) {
+    return {
+      ok: false,
+      message: "商品画像の保存に必要な情報が不足しています。",
+    };
+  }
+
+  const allowedTypes = new Set(["image/jpeg", "image/png", "image/webp", "image/gif"]);
+  const lowerName = file.name.toLowerCase();
+  const hasAllowedExtension = [".jpg", ".jpeg", ".png", ".webp", ".gif"].some((extension) =>
+    lowerName.endsWith(extension),
+  );
+
+  if (!allowedTypes.has(file.type) && !hasAllowedExtension) {
+    return {
+      ok: false,
+      message: "JPEG、PNG、WebP、GIF形式の画像だけ登録できます。",
+    };
+  }
+
+  if (!hasSupabaseServerEnv()) {
+    return {
+      ok: false,
+      message: "Supabase環境変数が未設定のため、商品画像を保存できません。",
+    };
+  }
+
+  const supabase = createServerSupabaseClient();
+  const fileName = sanitizeProductImageFileName(file.name);
+  const folder = jan || "draft";
+  const path = `${clientId}/${folder}/${crypto.randomUUID()}-${fileName}`;
+  const contentType = file.type || guessProductImageContentType(fileName);
+  const { error } = await supabase.storage.from("product-images").upload(path, file, {
+    contentType,
+    upsert: false,
+  });
+
+  if (error) {
+    return {
+      ok: false,
+      message: `商品画像の保存に失敗しました: ${error.message}`,
+    };
+  }
+
+  const { data: signedUrlData } = await supabase.storage
+    .from("product-images")
+    .createSignedUrl(path, 60 * 60);
+
+  return {
+    ok: true,
+    path,
+    url: signedUrlData?.signedUrl,
+    message: "商品画像を保存しました。",
   };
 }
 
@@ -210,8 +287,10 @@ export async function saveProduct(
     retail_price: result.data.retailPrice,
     payout_rate: result.data.payoutRate,
     flags: result.data.memo ? { memo: result.data.memo } : {},
+    product_image_path: product.productImagePath?.trim() || null,
   };
   let savedExtraFields = true;
+  let savedProductImagePath = true;
   let { error } = await supabase.from("products").upsert(
     { ...basePayload, ...extraPayload },
     {
@@ -224,6 +303,18 @@ export async function saveProduct(
     const retryResult = await supabase.from("products").upsert(basePayload, {
       onConflict: "client_id,jan",
     });
+    error = retryResult.error;
+  }
+
+  if (error && error.message.includes("product_image_path")) {
+    savedProductImagePath = false;
+    const { product_image_path: _productImagePath, ...payloadWithoutImage } = basePayload;
+    const retryResult = await supabase.from("products").upsert(
+      { ...payloadWithoutImage, ...extraPayload },
+      {
+        onConflict: "client_id,jan",
+      },
+    );
     error = retryResult.error;
   }
 
@@ -284,7 +375,9 @@ export async function saveProduct(
     message: savedExtraFields
       ? janChanged
         ? "Supabaseの商品マスタを更新し、JANコードを変更しました。"
-        : "Supabaseの商品マスタに登録しました。"
+        : savedProductImagePath
+          ? "Supabaseの商品マスタに登録しました。"
+          : "Supabaseの商品マスタに登録しました。商品画像を保存するには商品画像マイグレーションを適用してください。"
       : "Supabaseの商品マスタに登録しました。追加項目を保存するには商品マスタ拡張マイグレーションを適用してください。",
   };
 }
@@ -307,6 +400,34 @@ function normalizeProductMasterColumnValue(
   }
 
   return String(value);
+}
+
+function sanitizeProductImageFileName(fileName: string) {
+  const normalized = fileName
+    .normalize("NFKC")
+    .replace(/[^A-Za-z0-9._-]+/g, "_")
+    .replace(/_+/g, "_")
+    .replace(/^_+|_+$/g, "");
+
+  return normalized || "product-image.jpg";
+}
+
+function guessProductImageContentType(fileName: string) {
+  const lowerName = fileName.toLowerCase();
+
+  if (lowerName.endsWith(".png")) {
+    return "image/png";
+  }
+
+  if (lowerName.endsWith(".webp")) {
+    return "image/webp";
+  }
+
+  if (lowerName.endsWith(".gif")) {
+    return "image/gif";
+  }
+
+  return "image/jpeg";
 }
 
 export async function deleteProduct(params: {

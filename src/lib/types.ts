@@ -30,6 +30,8 @@ export type Product = {
   retailPrice: number | null;
   payoutRate: number | null;
   memo: string;
+  productImagePath?: string;
+  productImageUrl?: string;
 } & Partial<Record<ProductMasterExtraKey, string | number | null>>;
 
 export type Store = {

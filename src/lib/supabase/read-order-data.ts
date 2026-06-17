@@ -27,6 +27,7 @@ export const productSelectColumns = [
   "retail_price",
   "payout_rate",
   "flags",
+  "product_image_path",
   ...productMasterExtraFields.map((field) => field.column),
 ].join(", ");
 
@@ -196,7 +197,9 @@ export async function getOrderWorkbenchInitialData(
     }
 
     const clients = ((clientsResult?.data ?? []) as ClientRow[]).map(mapClient);
-    const products = ((productsResult?.data ?? []) as unknown as ProductRow[]).map(mapProduct);
+    const products = await attachProductImageUrls(
+      ((productsResult?.data ?? []) as unknown as ProductRow[]).map(mapProduct),
+    );
     const productTotalCount = productsResult?.count ?? products.length;
     const orders = ((ordersResult?.data ?? []) as OrderRow[]).map(mapOrder);
     const importBatches = ((importBatchesResult?.data ?? []) as ImportBatchRow[]).map(mapImportBatch);
@@ -391,6 +394,31 @@ function mapStore(row: StoreRow): Store {
   };
 }
 
+export async function attachProductImageUrls(products: Product[]): Promise<Product[]> {
+  if (!hasSupabaseServerEnv()) {
+    return products;
+  }
+
+  const supabase = createServerSupabaseClient();
+
+  return Promise.all(
+    products.map(async (product) => {
+      if (!product.productImagePath) {
+        return product;
+      }
+
+      const { data } = await supabase.storage
+        .from("product-images")
+        .createSignedUrl(product.productImagePath, 60 * 60);
+
+      return {
+        ...product,
+        productImageUrl: data?.signedUrl,
+      };
+    }),
+  );
+}
+
 export function mapProduct(row: ProductRow): Product {
   const extraFields = Object.fromEntries(
     productMasterExtraFields.map((field) => [
@@ -410,6 +438,8 @@ export function mapProduct(row: ProductRow): Product {
     retailPrice: row.retail_price == null ? null : Number(row.retail_price),
     payoutRate: row.payout_rate == null ? null : Number(row.payout_rate),
     memo: typeof row.flags?.memo === "string" ? row.flags.memo : "",
+    productImagePath:
+      typeof row.product_image_path === "string" ? row.product_image_path : undefined,
     ...extraFields,
   };
 }

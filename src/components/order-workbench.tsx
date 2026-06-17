@@ -73,6 +73,7 @@ import {
   fetchProductMasterProducts,
   fetchProductsForProductMasterImport,
   saveProduct,
+  uploadProductImage,
 } from "@/lib/supabase/product-actions";
 import { saveStore } from "@/lib/supabase/store-actions";
 import type { Client, ImportBatch, ImportError, Order, Product, Store, Supplier } from "@/lib/types";
@@ -88,6 +89,8 @@ type ProductForm = {
   retailPrice: string;
   payoutRate: string;
   memo: string;
+  productImagePath: string;
+  productImageUrl: string;
 } & Record<ProductMasterExtraKey, string>;
 
 type ProductMasterDraft = ProductForm & {
@@ -222,6 +225,8 @@ const emptyProductForm: ProductForm = {
   retailPrice: "",
   payoutRate: "",
   memo: "",
+  productImagePath: "",
+  productImageUrl: "",
   ...createEmptyProductMasterExtraForm(),
 };
 
@@ -255,7 +260,7 @@ type ProductFormField = {
   label: string;
   description?: string;
   required?: boolean;
-  input?: "text" | "textarea" | "taxRate";
+  input?: "text" | "textarea" | "taxRate" | "image";
 };
 
 type ProductFormSection = {
@@ -337,10 +342,19 @@ const productFormSections: ProductFormSection[] = [
 ];
 
 const productMasterListFields = productFormSections.flatMap((section) => section.fields);
+const productMasterImageField: ProductFormField = {
+  key: "productImagePath",
+  label: "商品画像",
+  description: "JPEG、PNG、WebP、GIF形式の画像を登録できます。",
+  input: "image",
+};
 const productMasterDisplayFields = [
   productMasterListFields.find((field) => field.key === "name"),
   productMasterListFields.find((field) => field.key === "jan"),
-  ...productMasterListFields.filter((field) => field.key !== "name" && field.key !== "jan"),
+  productMasterImageField,
+  ...productMasterListFields.filter(
+    (field) => field.key !== "name" && field.key !== "jan" && field.key !== "productImagePath",
+  ),
 ].filter((field): field is ProductFormField => Boolean(field));
 
 function createEmptyProductMasterExtraForm() {
@@ -1501,6 +1515,8 @@ export function OrderWorkbench({
       retailPrice,
       payoutRate,
       memo: normalizedForm.memo,
+      productImagePath: productForm.productImagePath || undefined,
+      productImageUrl: productForm.productImageUrl || undefined,
       ...normalizedExtraFields,
     };
 
@@ -3006,9 +3022,11 @@ export function OrderWorkbench({
             />
             <ProductRegistrationForm
               form={productForm}
+              clientId={productRegistrationClientId}
               isSaving={isSavingProduct}
               notice={productNotice}
               onChange={setProductForm}
+              onImageNotice={setProductNotice}
               onSubmit={registerProduct}
             />
           </Panel>
@@ -3256,7 +3274,7 @@ export function OrderWorkbench({
                 <TableHeader>
                   <TableRow>
                     <TableHead className="w-[160px]">クライアント</TableHead>
-                    {(isEditingProductMaster ? productMasterListFields : productMasterDisplayFields).map((field) => (
+                    {productMasterDisplayFields.map((field) => (
                       <TableHead key={String(field.key)} className="min-w-[150px]">
                         {field.label}
                       </TableHead>
@@ -3278,17 +3296,31 @@ export function OrderWorkbench({
                     ? productMasterDrafts.map((draft, index) => (
                         <TableRow key={buildProductKey(draft.originalClientId, draft.originalJan)}>
                           <TableCell>{getClientName(draft.originalClientId, clients)}</TableCell>
-                          {productMasterListFields.map((field) => (
+                          {productMasterDisplayFields.map((field) => (
                             <ProductMasterTableCell
                               key={String(field.key)}
                               field={field}
-                              value={draft[field.key]}
+                              value={
+                                field.key === "productImagePath"
+                                  ? draft.productImagePath
+                                  : draft[field.key]
+                              }
+                              imageUrl={draft.productImageUrl}
+                              clientId={draft.originalClientId}
+                              jan={draft.jan || draft.originalJan}
                               isEditing
                               onChange={(value) =>
                                 updateProductMasterDraft(index, {
                                   [field.key]: value,
                                 } as Partial<ProductMasterDraft>)
                               }
+                              onImageChange={(path, url) =>
+                                updateProductMasterDraft(index, {
+                                  productImagePath: path,
+                                  productImageUrl: url,
+                                })
+                              }
+                              onImageNotice={setProductNotice}
                             />
                           ))}
                           <TableCell>
@@ -3327,7 +3359,14 @@ export function OrderWorkbench({
                             <ProductMasterTableCell
                               key={String(field.key)}
                               field={field}
-                              value={getProductMasterDisplayValue(product, field.key)}
+                              value={
+                                field.key === "productImagePath"
+                                  ? product.productImagePath ?? ""
+                                  : getProductMasterDisplayValue(product, field.key)
+                              }
+                              imageUrl={product.productImageUrl}
+                              clientId={product.clientId}
+                              jan={product.jan}
                             />
                           ))}
                         </TableRow>
@@ -4661,19 +4700,64 @@ function FileUploadButton({
 
 function ProductRegistrationForm({
   form,
+  clientId,
   isSaving,
   notice,
   onChange,
+  onImageNotice,
   onSubmit,
 }: {
   form: ProductForm;
+  clientId: string;
   isSaving: boolean;
   notice: string;
   onChange: (form: ProductForm) => void;
+  onImageNotice?: (message: string) => void;
   onSubmit: (event: React.FormEvent<HTMLFormElement>) => void;
 }) {
+  async function handleImageUpload(file: File | null) {
+    if (!file) {
+      return;
+    }
+
+    if (!clientId) {
+      onImageNotice?.("登録先クライアントを選択してから画像をアップロードしてください。");
+      return;
+    }
+
+    const formData = new FormData();
+    formData.set("clientId", clientId);
+    if (form.jan.trim()) {
+      formData.set("jan", form.jan.trim());
+    }
+    formData.set("file", file);
+
+    const uploadResult = await uploadProductImage(formData);
+
+    if (!uploadResult.ok) {
+      onImageNotice?.(uploadResult.message);
+      return;
+    }
+
+    onChange({
+      ...form,
+      productImagePath: uploadResult.path,
+      productImageUrl: uploadResult.url ?? "",
+    });
+    onImageNotice?.(uploadResult.message);
+  }
+
   return (
     <form onSubmit={onSubmit} className="flex flex-col gap-5">
+      <section className="rounded-lg border bg-muted/20 p-4">
+        <h3 className="mb-3 text-sm font-medium">商品画像</h3>
+        <ProductImageField
+          imageUrl={form.productImageUrl}
+          disabled={isSaving || !clientId}
+          onFileChange={handleImageUpload}
+          onClear={() => onChange({ ...form, productImagePath: "", productImageUrl: "" })}
+        />
+      </section>
       {productFormSections.map((section) => (
         <section key={section.title} className="rounded-lg border bg-muted/20 p-4">
           <h3 className="mb-3 text-sm font-medium">{section.title}</h3>
@@ -4742,14 +4826,63 @@ function ProductFormFieldRow({
 function ProductMasterTableCell({
   field,
   value,
+  imageUrl = "",
+  clientId = "",
+  jan = "",
   isEditing = false,
   onChange,
+  onImageChange,
+  onImageNotice,
 }: {
   field: ProductFormField;
   value: string;
+  imageUrl?: string;
+  clientId?: string;
+  jan?: string;
   isEditing?: boolean;
   onChange?: (value: string) => void;
+  onImageChange?: (path: string, url: string) => void;
+  onImageNotice?: (message: string) => void;
 }) {
+  if (field.input === "image") {
+    return (
+      <TableCell className="min-w-[140px] align-middle">
+        {isEditing ? (
+          <ProductImageField
+            imageUrl={imageUrl}
+            compact
+            disabled={!clientId}
+            onFileChange={async (file) => {
+              if (!file || !clientId) {
+                return;
+              }
+
+              const formData = new FormData();
+              formData.set("clientId", clientId);
+              if (jan.trim()) {
+                formData.set("jan", jan.trim());
+              }
+              formData.set("file", file);
+
+              const uploadResult = await uploadProductImage(formData);
+
+              if (!uploadResult.ok) {
+                onImageNotice?.(uploadResult.message);
+                return;
+              }
+
+              onImageChange?.(uploadResult.path, uploadResult.url ?? "");
+              onImageNotice?.(uploadResult.message);
+            }}
+            onClear={() => onImageChange?.("", "")}
+          />
+        ) : (
+          <ProductImagePreview imageUrl={imageUrl} />
+        )}
+      </TableCell>
+    );
+  }
+
   if (!isEditing) {
     return (
       <TableCell className="h-12 max-w-[220px] align-middle">
@@ -4800,6 +4933,78 @@ function ProductMasterTableCell({
         onChange={(event) => onChange?.(event.target.value)}
       />
     </TableCell>
+  );
+}
+
+function ProductImagePreview({
+  imageUrl,
+  compact = false,
+}: {
+  imageUrl?: string;
+  compact?: boolean;
+}) {
+  if (!imageUrl) {
+    return <span className="text-xs text-muted-foreground">未登録</span>;
+  }
+
+  return (
+    <img
+      src={imageUrl}
+      alt="商品画像"
+      className={`rounded-md border object-cover ${compact ? "h-12 w-12" : "h-24 w-24"}`}
+    />
+  );
+}
+
+function ProductImageField({
+  imageUrl,
+  compact = false,
+  disabled = false,
+  onFileChange,
+  onClear,
+}: {
+  imageUrl?: string;
+  compact?: boolean;
+  disabled?: boolean;
+  onFileChange: (file: File | null) => void | Promise<void>;
+  onClear: () => void;
+}) {
+  const inputId = useId();
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  return (
+    <div className="flex flex-col gap-2">
+      <ProductImagePreview imageUrl={imageUrl} compact={compact} />
+      <div className="flex flex-wrap gap-2">
+        <Button
+          type="button"
+          size="sm"
+          variant="outline"
+          disabled={disabled}
+          onClick={() => inputRef.current?.click()}
+        >
+          画像を選択
+        </Button>
+        {imageUrl ? (
+          <Button type="button" size="sm" variant="outline" disabled={disabled} onClick={onClear}>
+            画像を削除
+          </Button>
+        ) : null}
+      </div>
+      <Input
+        ref={inputRef}
+        id={inputId}
+        type="file"
+        accept="image/jpeg,image/png,image/webp,image/gif,.jpg,.jpeg,.png,.webp,.gif"
+        disabled={disabled}
+        className="sr-only"
+        onChange={(event) => {
+          void onFileChange(event.target.files?.[0] ?? null);
+          event.target.value = "";
+        }}
+      />
+      <p className="text-[11px] text-muted-foreground">JPEG、PNG、WebP、GIF形式に対応しています。</p>
+    </div>
   );
 }
 
@@ -5162,11 +5367,17 @@ function createProductMasterDraft(product: Product): ProductMasterDraft {
     retailPrice: product.retailPrice === null ? "" : String(product.retailPrice),
     payoutRate: product.payoutRate === null ? "" : formatRatePercentInput(product.payoutRate),
     memo: product.memo,
+    productImagePath: product.productImagePath ?? "",
+    productImageUrl: product.productImageUrl ?? "",
     ...productMasterExtraToForm(product),
   };
 }
 
 function getProductMasterDisplayValue(product: Product, key: ProductFormFieldKey) {
+  if (key === "productImagePath") {
+    return product.productImagePath ?? "";
+  }
+
   if (key === "wholesalePrice") {
     return `${product.wholesalePrice.toLocaleString()}円`;
   }
@@ -5381,6 +5592,8 @@ function normalizeProductDraft(draft: ProductMasterDraft, clientId: string) {
       retailPrice: draft.retailPrice.trim() ? Number(draft.retailPrice.trim()) : null,
       payoutRate: parseRatePercent(draft.payoutRate.trim()),
       memo: draft.memo.trim(),
+      productImagePath: draft.productImagePath.trim() || undefined,
+      productImageUrl: draft.productImageUrl.trim() || undefined,
       ...normalizeProductMasterExtraForm(draft),
     },
   };
@@ -5397,6 +5610,7 @@ function getClientName(clientId: string, clients: Client[]) {
 function hasProductChanged(current: Product, next: Product) {
   return (
     current.jan !== next.jan ||
+    (current.productImagePath ?? "") !== (next.productImagePath ?? "") ||
     current.name !== next.name ||
     current.internalSku !== next.internalSku ||
     current.cooolaCode !== next.cooolaCode ||
