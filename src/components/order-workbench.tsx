@@ -264,9 +264,10 @@ type ProductFormField = {
 };
 
 const unitVolumeUnitOptions = [
-  { label: "ml", value: "ml" },
-  { label: "L", value: "L" },
+  { label: "mL", value: "mL" },
   { label: "g", value: "g" },
+  { label: "粒", value: "粒" },
+  { label: "袋", value: "袋" },
 ];
 
 type ProductFormSection = {
@@ -309,10 +310,10 @@ const productFormSections: ProductFormSection[] = [
       {
         key: "unitVolumeL",
         label: "バラ容量",
-        description: "数値を入力し、単位（ml・L・g）を選んでください。",
+        description: "数値を入力し、単位（mL・g・粒・袋など）を選んでください。",
         input: "volumeUnit",
       },
-      { key: "unitVolumeUnit", label: "バラ容量単位", description: "ml・L・gから選択" },
+      { key: "unitVolumeUnit", label: "バラ容量単位", description: "mL・g・粒・袋から選択" },
       { key: "unitWeightG", label: "バラ重量（g）", description: "1商品あたりの容器を含めた重さ" },
       { key: "caseWidthMm", label: "ケース幅（mm）", description: "1ダンボールあたりの幅" },
       { key: "caseHeightMm", label: "ケース高さ（mm）", description: "1ダンボールあたりの高さ" },
@@ -360,23 +361,15 @@ const productMasterImageField: ProductFormField = {
   description: "JPEG、PNG、WebP、GIF形式の画像を登録できます。",
   input: "image",
 };
-const productMasterUnitVolumeField: ProductFormField = {
-  key: "unitVolumeL",
-  label: "バラ容量",
-  description: "数値を入力し、単位（ml・L・g）を選んでください。",
-  input: "volumeUnit",
-};
 const productMasterDisplayFields = [
   productMasterImageField,
   productMasterListFields.find((field) => field.key === "name"),
   productMasterListFields.find((field) => field.key === "jan"),
-  productMasterUnitVolumeField,
   ...productMasterListFields.filter(
     (field) =>
       field.key !== "name" &&
       field.key !== "jan" &&
       field.key !== "productImagePath" &&
-      field.key !== "unitVolumeL" &&
       field.key !== "unitVolumeUnit",
   ),
 ].filter((field): field is ProductFormField => Boolean(field));
@@ -3383,16 +3376,7 @@ export function OrderWorkbench({
                                   : draft[field.key]
                               }
                               imageUrl={draft.productImageUrl}
-                              unitValue={
-                                field.key === "unitVolumeL"
-                                  ? getResolvedUnitVolumeUnit({
-                                      unitVolumeL: draft.unitVolumeL.trim()
-                                        ? Number(draft.unitVolumeL)
-                                        : null,
-                                      unitVolumeUnit: draft.unitVolumeUnit,
-                                    })
-                                  : undefined
-                              }
+                              unitValue={field.key === "unitVolumeL" ? draft.unitVolumeUnit : undefined}
                               clientId={draft.originalClientId}
                               jan={draft.jan || draft.originalJan}
                               isEditing
@@ -4867,7 +4851,7 @@ function ProductRegistrationForm({
                   key={String(field.key)}
                   field={field}
                   value={form[field.key]}
-                  unitValue={field.input === "volumeUnit" ? form.unitVolumeUnit || "ml" : undefined}
+                  unitValue={field.input === "volumeUnit" ? form.unitVolumeUnit : undefined}
                   onChange={(value) => onChange({ ...form, [field.key]: value })}
                   onUnitChange={
                     field.input === "volumeUnit"
@@ -4923,7 +4907,7 @@ function ProductFormFieldRow({
             className="w-[160px]"
             onChange={(event) => onChange(event.target.value)}
           />
-          <UnitVolumeUnitSelect value={unitValue ?? "ml"} onChange={(nextValue) => onUnitChange?.(nextValue)} />
+          <UnitVolumeUnitSelect value={unitValue ?? ""} onChange={(nextValue) => onUnitChange?.(nextValue)} />
         </div>
       ) : field.input === "textarea" ? (
         <textarea
@@ -4949,7 +4933,7 @@ function ProductMasterTableCell({
   field,
   value,
   imageUrl = "",
-  unitValue = "ml",
+  unitValue = "",
   clientId = "",
   jan = "",
   isEditing = false,
@@ -4978,7 +4962,7 @@ function ProductMasterTableCell({
 }) {
   if (field.input === "image") {
     return (
-      <TableCell className="min-w-[140px] align-middle">
+      <TableCell className="w-[72px] min-w-[72px] align-middle">
         <ProductImageField
           imageUrl={imageUrl}
           compact
@@ -5047,8 +5031,8 @@ function ProductMasterTableCell({
             onChange={(event) => onChange?.(event.target.value)}
           />
           <UnitVolumeUnitSelect
-            value={unitValue || "ml"}
-            triggerClassName="w-[72px]"
+            value={unitValue}
+            triggerClassName="w-[80px]"
             onChange={(nextValue) => onUnitChange?.(nextValue)}
           />
         </div>
@@ -5116,24 +5100,23 @@ function ProductImagePreview({
   imageUrl?: string;
   compact?: boolean;
 }) {
-  if (!imageUrl) {
-    return (
-      <div
-        className={`flex items-center justify-center rounded-md border border-dashed bg-muted/30 text-xs text-muted-foreground ${
-          compact ? "h-12 w-12" : "h-24 w-24"
-        }`}
-      >
-        {compact ? "画像" : "クリックして登録"}
-      </div>
-    );
-  }
+  const frameClass = compact ? "h-14 w-14" : "h-24 w-24";
+  const actionLabel = imageUrl ? "変更" : "選択";
 
   return (
     <div
-      className={`overflow-hidden rounded-md border ${compact ? "h-12 w-12" : "h-24 w-24"}`}
-      title="クリックして画像を変更"
+      className={`relative flex items-center justify-center overflow-hidden rounded-md border border-dashed bg-muted/30 ${frameClass}`}
     >
-      <img src={imageUrl} alt="商品画像" className="h-full w-full object-cover" />
+      {imageUrl ? (
+        <img src={imageUrl} alt="商品画像" className="h-full w-full object-cover" />
+      ) : null}
+      <span
+        className={`absolute inset-0 flex items-center justify-center text-center text-[10px] font-medium leading-tight text-muted-foreground ${
+          imageUrl ? "bg-black/35 text-white opacity-0 transition-opacity group-hover:opacity-100" : ""
+        }`}
+      >
+        {actionLabel}
+      </span>
     </div>
   );
 }
@@ -5152,30 +5135,28 @@ function ProductImageField({
   onClear?: () => void;
 }) {
   const inputId = useId();
-  const openFilePicker = () => {
-    if (!disabled) {
-      document.getElementById(inputId)?.click();
-    }
-  };
 
   return (
-    <div className="flex flex-col gap-2">
+    <div className="relative inline-block">
       <label
         htmlFor={disabled ? undefined : inputId}
-        className={disabled ? "inline-block" : "inline-block cursor-pointer"}
+        className={`group inline-block ${disabled ? "" : "cursor-pointer"}`}
       >
         <ProductImagePreview imageUrl={imageUrl} compact={compact} />
       </label>
-      <div className="flex flex-wrap gap-2">
-        <Button type="button" size="sm" variant="outline" disabled={disabled} onClick={openFilePicker}>
-          画像を選択
-        </Button>
-        {imageUrl && onClear ? (
-          <Button type="button" size="sm" variant="outline" disabled={disabled} onClick={onClear}>
-            画像を削除
-          </Button>
-        ) : null}
-      </div>
+      {imageUrl && onClear && !disabled ? (
+        <button
+          type="button"
+          className="absolute -right-1 -top-1 flex h-4 w-4 items-center justify-center rounded-full border bg-background text-[10px] leading-none text-muted-foreground shadow-sm hover:text-foreground"
+          aria-label="画像を削除"
+          onClick={(event) => {
+            event.preventDefault();
+            onClear();
+          }}
+        >
+          ×
+        </button>
+      ) : null}
       <input
         id={inputId}
         type="file"
@@ -5187,9 +5168,19 @@ function ProductImageField({
           event.target.value = "";
         }}
       />
-      <p className="text-[11px] text-muted-foreground">画像をクリックするか、JPEG・PNG・WebP・GIFを選択してください。</p>
     </div>
   );
+}
+
+function getUnitVolumeUnitSelectItems(currentValue: string) {
+  const normalizedValue = normalizeUnitVolumeUnit(currentValue);
+  const options = [...unitVolumeUnitOptions];
+
+  if (normalizedValue && !options.some((option) => option.value === normalizedValue)) {
+    options.push({ label: normalizedValue, value: normalizedValue });
+  }
+
+  return [{ label: "単位", value: "" }, ...options];
 }
 
 function UnitVolumeUnitSelect({
@@ -5201,19 +5192,21 @@ function UnitVolumeUnitSelect({
   triggerClassName?: string;
   onChange: (value: string) => void;
 }) {
+  const selectItems = getUnitVolumeUnitSelectItems(value);
+
   return (
     <Select
-      items={unitVolumeUnitOptions}
-      value={value || "ml"}
-      onValueChange={(nextValue) => onChange(nextValue ?? "ml")}
+      items={selectItems}
+      value={normalizeUnitVolumeUnit(value)}
+      onValueChange={(nextValue) => onChange(nextValue ?? "")}
     >
       <SelectTrigger className={triggerClassName}>
-        <SelectValue />
+        <SelectValue placeholder="単位" />
       </SelectTrigger>
       <SelectContent>
         <SelectGroup>
-          {unitVolumeUnitOptions.map((option) => (
-            <SelectItem key={option.value} value={option.value}>
+          {selectItems.map((option) => (
+            <SelectItem key={option.value || "__empty__"} value={option.value}>
               {option.label}
             </SelectItem>
           ))}
@@ -5223,16 +5216,21 @@ function UnitVolumeUnitSelect({
   );
 }
 
-function getResolvedUnitVolumeUnit(product: Pick<Product, "unitVolumeL" | "unitVolumeUnit">) {
-  if (product.unitVolumeUnit) {
-    return String(product.unitVolumeUnit);
+function normalizeUnitVolumeUnit(unit: string | number | null | undefined) {
+  if (unit === null || unit === undefined || unit === "") {
+    return "";
   }
 
-  if (product.unitVolumeL !== null && product.unitVolumeL !== undefined && product.unitVolumeL !== "") {
-    return "L";
+  const trimmed = String(unit).trim();
+  if (trimmed === "ml") {
+    return "mL";
   }
 
-  return "ml";
+  return trimmed;
+}
+
+function getResolvedUnitVolumeUnit(product: Pick<Product, "unitVolumeUnit">) {
+  return normalizeUnitVolumeUnit(product.unitVolumeUnit);
 }
 
 function formatUnitVolumeDisplay(
@@ -5243,8 +5241,10 @@ function formatUnitVolumeDisplay(
     return "";
   }
 
-  const normalizedUnit = unit === null || unit === undefined || unit === "" ? "ml" : String(unit);
-  return `${value} ${normalizedUnit}`;
+  const normalizedUnit = normalizeUnitVolumeUnit(
+    unit === null || unit === undefined ? "" : String(unit),
+  );
+  return normalizedUnit ? `${value} ${normalizedUnit}` : String(value);
 }
 
 function CopyableTableValue({
@@ -5609,9 +5609,7 @@ function createProductMasterDraft(product: Product): ProductMasterDraft {
     productImagePath: product.productImagePath ?? "",
     productImageUrl: product.productImageUrl ?? "",
     ...productMasterExtraToForm(product),
-    unitVolumeUnit: product.unitVolumeUnit
-      ? String(product.unitVolumeUnit)
-      : getResolvedUnitVolumeUnit(product),
+    unitVolumeUnit: getResolvedUnitVolumeUnit(product),
   };
 }
 
