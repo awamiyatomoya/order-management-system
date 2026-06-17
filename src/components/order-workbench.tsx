@@ -360,15 +360,23 @@ const productMasterImageField: ProductFormField = {
   description: "JPEG、PNG、WebP、GIF形式の画像を登録できます。",
   input: "image",
 };
+const productMasterUnitVolumeField: ProductFormField = {
+  key: "unitVolumeL",
+  label: "バラ容量",
+  description: "数値を入力し、単位（ml・L・g）を選んでください。",
+  input: "volumeUnit",
+};
 const productMasterDisplayFields = [
   productMasterImageField,
   productMasterListFields.find((field) => field.key === "name"),
   productMasterListFields.find((field) => field.key === "jan"),
+  productMasterUnitVolumeField,
   ...productMasterListFields.filter(
     (field) =>
       field.key !== "name" &&
       field.key !== "jan" &&
       field.key !== "productImagePath" &&
+      field.key !== "unitVolumeL" &&
       field.key !== "unitVolumeUnit",
   ),
 ].filter((field): field is ProductFormField => Boolean(field));
@@ -1908,6 +1916,56 @@ export function OrderWorkbench({
     );
   }
 
+  async function uploadProductImageFile(clientId: string, jan: string, file: File) {
+    const formData = new FormData();
+    formData.set("clientId", clientId);
+    if (jan.trim()) {
+      formData.set("jan", jan.trim());
+    }
+    formData.set("file", file);
+    return uploadProductImage(formData);
+  }
+
+  async function persistListedProductImage(product: Product, path: string, url: string) {
+    const nextProduct: Product = {
+      ...product,
+      productImagePath: path || undefined,
+      productImageUrl: url || undefined,
+    };
+    const saveResult = await saveProduct(nextProduct);
+
+    if (!saveResult.ok) {
+      setProductNotice(saveResult.message);
+      return;
+    }
+
+    setProducts((current) =>
+      current.map((item) =>
+        item.clientId === product.clientId && item.jan === product.jan ? nextProduct : item,
+      ),
+    );
+    setProductNotice(path ? "商品画像を保存しました。" : "商品画像を削除しました。");
+  }
+
+  async function handleListedProductImageUpload(product: Product, file: File | null) {
+    if (!file) {
+      return;
+    }
+
+    const uploadResult = await uploadProductImageFile(product.clientId, product.jan, file);
+
+    if (!uploadResult.ok) {
+      setProductNotice(uploadResult.message);
+      return;
+    }
+
+    await persistListedProductImage(product, uploadResult.path, uploadResult.url ?? "");
+  }
+
+  async function handleListedProductImageClear(product: Product) {
+    await persistListedProductImage(product, "", "");
+  }
+
   async function saveProductMasterDrafts() {
     const productUpdates: Array<{ product: Product; previousJan?: string }> = [];
 
@@ -3325,7 +3383,16 @@ export function OrderWorkbench({
                                   : draft[field.key]
                               }
                               imageUrl={draft.productImageUrl}
-                              unitValue={field.key === "unitVolumeL" ? draft.unitVolumeUnit : undefined}
+                              unitValue={
+                                field.key === "unitVolumeL"
+                                  ? getResolvedUnitVolumeUnit({
+                                      unitVolumeL: draft.unitVolumeL.trim()
+                                        ? Number(draft.unitVolumeL)
+                                        : null,
+                                      unitVolumeUnit: draft.unitVolumeUnit,
+                                    })
+                                  : undefined
+                              }
                               clientId={draft.originalClientId}
                               jan={draft.jan || draft.originalJan}
                               isEditing
@@ -3392,6 +3459,9 @@ export function OrderWorkbench({
                               imageUrl={product.productImageUrl}
                               clientId={product.clientId}
                               jan={product.jan}
+                              onImagePersist={(path, url) => persistListedProductImage(product, path, url)}
+                              onImageUpload={(file) => handleListedProductImageUpload(product, file)}
+                              onImageClear={() => handleListedProductImageClear(product)}
                             />
                           ))}
                         </TableRow>
@@ -4886,6 +4956,9 @@ function ProductMasterTableCell({
   onChange,
   onUnitChange,
   onImageChange,
+  onImageUpload,
+  onImagePersist,
+  onImageClear,
   onImageNotice,
 }: {
   field: ProductFormField;
@@ -4898,43 +4971,66 @@ function ProductMasterTableCell({
   onChange?: (value: string) => void;
   onUnitChange?: (value: string) => void;
   onImageChange?: (path: string, url: string) => void;
+  onImageUpload?: (file: File | null) => void | Promise<void>;
+  onImagePersist?: (path: string, url: string) => void | Promise<void>;
+  onImageClear?: () => void | Promise<void>;
   onImageNotice?: (message: string) => void;
 }) {
   if (field.input === "image") {
     return (
       <TableCell className="min-w-[140px] align-middle">
-        {isEditing ? (
-          <ProductImageField
-            imageUrl={imageUrl}
-            compact
-            disabled={!clientId}
-            onFileChange={async (file) => {
-              if (!file || !clientId) {
-                return;
+        <ProductImageField
+          imageUrl={imageUrl}
+          compact
+          disabled={!clientId}
+          onFileChange={async (file) => {
+            if (!file || !clientId) {
+              if (!clientId) {
+                onImageNotice?.("クライアント情報がないため画像をアップロードできません。");
               }
+              return;
+            }
 
-              const formData = new FormData();
-              formData.set("clientId", clientId);
-              if (jan.trim()) {
-                formData.set("jan", jan.trim());
-              }
-              formData.set("file", file);
+            if (onImageUpload) {
+              await onImageUpload(file);
+              return;
+            }
 
-              const uploadResult = await uploadProductImage(formData);
+            const formData = new FormData();
+            formData.set("clientId", clientId);
+            if (jan.trim()) {
+              formData.set("jan", jan.trim());
+            }
+            formData.set("file", file);
+            const uploadResult = await uploadProductImage(formData);
 
-              if (!uploadResult.ok) {
-                onImageNotice?.(uploadResult.message);
-                return;
-              }
+            if (!uploadResult.ok) {
+              onImageNotice?.(uploadResult.message);
+              return;
+            }
 
+            if (isEditing) {
               onImageChange?.(uploadResult.path, uploadResult.url ?? "");
               onImageNotice?.(uploadResult.message);
-            }}
-            onClear={() => onImageChange?.("", "")}
-          />
-        ) : (
-          <ProductImagePreview imageUrl={imageUrl} />
-        )}
+              return;
+            }
+
+            await onImagePersist?.(uploadResult.path, uploadResult.url ?? "");
+            onImageNotice?.(uploadResult.message);
+          }}
+          onClear={
+            onImageClear
+              ? () => {
+                  if (isEditing) {
+                    onImageChange?.("", "");
+                    return;
+                  }
+
+                  void onImageClear();
+                }
+              : () => onImageChange?.("", "")
+          }
+        />
       </TableCell>
     );
   }
@@ -5016,43 +5112,29 @@ function ProductMasterTableCell({
 function ProductImagePreview({
   imageUrl,
   compact = false,
-  disabled = false,
-  onClick,
 }: {
   imageUrl?: string;
   compact?: boolean;
-  disabled?: boolean;
-  onClick?: () => void;
 }) {
-  const clickable = Boolean(onClick) && !disabled;
-
   if (!imageUrl) {
     return (
-      <button
-        type="button"
-        disabled={disabled}
-        onClick={onClick}
-        className={`flex items-center justify-center rounded-md border border-dashed bg-muted/30 text-xs text-muted-foreground transition-colors ${
+      <div
+        className={`flex items-center justify-center rounded-md border border-dashed bg-muted/30 text-xs text-muted-foreground ${
           compact ? "h-12 w-12" : "h-24 w-24"
-        } ${clickable ? "cursor-pointer hover:bg-muted/50" : "cursor-default"}`}
+        }`}
       >
         {compact ? "画像" : "クリックして登録"}
-      </button>
+      </div>
     );
   }
 
   return (
-    <button
-      type="button"
-      disabled={disabled}
-      onClick={onClick}
-      className={`overflow-hidden rounded-md border p-0 ${compact ? "h-12 w-12" : "h-24 w-24"} ${
-        clickable ? "cursor-pointer hover:opacity-90" : "cursor-default"
-      }`}
-      title={clickable ? "クリックして画像を変更" : undefined}
+    <div
+      className={`overflow-hidden rounded-md border ${compact ? "h-12 w-12" : "h-24 w-24"}`}
+      title="クリックして画像を変更"
     >
       <img src={imageUrl} alt="商品画像" className="h-full w-full object-cover" />
-    </button>
+    </div>
   );
 }
 
@@ -5067,36 +5149,34 @@ function ProductImageField({
   compact?: boolean;
   disabled?: boolean;
   onFileChange: (file: File | null) => void | Promise<void>;
-  onClear: () => void;
+  onClear?: () => void;
 }) {
   const inputId = useId();
-  const inputRef = useRef<HTMLInputElement>(null);
   const openFilePicker = () => {
     if (!disabled) {
-      inputRef.current?.click();
+      document.getElementById(inputId)?.click();
     }
   };
 
   return (
     <div className="flex flex-col gap-2">
-      <ProductImagePreview
-        imageUrl={imageUrl}
-        compact={compact}
-        disabled={disabled}
-        onClick={openFilePicker}
-      />
+      <label
+        htmlFor={disabled ? undefined : inputId}
+        className={disabled ? "inline-block" : "inline-block cursor-pointer"}
+      >
+        <ProductImagePreview imageUrl={imageUrl} compact={compact} />
+      </label>
       <div className="flex flex-wrap gap-2">
         <Button type="button" size="sm" variant="outline" disabled={disabled} onClick={openFilePicker}>
           画像を選択
         </Button>
-        {imageUrl ? (
+        {imageUrl && onClear ? (
           <Button type="button" size="sm" variant="outline" disabled={disabled} onClick={onClear}>
             画像を削除
           </Button>
         ) : null}
       </div>
-      <Input
-        ref={inputRef}
+      <input
         id={inputId}
         type="file"
         accept="image/jpeg,image/png,image/webp,image/gif,.jpg,.jpeg,.png,.webp,.gif"
@@ -5141,6 +5221,18 @@ function UnitVolumeUnitSelect({
       </SelectContent>
     </Select>
   );
+}
+
+function getResolvedUnitVolumeUnit(product: Pick<Product, "unitVolumeL" | "unitVolumeUnit">) {
+  if (product.unitVolumeUnit) {
+    return String(product.unitVolumeUnit);
+  }
+
+  if (product.unitVolumeL !== null && product.unitVolumeL !== undefined && product.unitVolumeL !== "") {
+    return "L";
+  }
+
+  return "ml";
 }
 
 function formatUnitVolumeDisplay(
@@ -5517,6 +5609,9 @@ function createProductMasterDraft(product: Product): ProductMasterDraft {
     productImagePath: product.productImagePath ?? "",
     productImageUrl: product.productImageUrl ?? "",
     ...productMasterExtraToForm(product),
+    unitVolumeUnit: product.unitVolumeUnit
+      ? String(product.unitVolumeUnit)
+      : getResolvedUnitVolumeUnit(product),
   };
 }
 
@@ -5526,7 +5621,7 @@ function getProductMasterDisplayValue(product: Product, key: ProductFormFieldKey
   }
 
   if (key === "unitVolumeL") {
-    return formatUnitVolumeDisplay(product.unitVolumeL, product.unitVolumeUnit);
+    return formatUnitVolumeDisplay(product.unitVolumeL, getResolvedUnitVolumeUnit(product));
   }
 
   if (key === "wholesalePrice") {
