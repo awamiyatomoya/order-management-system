@@ -12,6 +12,7 @@ export type ProductMasterExtraKey =
   | "unitHeightMm"
   | "unitDepthMm"
   | "unitVolumeL"
+  | "unitVolumeUnit"
   | "unitWeightG"
   | "caseWidthMm"
   | "caseHeightMm"
@@ -49,6 +50,7 @@ export const productMasterExtraFields = [
   { key: "unitHeightMm", column: "unit_height_mm", type: "number" },
   { key: "unitDepthMm", column: "unit_depth_mm", type: "number" },
   { key: "unitVolumeL", column: "unit_volume_l", type: "number" },
+  { key: "unitVolumeUnit", column: "unit_volume_unit", type: "text" },
   { key: "unitWeightG", column: "unit_weight_g", type: "number" },
   { key: "caseWidthMm", column: "case_width_mm", type: "number" },
   { key: "caseHeightMm", column: "case_height_mm", type: "number" },
