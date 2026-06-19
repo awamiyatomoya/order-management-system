@@ -49,7 +49,17 @@ async function getSharp() {
   return sharpModulePromise;
 }
 
+async function ensurePdfJsGlobals() {
+  if (globalThis.DOMMatrix) {
+    return;
+  }
+
+  const { DOMMatrix, Path2D, ImageData, Image } = await import("@napi-rs/canvas");
+  Object.assign(globalThis, { DOMMatrix, Path2D, ImageData, Image });
+}
+
 async function createPdfParser(buffer: Buffer) {
+  await ensurePdfJsGlobals();
   const { PDFParse } = await import("pdf-parse");
   PDFParse.setWorker(getPdfWorkerPath());
   return new PDFParse({ data: buffer });
