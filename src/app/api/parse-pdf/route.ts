@@ -1,3 +1,4 @@
+import { recognizeWithCloudVision } from "@/lib/google-cloud-vision-ocr";
 import { execFile } from "node:child_process";
 import { mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
@@ -102,13 +103,32 @@ export async function POST(request: Request) {
     }
 
     if (process.env.VERCEL === "1") {
-      return Response.json(
-        {
-          error:
-            "このPDFは画像形式のため、本番環境では読み取りに時間がかかりすぎます。ExcelまたはCSVファイルでアップロードしてください。",
-        },
-        { status: 422 },
+      const screenshotResult = await parser.getScreenshot({
+        first: 2,
+        scale: 3,
+        imageDataUrl: false,
+        imageBuffer: true,
+      });
+      const cloudVisionResult = await recognizeWithCloudVision(
+        screenshotResult.pages.map((page) => Buffer.from(page.data)),
       );
+
+      if (!hasUsefulText(cloudVisionResult.text)) {
+        return Response.json(
+          {
+            error:
+              "PDF画像から文字を読み取れませんでした。画像が不鮮明、またはOCR対象外の形式の可能性があります。",
+          },
+          { status: 422 },
+        );
+      }
+
+      return Response.json({
+        extractionMethod: "cloud-vision",
+        confidence: cloudVisionResult.confidence,
+        pages: textResult.total,
+        text: cloudVisionResult.text,
+      });
     }
 
     const macRenderedImages = await renderPdfWithMacQuickLook(buffer);

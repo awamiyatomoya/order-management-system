@@ -195,7 +195,7 @@ type FileReadResult =
     }
   | {
       type: "pdf";
-      extractionMethod: "pdf-text" | "ocr" | "mac-vision";
+      extractionMethod: "pdf-text" | "ocr" | "mac-vision" | "cloud-vision";
       confidence?: number;
       pages: number;
       text: string;
@@ -7062,7 +7062,7 @@ async function fetchWithTimeout(url: string, options: RequestInit, timeoutMs: nu
 }
 
 async function readParsePdfResponse(response: Response): Promise<{
-  extractionMethod?: "pdf-text" | "ocr" | "mac-vision";
+  extractionMethod?: "pdf-text" | "ocr" | "mac-vision" | "cloud-vision";
   confidence?: number;
   pages?: number;
   text?: string;
@@ -7085,7 +7085,7 @@ async function readParsePdfResponse(response: Response): Promise<{
 
   try {
     return JSON.parse(rawBody) as {
-      extractionMethod?: "pdf-text" | "ocr" | "mac-vision";
+      extractionMethod?: "pdf-text" | "ocr" | "mac-vision" | "cloud-vision";
       confidence?: number;
       pages?: number;
       text?: string;
