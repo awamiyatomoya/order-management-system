@@ -1218,24 +1218,31 @@ export function OrderWorkbench({
       return undefined;
     }
 
-    const formData = new FormData();
-    formData.append("clientId", selectedClientId);
-    formData.append("supplierId", selectedSupplier.id);
-    formData.append("file", file);
-
-    const uploadResult = await uploadOrderFile(formData);
-    if (!uploadResult.ok) {
-      throw new Error(uploadResult.message);
+    if (file.size > 4 * 1024 * 1024) {
+      setNotice("PDFが大きいためファイル保存をスキップします。取込は続行します。");
+      return undefined;
     }
 
-    if (!uploadResult.path) {
-      throw new Error("PDFは読み取れましたが、PDFファイルを保存できませんでした。");
-    }
+    try {
+      const formData = new FormData();
+      formData.append("clientId", selectedClientId);
+      formData.append("supplierId", selectedSupplier.id);
+      formData.append("file", file);
 
-    return {
-      path: uploadResult.path,
-      url: uploadResult.url,
-    };
+      const uploadResult = await uploadOrderFile(formData);
+      if (!uploadResult.ok || !uploadResult.path) {
+        setNotice(uploadResult.ok ? "PDFファイルの保存をスキップしました。取込は続行します。" : `${uploadResult.message} 取込は続行します。`);
+        return undefined;
+      }
+
+      return {
+        path: uploadResult.path,
+        url: uploadResult.url,
+      };
+    } catch {
+      setNotice("PDFファイルの保存に失敗しました。取込は続行します。");
+      return undefined;
+    }
   }
 
   async function handlePdfImport(
@@ -7061,26 +7068,34 @@ async function readParsePdfResponse(response: Response): Promise<{
   text?: string;
   error?: string;
 }> {
+  const rawBody = await response.text();
   const contentType = response.headers.get("content-type") ?? "";
 
   if (!contentType.includes("application/json")) {
-    const body = (await response.text()).replace(/\s+/g, " ").trim();
+    const body = rawBody.replace(/\s+/g, " ").trim();
     const isHtmlError = body.startsWith("<!DOCTYPE") || body.startsWith("<html");
+    const isGatewayError = body.startsWith("An error");
 
     throw new Error(
-      isHtmlError
-        ? `PDF読み取りAPIがサーバーエラー（${response.status}）で応答しました。時間をおいて再試行してください。`
+      isHtmlError || isGatewayError
+        ? `PDF読み取りAPIがサーバーエラー（${response.status}）で応答しました。Excel/CSVでのアップロードもお試しください。`
         : `PDF読み取りAPIから不正な応答が返されました（${response.status}）。`,
     );
   }
 
-  return (await response.json()) as {
-    extractionMethod?: "pdf-text" | "ocr" | "mac-vision";
-    confidence?: number;
-    pages?: number;
-    text?: string;
-    error?: string;
-  };
+  try {
+    return JSON.parse(rawBody) as {
+      extractionMethod?: "pdf-text" | "ocr" | "mac-vision";
+      confidence?: number;
+      pages?: number;
+      text?: string;
+      error?: string;
+    };
+  } catch {
+    throw new Error(
+      `PDF読み取りAPIの応答を解釈できませんでした（${response.status}）。Excel/CSVでのアップロードもお試しください。`,
+    );
+  }
 }
 
 async function readFileForImport(file: File): Promise<FileReadResult> {
@@ -7096,12 +7111,12 @@ async function readFileForImport(file: File): Promise<FileReadResult> {
         method: "POST",
         body: formData,
       },
-      90_000,
+      55_000,
     );
     const result = await readParsePdfResponse(response);
 
     if (!response.ok || !result.text) {
-      throw new Error(result.error ?? "PDFを読めませんでした。");
+      throw new Error(result.error ?? `PDFを読めませんでした（${response.status}）。`);
     }
 
     return {
@@ -7286,7 +7301,17 @@ async function readCsvText(file: File) {
 }
 
 function getErrorMessage(error: unknown) {
-  return error instanceof Error ? error.message : "不明なエラーです";
+  if (error instanceof Error) {
+    const message = error.message;
+
+    if (message.includes("is not valid JSON") || message.includes("Unexpected token")) {
+      return "サーバーとの通信に失敗しました。処理がタイムアウトした可能性があります。Excel/CSVでのアップロードもお試しください。";
+    }
+
+    return message;
+  }
+
+  return "不明なエラーです";
 }
 
 function showImportErrorPopup(errors: ImportError[], heading = "発注ファイルの取り込みでエラーが発生しました。") {
