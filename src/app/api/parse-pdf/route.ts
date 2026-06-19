@@ -24,6 +24,10 @@ function getTesseractCachePath() {
 }
 
 function getPdfWorkerPath() {
+  if (process.env.VERCEL === "1") {
+    return "https://cdn.jsdelivr.net/npm/pdf-parse@2.4.5/dist/pdf-parse/esm/pdf.worker.mjs";
+  }
+
   return pathToFileURL(
     path.join(process.cwd(), "node_modules/pdf-parse/dist/pdf-parse/esm/pdf.worker.mjs"),
   ).toString();
@@ -52,25 +56,34 @@ async function createPdfParser(buffer: Buffer) {
 }
 
 export async function GET() {
-  return Response.json({ ok: true });
+  const workerPath = path.join(
+    process.cwd(),
+    "node_modules/pdf-parse/dist/pdf-parse/esm/pdf.worker.mjs",
+  );
+
+  return Response.json({
+    ok: true,
+    workerPath,
+  });
 }
 
 export async function POST(request: Request) {
-  const formData = await request.formData();
-  const file = formData.get("file");
-
-  if (!(file instanceof File)) {
-    return Response.json({ error: "PDFファイルが送信されていません。" }, { status: 400 });
-  }
-
-  if (file.type && file.type !== "application/pdf") {
-    return Response.json({ error: "PDFファイルを選択してください。" }, { status: 400 });
-  }
-
-  const buffer = Buffer.from(await file.arrayBuffer());
-  const parser = await createPdfParser(buffer);
+  let parser: Awaited<ReturnType<typeof createPdfParser>> | null = null;
 
   try {
+    const formData = await request.formData();
+    const file = formData.get("file");
+
+    if (!(file instanceof File)) {
+      return Response.json({ error: "PDFファイルが送信されていません。" }, { status: 400 });
+    }
+
+    if (file.type && file.type !== "application/pdf") {
+      return Response.json({ error: "PDFファイルを選択してください。" }, { status: 400 });
+    }
+
+    const buffer = Buffer.from(await file.arrayBuffer());
+    parser = await createPdfParser(buffer);
     const textResult = await parser.getText();
     const text = textResult.text.trim();
 
@@ -141,7 +154,7 @@ export async function POST(request: Request) {
       { status: 500 },
     );
   } finally {
-    await parser.destroy();
+    await parser?.destroy();
   }
 }
 
