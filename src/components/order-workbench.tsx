@@ -7033,6 +7033,35 @@ function applySavedOrderIds(orders: Order[], orderIds?: Record<string, string>) 
   }));
 }
 
+async function readParsePdfResponse(response: Response): Promise<{
+  extractionMethod?: "pdf-text" | "ocr" | "mac-vision";
+  confidence?: number;
+  pages?: number;
+  text?: string;
+  error?: string;
+}> {
+  const contentType = response.headers.get("content-type") ?? "";
+
+  if (!contentType.includes("application/json")) {
+    const body = (await response.text()).replace(/\s+/g, " ").trim();
+    const isHtmlError = body.startsWith("<!DOCTYPE") || body.startsWith("<html");
+
+    throw new Error(
+      isHtmlError
+        ? `PDF読み取りAPIがサーバーエラー（${response.status}）で応答しました。時間をおいて再試行してください。`
+        : `PDF読み取りAPIから不正な応答が返されました（${response.status}）。`,
+    );
+  }
+
+  return (await response.json()) as {
+    extractionMethod?: "pdf-text" | "ocr" | "mac-vision";
+    confidence?: number;
+    pages?: number;
+    text?: string;
+    error?: string;
+  };
+}
+
 async function readFileForImport(file: File): Promise<FileReadResult> {
   const fileName = file.name.toLowerCase();
 
@@ -7044,13 +7073,7 @@ async function readFileForImport(file: File): Promise<FileReadResult> {
       method: "POST",
       body: formData,
     });
-    const result = (await response.json()) as {
-      extractionMethod?: "pdf-text" | "ocr" | "mac-vision";
-      confidence?: number;
-      pages?: number;
-      text?: string;
-      error?: string;
-    };
+    const result = await readParsePdfResponse(response);
 
     if (!response.ok || !result.text) {
       throw new Error(result.error ?? "PDFを読めませんでした。");

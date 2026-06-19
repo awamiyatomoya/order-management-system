@@ -9,6 +9,7 @@ import { pathToFileURL } from "node:url";
 import { promisify } from "node:util";
 
 export const runtime = "nodejs";
+export const maxDuration = 60;
 
 const pdfWorkerPath = pathToFileURL(
   path.join(process.cwd(), "node_modules/pdf-parse/dist/pdf-parse/esm/pdf.worker.mjs"),
@@ -18,7 +19,10 @@ const tesseractWorkerPath = path.join(
   "node_modules/tesseract.js/src/worker-script/node/index.js",
 );
 const tesseractCorePath = path.join(process.cwd(), "node_modules/tesseract.js-core");
-const tesseractCachePath = path.join(process.cwd(), ".next/cache/tesseract");
+const tesseractCachePath = path.join(
+  process.env.VERCEL === "1" ? os.tmpdir() : path.join(process.cwd(), ".next/cache"),
+  "tesseract",
+);
 const tesseractLangPath = "https://tessdata.projectnaptha.com/4.0.0";
 const macOcrScriptPath = path.join(process.cwd(), "scripts/ocr-image.swift");
 const execFileAsync = promisify(execFile);
