@@ -101,6 +101,16 @@ export async function POST(request: Request) {
       });
     }
 
+    if (process.env.VERCEL === "1") {
+      return Response.json(
+        {
+          error:
+            "このPDFは画像形式のため、本番環境では読み取りに時間がかかりすぎます。ExcelまたはCSVファイルでアップロードしてください。",
+        },
+        { status: 422 },
+      );
+    }
+
     const macRenderedImages = await renderPdfWithMacQuickLook(buffer);
     const macRenderedResult = await recognizeWithMacVision(macRenderedImages);
 

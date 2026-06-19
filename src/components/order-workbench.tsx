@@ -1189,9 +1189,10 @@ export function OrderWorkbench({
     }
 
     setIsProcessingFile(true);
-    setNotice(`${file.name} をチェックしています。`);
+    setNotice(`${file.name} を読み取っています...`);
     readFileForImport(file)
       .then(async (result) => {
+        setNotice(`${file.name} を保存しています...`);
         const uploadedFile = await uploadPdfForViewing(file);
 
         if (result.type === "pdf") {
@@ -4604,7 +4605,7 @@ function ClientSelectorBar({
             {isProcessingFile || isSavingImport ? (
               <UploadStatus
                 isProcessing
-                message={isProcessingFile ? "アップロード中" : "保存中"}
+                message={isProcessingFile ? "読み取り中" : "保存中"}
               />
             ) : null}
           </div>
@@ -7033,6 +7034,26 @@ function applySavedOrderIds(orders: Order[], orderIds?: Record<string, string>) 
   }));
 }
 
+async function fetchWithTimeout(url: string, options: RequestInit, timeoutMs: number) {
+  const controller = new AbortController();
+  const timeoutId = window.setTimeout(() => controller.abort(), timeoutMs);
+
+  try {
+    return await fetch(url, {
+      ...options,
+      signal: controller.signal,
+    });
+  } catch (error) {
+    if (error instanceof DOMException && error.name === "AbortError") {
+      throw new Error(`処理がタイムアウトしました（${Math.round(timeoutMs / 1000)}秒）。時間をおいて再試行するか、Excel/CSVでアップロードしてください。`);
+    }
+
+    throw error;
+  } finally {
+    window.clearTimeout(timeoutId);
+  }
+}
+
 async function readParsePdfResponse(response: Response): Promise<{
   extractionMethod?: "pdf-text" | "ocr" | "mac-vision";
   confidence?: number;
@@ -7069,10 +7090,14 @@ async function readFileForImport(file: File): Promise<FileReadResult> {
     const formData = new FormData();
     formData.append("file", file);
 
-    const response = await fetch("/api/parse-pdf", {
-      method: "POST",
-      body: formData,
-    });
+    const response = await fetchWithTimeout(
+      "/api/parse-pdf",
+      {
+        method: "POST",
+        body: formData,
+      },
+      90_000,
+    );
     const result = await readParsePdfResponse(response);
 
     if (!response.ok || !result.text) {
