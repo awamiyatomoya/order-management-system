@@ -24,10 +24,6 @@ function getTesseractCachePath() {
 }
 
 function getPdfWorkerPath() {
-  if (process.env.VERCEL === "1") {
-    return "https://cdn.jsdelivr.net/npm/pdf-parse@2.4.5/dist/pdf-parse/esm/pdf.worker.mjs";
-  }
-
   return pathToFileURL(
     path.join(process.cwd(), "node_modules/pdf-parse/dist/pdf-parse/esm/pdf.worker.mjs"),
   ).toString();
