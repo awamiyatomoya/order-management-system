@@ -1,31 +1,59 @@
-import { PDFParse } from "pdf-parse";
 import { execFile } from "node:child_process";
 import { mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import sharp from "sharp";
-import { createWorker, PSM } from "tesseract.js";
 import { pathToFileURL } from "node:url";
 import { promisify } from "node:util";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
 
-const pdfWorkerPath = pathToFileURL(
-  path.join(process.cwd(), "node_modules/pdf-parse/dist/pdf-parse/esm/pdf.worker.mjs"),
-).toString();
-const tesseractWorkerPath = path.join(
-  process.cwd(),
-  "node_modules/tesseract.js/src/worker-script/node/index.js",
-);
-const tesseractCorePath = path.join(process.cwd(), "node_modules/tesseract.js-core");
-const tesseractCachePath = path.join(
-  process.env.VERCEL === "1" ? os.tmpdir() : path.join(process.cwd(), ".next/cache"),
-  "tesseract",
-);
 const tesseractLangPath = "https://tessdata.projectnaptha.com/4.0.0";
 const macOcrScriptPath = path.join(process.cwd(), "scripts/ocr-image.swift");
 const execFileAsync = promisify(execFile);
+
+type SharpModule = typeof import("sharp");
+
+let sharpModulePromise: Promise<SharpModule> | null = null;
+
+function getTesseractCachePath() {
+  return path.join(
+    process.env.VERCEL === "1" ? os.tmpdir() : path.join(process.cwd(), ".next/cache"),
+    "tesseract",
+  );
+}
+
+function getPdfWorkerPath() {
+  return pathToFileURL(
+    path.join(process.cwd(), "node_modules/pdf-parse/dist/pdf-parse/esm/pdf.worker.mjs"),
+  ).toString();
+}
+
+function getTesseractPaths() {
+  return {
+    workerPath: path.join(process.cwd(), "node_modules/tesseract.js/src/worker-script/node/index.js"),
+    corePath: path.join(process.cwd(), "node_modules/tesseract.js-core"),
+    cachePath: getTesseractCachePath(),
+  };
+}
+
+async function getSharp() {
+  if (!sharpModulePromise) {
+    sharpModulePromise = import("sharp").then((module) => module.default);
+  }
+
+  return sharpModulePromise;
+}
+
+async function createPdfParser(buffer: Buffer) {
+  const { PDFParse } = await import("pdf-parse");
+  PDFParse.setWorker(getPdfWorkerPath());
+  return new PDFParse({ data: buffer });
+}
+
+export async function GET() {
+  return Response.json({ ok: true });
+}
 
 export async function POST(request: Request) {
   const formData = await request.formData();
@@ -40,8 +68,7 @@ export async function POST(request: Request) {
   }
 
   const buffer = Buffer.from(await file.arrayBuffer());
-  PDFParse.setWorker(pdfWorkerPath);
-  const parser = new PDFParse({ data: buffer });
+  const parser = await createPdfParser(buffer);
 
   try {
     const textResult = await parser.getText();
@@ -86,39 +113,11 @@ export async function POST(request: Request) {
       });
     }
 
-    const ocrTextParts: string[] = [];
-    const confidenceParts: number[] = [];
-    const worker = await createWorker("jpn+eng", 1, {
-      workerPath: tesseractWorkerPath,
-      corePath: tesseractCorePath,
-      cachePath: tesseractCachePath,
-      langPath: tesseractLangPath,
-    });
+    const ocrResult = await runTesseractOcr(
+      screenshotResult.pages.map((page) => Buffer.from(page.data)),
+    );
 
-    try {
-      await worker.setParameters({
-        tessedit_pageseg_mode: PSM.SPARSE_TEXT,
-        preserve_interword_spaces: "1",
-        user_defined_dpi: "300",
-      });
-
-      for (const page of screenshotResult.pages) {
-        const image = await prepareOcrImage(Buffer.from(page.data));
-        const ocrResult = await worker.recognize(image);
-        const pageText = ocrResult.data.text.trim();
-
-        if (pageText) {
-          ocrTextParts.push(pageText);
-          confidenceParts.push(ocrResult.data.confidence);
-        }
-      }
-    } finally {
-      await worker.terminate();
-    }
-
-    const ocrText = ocrTextParts.join("\n\n").trim();
-
-    if (!ocrText) {
+    if (!ocrResult.text) {
       return Response.json(
         {
           error:
@@ -130,9 +129,9 @@ export async function POST(request: Request) {
 
     return Response.json({
       extractionMethod: "ocr",
-      confidence: average(confidenceParts),
+      confidence: ocrResult.confidence,
       pages: textResult.total,
-      text: ocrText,
+      text: ocrResult.text,
     });
   } catch (error) {
     return Response.json(
@@ -158,7 +157,48 @@ function getErrorMessage(error: unknown) {
   return error instanceof Error ? error.message : "不明なエラー";
 }
 
+async function runTesseractOcr(images: Buffer[]) {
+  const { createWorker, PSM } = await import("tesseract.js");
+  const tesseractPaths = getTesseractPaths();
+  const ocrTextParts: string[] = [];
+  const confidenceParts: number[] = [];
+  const worker = await createWorker("jpn+eng", 1, {
+    workerPath: tesseractPaths.workerPath,
+    corePath: tesseractPaths.corePath,
+    cachePath: tesseractPaths.cachePath,
+    langPath: tesseractLangPath,
+  });
+
+  try {
+    await worker.setParameters({
+      tessedit_pageseg_mode: PSM.SPARSE_TEXT,
+      preserve_interword_spaces: "1",
+      user_defined_dpi: "300",
+    });
+
+    for (const image of images) {
+      const preparedImage = await prepareOcrImage(image);
+      const ocrResult = await worker.recognize(preparedImage);
+      const pageText = ocrResult.data.text.trim();
+
+      if (pageText) {
+        ocrTextParts.push(pageText);
+        confidenceParts.push(ocrResult.data.confidence);
+      }
+    }
+  } finally {
+    await worker.terminate();
+  }
+
+  return {
+    text: ocrTextParts.join("\n\n").trim(),
+    confidence: average(confidenceParts),
+  };
+}
+
 async function prepareOcrImage(image: Buffer) {
+  const sharp = await getSharp();
+
   return sharp(image)
     .grayscale()
     .normalize()
@@ -248,6 +288,7 @@ async function renderPdfWithMacQuickLook(pdf: Buffer) {
 }
 
 async function prepareMacVisionImages(image: Buffer) {
+  const sharp = await getSharp();
   const base = sharp(image).rotate();
   const metadata = await base.metadata();
   const width = metadata.width ?? 0;
