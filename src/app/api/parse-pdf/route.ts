@@ -1,4 +1,4 @@
-import { recognizeWithCloudVision } from "@/lib/google-cloud-vision-ocr";
+import { hasGoogleCloudVisionApiKey, recognizeWithCloudVision } from "@/lib/google-cloud-vision-ocr";
 import { execFile } from "node:child_process";
 import { mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
@@ -63,14 +63,10 @@ async function createPdfParser(buffer: Buffer) {
 }
 
 export async function GET() {
-  const workerPath = path.join(
-    process.cwd(),
-    "node_modules/pdf-parse/dist/pdf-parse/esm/pdf.worker.mjs",
-  );
-
   return Response.json({
     ok: true,
-    workerPath,
+    visionConfigured: hasGoogleCloudVisionApiKey(),
+    runtime: process.env.VERCEL === "1" ? "vercel" : "local",
   });
 }
 
