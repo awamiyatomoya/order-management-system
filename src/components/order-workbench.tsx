@@ -2753,7 +2753,7 @@ export function OrderWorkbench({
   }
 
   return (
-    <main className="min-h-screen bg-background py-8 pr-6 pl-40 text-foreground">
+    <main className="min-h-screen bg-background py-8 pr-6 pl-44 text-foreground">
       <div className="mx-auto flex max-w-[1800px] flex-col gap-6">
         <header className="flex flex-col gap-3">
           <div className="flex flex-col gap-2">
@@ -4069,7 +4069,7 @@ export function OrderWorkbench({
         {view === "orderFiles" ? (
         <section className="grid gap-4">
           <Panel
-            title="受注データ"
+            title="発注書一覧"
             action={
               <Field>
                 <FieldLabel>受注番号検索</FieldLabel>
@@ -4416,7 +4416,7 @@ function getWorkbenchPageTitle(view: WorkbenchView) {
   }
 
   if (view === "orderFiles") {
-    return "受注DB";
+    return "発注書一覧";
   }
 
   if (view === "payouts") {
@@ -4428,7 +4428,7 @@ function getWorkbenchPageTitle(view: WorkbenchView) {
   }
 
   if (view === "history") {
-    return "履歴";
+    return "処理履歴";
   }
 
   if (view === "storeIntroductions") {
@@ -4456,7 +4456,7 @@ function getWorkbenchPageDescription(view: WorkbenchView) {
   }
 
   if (view === "orderFiles") {
-    return "受注データを見ることができます。";
+    return "取り込んだ発注書PDF・ファイルを検索し、内容を確認できます。";
   }
 
   if (view === "payouts") {
@@ -4468,7 +4468,7 @@ function getWorkbenchPageDescription(view: WorkbenchView) {
   }
 
   if (view === "history") {
-    return "発注ファイルの取り込み結果とエラー履歴を確認します。";
+    return "取込・チェック・送信の各処理履歴とエラーを確認します。";
   }
 
   if (view === "storeIntroductions") {
@@ -4485,41 +4485,112 @@ function MasterSidebar({
   currentView: WorkbenchView;
   selectedClientId: string;
 }) {
-  const links = [
-    { href: "/", label: "メイン画面", view: "orders" },
-    { href: "/clients", label: "クライアントマスタ", view: "clients" },
-    { href: "/products", label: "商品マスタ", view: "products" },
-    { href: "/delivery-destinations", label: "配送先マスタ", view: "deliveryDestinations" },
-    { href: "/stores", label: "店舗マスタ", view: "stores" },
-    { href: "/store-introductions", label: "導入店舗", view: "storeIntroductions" },
-    { href: "/order-files", label: "受注DB", view: "orderFiles" },
-    { href: "/payouts", label: "振り込み管理", view: "payouts" },
-    { href: "/sell-in", label: "セルイン", view: "sellIn" },
-    { href: "/history", label: "履歴", view: "history" },
-  ] satisfies { href: string; label: string; view: WorkbenchView }[];
+  const navigation = [
+    {
+      type: "link" as const,
+      href: "/",
+      label: "メイン画面",
+      view: "orders" as const,
+    },
+    {
+      type: "link" as const,
+      href: "/payouts",
+      label: "振り込み管理",
+      view: "payouts" as const,
+    },
+    {
+      type: "group" as const,
+      title: "マスタ",
+      links: [
+        { href: "/clients", label: "クライアント", view: "clients" as const },
+        { href: "/products", label: "商品", view: "products" as const },
+        { href: "/delivery-destinations", label: "配送先", view: "deliveryDestinations" as const },
+        { href: "/stores", label: "店舗", view: "stores" as const },
+      ],
+    },
+    {
+      type: "group" as const,
+      title: "小売情報",
+      links: [
+        { href: "/store-introductions", label: "導入店舗", view: "storeIntroductions" as const },
+        { href: "/sell-in", label: "セルイン", view: "sellIn" as const },
+      ],
+    },
+    {
+      type: "group" as const,
+      title: "発注管理",
+      links: [
+        { href: "/order-files", label: "発注書一覧", view: "orderFiles" as const },
+        { href: "/history", label: "処理履歴", view: "history" as const },
+      ],
+    },
+  ];
 
   return (
-    <aside className="fixed inset-y-0 left-0 z-50 w-32 border-r border-sidebar-border bg-sidebar px-3 py-5 text-sidebar-foreground">
-      <nav className="flex flex-col gap-1 text-sm font-medium">
-        {links.map((link) => {
-          const isActive = currentView === link.view;
+    <aside className="fixed inset-y-0 left-0 z-50 w-36 border-r border-sidebar-border bg-sidebar px-3 py-5 text-sidebar-foreground">
+      <nav className="flex flex-col gap-4 text-sm font-medium">
+        {navigation.map((item) => {
+          if (item.type === "link") {
+            return (
+              <SidebarLink
+                key={item.href}
+                href={item.href}
+                label={item.label}
+                isActive={currentView === item.view}
+                selectedClientId={selectedClientId}
+              />
+            );
+          }
 
           return (
-            <Link
-              key={link.href}
-              href={buildNavHref(link.href, selectedClientId)}
-              className={`rounded-md px-2 py-2 transition-colors ${
-                isActive
-                  ? "bg-sidebar-accent text-sidebar-accent-foreground shadow-sm"
-                  : "text-sidebar-foreground/70 hover:bg-sidebar-accent/70 hover:text-sidebar-accent-foreground"
-              }`}
-            >
-              {link.label}
-            </Link>
+            <div key={item.title} className="flex flex-col gap-1">
+              <p className="px-2 text-[11px] font-semibold tracking-wide text-sidebar-foreground/50">
+                {item.title}
+              </p>
+              {item.links.map((link) => (
+                <SidebarLink
+                  key={link.href}
+                  href={link.href}
+                  label={link.label}
+                  isActive={currentView === link.view}
+                  selectedClientId={selectedClientId}
+                  nested
+                />
+              ))}
+            </div>
           );
         })}
       </nav>
     </aside>
+  );
+}
+
+function SidebarLink({
+  href,
+  label,
+  isActive,
+  selectedClientId,
+  nested = false,
+}: {
+  href: string;
+  label: string;
+  isActive: boolean;
+  selectedClientId: string;
+  nested?: boolean;
+}) {
+  return (
+    <Link
+      href={buildNavHref(href, selectedClientId)}
+      className={`rounded-md py-2 transition-colors ${
+        nested ? "px-3" : "px-2"
+      } ${
+        isActive
+          ? "bg-sidebar-accent text-sidebar-accent-foreground shadow-sm"
+          : "text-sidebar-foreground/70 hover:bg-sidebar-accent/70 hover:text-sidebar-accent-foreground"
+      }`}
+    >
+      {label}
+    </Link>
   );
 }
 
