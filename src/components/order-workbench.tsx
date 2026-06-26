@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { Check, ChevronLeft, ChevronRight, Copy, ListFilter, LoaderCircle, Search, Trash2 } from "lucide-react";
+import { Check, ChevronDown, ChevronLeft, ChevronRight, Copy, ListFilter, LoaderCircle, Search, Trash2 } from "lucide-react";
 import Papa from "papaparse";
 import { useEffect, useId, useMemo, useRef, useState } from "react";
 import * as XLSX from "xlsx";
@@ -4478,6 +4478,12 @@ function getWorkbenchPageDescription(view: WorkbenchView) {
   return "発注ファイルの取り込み、CSVファイルの出力、発送、未発送の管理ができます。";
 }
 
+const sidebarGroupViews: Record<string, WorkbenchView[]> = {
+  master: ["clients", "products", "deliveryDestinations", "stores"],
+  retail: ["storeIntroductions", "sellIn"],
+  orders: ["orderFiles", "history"],
+};
+
 function MasterSidebar({
   currentView,
   selectedClientId,
@@ -4500,6 +4506,7 @@ function MasterSidebar({
     },
     {
       type: "group" as const,
+      id: "master",
       title: "マスタ",
       links: [
         { href: "/clients", label: "クライアント", view: "clients" as const },
@@ -4510,6 +4517,7 @@ function MasterSidebar({
     },
     {
       type: "group" as const,
+      id: "retail",
       title: "小売情報",
       links: [
         { href: "/store-introductions", label: "導入店舗", view: "storeIntroductions" as const },
@@ -4518,6 +4526,7 @@ function MasterSidebar({
     },
     {
       type: "group" as const,
+      id: "orders",
       title: "発注管理",
       links: [
         { href: "/order-files", label: "発注書一覧", view: "orderFiles" as const },
@@ -4526,9 +4535,38 @@ function MasterSidebar({
     },
   ];
 
+  const groupViews = sidebarGroupViews;
+
+  const [openGroups, setOpenGroups] = useState<Record<string, boolean>>(() => {
+    const initial = { master: false, retail: false, orders: false };
+
+    Object.entries(groupViews).forEach(([groupId, views]) => {
+      if (views.includes(currentView)) {
+        initial[groupId as keyof typeof initial] = true;
+      }
+    });
+
+    return initial;
+  });
+
+  useEffect(() => {
+    Object.entries(groupViews).forEach(([groupId, views]) => {
+      if (views.includes(currentView)) {
+        setOpenGroups((current) => ({ ...current, [groupId]: true }));
+      }
+    });
+  }, [currentView]);
+
+  function toggleGroup(groupId: string) {
+    setOpenGroups((current) => ({
+      ...current,
+      [groupId]: !current[groupId],
+    }));
+  }
+
   return (
     <aside className="fixed inset-y-0 left-0 z-50 w-36 border-r border-sidebar-border bg-sidebar px-3 py-5 text-sidebar-foreground">
-      <nav className="flex flex-col gap-4 text-sm font-medium">
+      <nav className="flex flex-col gap-2 text-sm font-medium">
         {navigation.map((item) => {
           if (item.type === "link") {
             return (
@@ -4542,21 +4580,41 @@ function MasterSidebar({
             );
           }
 
+          const isOpen = openGroups[item.id] ?? false;
+          const hasActiveChild = item.links.some((link) => link.view === currentView);
+
           return (
-            <div key={item.title} className="flex flex-col gap-1">
-              <p className="px-2 text-[11px] font-semibold tracking-wide text-sidebar-foreground/50">
-                {item.title}
-              </p>
-              {item.links.map((link) => (
-                <SidebarLink
-                  key={link.href}
-                  href={link.href}
-                  label={link.label}
-                  isActive={currentView === link.view}
-                  selectedClientId={selectedClientId}
-                  nested
+            <div key={item.id} className="flex flex-col gap-1">
+              <button
+                type="button"
+                aria-expanded={isOpen}
+                onClick={() => toggleGroup(item.id)}
+                className={`flex w-full items-center justify-between rounded-md px-2 py-2 text-left transition-colors ${
+                  hasActiveChild
+                    ? "text-sidebar-accent-foreground"
+                    : "text-sidebar-foreground/80 hover:bg-sidebar-accent/70 hover:text-sidebar-accent-foreground"
+                }`}
+              >
+                <span>{item.title}</span>
+                <ChevronDown
+                  className={`h-4 w-4 shrink-0 transition-transform ${isOpen ? "" : "-rotate-90"}`}
+                  aria-hidden="true"
                 />
-              ))}
+              </button>
+              {isOpen ? (
+                <div className="flex flex-col gap-1 border-l border-sidebar-border/70 pl-2">
+                  {item.links.map((link) => (
+                    <SidebarLink
+                      key={link.href}
+                      href={link.href}
+                      label={link.label}
+                      isActive={currentView === link.view}
+                      selectedClientId={selectedClientId}
+                      nested
+                    />
+                  ))}
+                </div>
+              ) : null}
             </div>
           );
         })}
