@@ -1,4 +1,10 @@
 import {
+  buildArataPdfShipToAddress,
+  extractArataPdfDelivery,
+  extractArataPdfLineItems,
+  isArataPdfOrder,
+} from "./arata-pdf-parser";
+import {
   buildDeliveryAddress,
   extractDeliveryDestinationCodes,
   type DeliveryDestination,
@@ -30,7 +36,9 @@ export function parsePdfOrderText(params: {
     .map((line) => line.trim())
     .filter(Boolean);
   const metadata = extractMetadata(text, lines, params.mapping, params.deliveryDestinations);
-  const lineItems = extractLineItems(lines);
+  const lineItems = isArataPdfOrder(text, lines)
+    ? extractArataPdfLineItems(lines)
+    : extractLineItems(lines);
   const errors: ImportError[] = [];
 
   if (!metadata.orderNo) {
@@ -79,6 +87,10 @@ function extractMetadata(
   mapping: SupplierMapping,
   deliveryDestinations?: DeliveryDestination[],
 ) {
+  if (isArataPdfOrder(text, lines)) {
+    return extractArataMetadata(text, lines, mapping, deliveryDestinations);
+  }
+
   const dates = extractDates(text);
   const warehouseValueMap = mapping.valueMaps.warehouse ?? {};
   const orderTableMetadata = extractOrderTableMetadata(lines);
@@ -161,6 +173,75 @@ function extractMetadata(
       ...deliveryMatch.reviewReasons,
       ...(!deliveryDestination ? ["配送先マスタに一致するセンターが見つかりませんでした"] : []),
       ...(!shipToName ? ["お届け先名称をPDFから特定できませんでした"] : []),
+    ],
+  };
+}
+
+function extractArataMetadata(
+  text: string,
+  lines: string[],
+  mapping: SupplierMapping,
+  deliveryDestinations?: DeliveryDestination[],
+) {
+  const dates = extractDates(text);
+  const warehouseValueMap = mapping.valueMaps.warehouse ?? {};
+  const orderTableMetadata = extractOrderTableMetadata(lines);
+  const arataDelivery = extractArataPdfDelivery(lines);
+  const pdfShipToName = arataDelivery.shipToName;
+  const pdfShipToAddress = buildArataPdfShipToAddress(arataDelivery);
+  const pdfShipToTel = arataDelivery.shipToTel;
+  const orderNo =
+    orderTableMetadata.orderNo ||
+    extractValue(text, [
+      /発注\s*(?:No|NO|番号|書番号)\s*[:：]?\s*([A-Z0-9][A-Z0-9\-_/]*)/i,
+      /注文\s*(?:No|NO|番号)\s*[:：]?\s*([A-Z0-9][A-Z0-9\-_/]*)/i,
+      /NO\.\s*([A-Z0-9][A-Z0-9\-_/]*)/i,
+    ]) ||
+    extractOrderNoFromHeaderRows(lines) ||
+    extractValueAfterLabel(lines, ["発注番号", "注文番号"]);
+  const deliveryMatch = resolveDeliveryDestination({
+    text: [pdfShipToName, pdfShipToAddress, pdfShipToTel, text].join("\n"),
+    destinations: deliveryDestinations,
+  });
+  const warehouse = extractWarehouse(text, lines, Object.keys(warehouseValueMap));
+  const orderDate =
+    orderTableMetadata.orderDate ||
+    (extractDateByLabel(text, [/発注日\s*[:：]?\s*([0-9年月日/\-. ]+)/]) ?? dates[0] ?? "");
+  const arrivalDueDate =
+    orderTableMetadata.arrivalDueDate ||
+    (extractDateByLabel(text, [
+        /着荷指定日\s*[:：]?\s*([0-9年月日/\-. ]+)/,
+        /着荷指定\s*[:：]?\s*([0-9年月日/\-. ]+)/,
+        /若荷指定\s*[:：]?\s*([0-9年月日/\-. ]+)/,
+        /若狗指定\s*[:：]?\s*([0-9年月日/\-. ]+)/,
+        /指定\s*到着日\s*[:：]?\s*([0-9年月日/\-. ]+)/,
+        /到着\s*指定日\s*[:：]?\s*([0-9年月日/\-. ]+)/,
+        /配達\s*指定日\s*[:：]?\s*([0-9年月日/\-. ]+)/,
+        /お届け\s*指定日\s*[:：]?\s*([0-9年月日/\-. ]+)/,
+        /納品\s*希望日\s*[:：]?\s*([0-9年月日/\-. ]+)/,
+        /納品(?:予定)?日\s*[:：]?\s*([0-9年月日/\-. ]+)/,
+        /到着(?:予定)?日\s*[:：]?\s*([0-9年月日/\-. ]+)/,
+      ]) ??
+      extractArrivalDateAfterLabel(lines, orderDate) ??
+      dates.find((date) => date !== orderDate) ??
+      "");
+
+  return {
+    orderNo,
+    orderDate,
+    arrivalDueDate,
+    shipToName: pdfShipToName || "お届け先未判定",
+    shipToCenter: deliveryMatch.destination?.code ?? "",
+    shipToAddress: pdfShipToAddress,
+    shipToTel: pdfShipToTel,
+    warehouse,
+    memo: extractMemo(lines),
+    deliveryNeedsReview: !deliveryMatch.destination || deliveryMatch.needsReview,
+    deliveryReviewReasons: [
+      ...deliveryMatch.reviewReasons,
+      ...(!deliveryMatch.destination ? ["配送先マスタに一致する納品拠点が見つかりませんでした"] : []),
+      ...(!pdfShipToName ? ["お届け先名称をPDFから特定できませんでした"] : []),
+      ...(!pdfShipToAddress ? ["お届け先住所をPDFから特定できませんでした"] : []),
     ],
   };
 }

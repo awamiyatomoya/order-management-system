@@ -357,10 +357,12 @@ export function resolveDeliveryDestination(params: {
     }
   }
 
-  const postalCode = params.text?.match(/\d{3}-\d{4}/)?.[0];
+  const postalCode = extractPostalCode(params.text ?? "");
 
   if (postalCode) {
-    const destination = destinations.find((candidate) => candidate.postalCode === postalCode);
+    const destination = destinations.find(
+      (candidate) => normalizePostalCode(candidate.postalCode) === postalCode,
+    );
 
     if (destination) {
       return {
@@ -372,10 +374,12 @@ export function resolveDeliveryDestination(params: {
     }
   }
 
-  const tel = params.text?.match(/0\d{1,4}-\d{1,4}-\d{3,4}/)?.[0];
+  const tel = extractTel(params.text ?? "");
 
   if (tel) {
-    const destination = destinations.find((candidate) => candidate.tel === tel);
+    const destination = destinations.find(
+      (candidate) => normalizeTelDigits(candidate.tel) === tel,
+    );
 
     if (destination) {
       return {
@@ -465,4 +469,40 @@ function normalizeCode(value: string) {
 
 function normalizeText(value: string) {
   return value.normalize("NFKC").replace(/\s/g, "").toUpperCase();
+}
+
+export function normalizeTelDigits(value: string) {
+  return value.replace(/\D/g, "");
+}
+
+function normalizePostalCode(value: string) {
+  const digits = value.replace(/\D/g, "");
+
+  if (digits.length !== 7) {
+    return "";
+  }
+
+  return `${digits.slice(0, 3)}-${digits.slice(3)}`;
+}
+
+function extractPostalCode(text: string) {
+  const matched = text.match(/\b\d{3}-?\d{4}\b/)?.[0];
+
+  if (!matched) {
+    return "";
+  }
+
+  return normalizePostalCode(matched);
+}
+
+function extractTel(text: string) {
+  const hyphenated = text.match(/0\d{1,4}-\d{1,4}-\d{3,4}/)?.[0];
+
+  if (hyphenated) {
+    return normalizeTelDigits(hyphenated);
+  }
+
+  const digitsOnly = text.match(/0\d{9,10}/)?.[0];
+
+  return digitsOnly ? normalizeTelDigits(digitsOnly) : "";
 }

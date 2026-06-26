@@ -40,6 +40,7 @@ import {
   buildCooolaCsv,
   buildCooolaExportFileName,
 } from "@/lib/cooola-export";
+import { parseDeliveryDestinationSpreadsheet } from "@/lib/delivery-destination-import";
 import type { DeliveryDestination } from "@/lib/delivery-destination-master";
 import {
   calculateLineAmount,
@@ -1829,8 +1830,7 @@ export function OrderWorkbench({
     setIsSavingDeliveryDestination(true);
 
     try {
-      const rows = await readRowsFromSpreadsheetFile(file);
-      const { destinations, errors } = parseDeliveryDestinationRows(rows);
+      const { destinations, errors } = await parseDeliveryDestinationSpreadsheet(file);
 
       if (errors.length > 0) {
         showImportErrorPopup(errors, "配送先一覧を登録できませんでした。");
@@ -7006,109 +7006,6 @@ async function readRowsFromSpreadsheetFile(file: File) {
   }
 
   throw new Error("ExcelまたはCSVファイルをアップロードしてください。");
-}
-
-function parseDeliveryDestinationRows(rows: Record<string, unknown>[]) {
-  const destinations: DeliveryDestination[] = [];
-  const errors: ImportError[] = [];
-
-  rows.forEach((row, index) => {
-    const rowNumber = index + 2;
-    const destination = normalizeDeliveryDestinationImportRow(row);
-
-    if (
-      !destination.code ||
-      !destination.wholesalerName ||
-      !destination.name ||
-      !destination.postalCode ||
-      !destination.address1 ||
-      !destination.tel
-    ) {
-      errors.push({
-        row: rowNumber,
-        field: "deliveryDestination",
-        message: "配送先コード、問屋名、配送先名、郵便番号、住所1、TELは必須です。",
-      });
-      return;
-    }
-
-    destinations.push(destination);
-  });
-
-  return {
-    destinations: dedupeDeliveryDestinations(destinations),
-    errors,
-  };
-}
-
-function normalizeDeliveryDestinationImportRow(row: Record<string, unknown>): DeliveryDestination {
-  const code = getSpreadsheetValue(row, [
-    "配送先コード",
-    "配送コード",
-    "納品先コード",
-    "届け先コード",
-    "お届け先コード",
-    "コード",
-  ]);
-  const wholesalerName = getSpreadsheetValue(row, ["問屋名", "問屋", "卸先", "卸", "取引先"]);
-  const name = getSpreadsheetValue(row, [
-    "配送先名",
-    "納品先名",
-    "届け先名",
-    "お届け先名",
-    "センター名",
-    "名称",
-    "名前",
-  ]);
-  const postalCode = getSpreadsheetValue(row, ["郵便番号", "郵便", "〒", "郵便No"]);
-  const address1 = getSpreadsheetValue(row, ["住所1", "住所", "所在地", "住所①"]);
-  const address2 = getSpreadsheetValue(row, ["住所2", "住所②", "建物名", "建物"]);
-  const address3 = getSpreadsheetValue(row, ["住所3", "住所③", "備考住所"]);
-  const tel = getSpreadsheetValue(row, ["TEL", "Tel", "tel", "電話番号", "電話"]);
-  const aliases = getSpreadsheetValue(row, [
-    "別名・OCR候補",
-    "別名",
-    "OCR候補",
-    "エイリアス",
-    "候補名",
-  ])
-    .split(/[\n,、]/)
-    .map((alias) => alias.trim())
-    .filter(Boolean);
-
-  return {
-    code,
-    wholesalerName,
-    name,
-    postalCode,
-    address1,
-    address2,
-    address3,
-    tel,
-    aliases: Array.from(new Set([name, ...aliases].filter(Boolean))),
-  };
-}
-
-function getSpreadsheetValue(row: Record<string, unknown>, candidateKeys: string[]) {
-  const normalizedCandidates = candidateKeys.map(normalizeSpreadsheetHeader);
-  const matchedKey = Object.keys(row).find((key) =>
-    normalizedCandidates.includes(normalizeSpreadsheetHeader(key)),
-  );
-
-  if (!matchedKey) {
-    return "";
-  }
-
-  const value = row[matchedKey];
-
-  return value === null || value === undefined ? "" : String(value).trim();
-}
-
-function normalizeSpreadsheetHeader(header: string) {
-  return header
-    .normalize("NFKC")
-    .toLowerCase()
-    .replace(/[\s＿_\-‐ー－・:：()（）［\]\[\].．。]/g, "");
 }
 
 async function readCsvText(file: File) {
