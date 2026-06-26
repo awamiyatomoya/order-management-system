@@ -295,9 +295,9 @@ export function StoreIntroductionPanel({
           </p>
         ) : (
           <div className="grid gap-6 border-t pt-6">
-            <div className="grid grid-cols-2 gap-3">
+            <div className="grid grid-cols-2 gap-2.5">
               <FeaturedSummaryCard label="全店舗" value={summary.introduced} unit="店舗" />
-              <div className="grid grid-cols-2 gap-1.5">
+              <div className="grid grid-cols-2 gap-1">
                 <SummaryCard label="バラエティ" value={summary.variety} />
                 <SummaryCard label="ドラッグストア" value={summary.drugstore} />
                 <SummaryCard label="ディスカウント" value={summary.discount} />
@@ -418,12 +418,12 @@ function FeaturedSummaryCard({
   unit: string;
 }) {
   return (
-    <div className="flex min-h-full flex-col justify-center rounded-xl border-2 border-primary/30 bg-primary/5 px-6 py-8 text-center">
+    <div className="flex min-h-full flex-col justify-center rounded-xl border-2 border-primary/30 bg-primary/5 px-5 py-7 text-center">
       <p className="text-sm font-medium text-muted-foreground">{label}</p>
-      <p className="mt-2 text-5xl font-bold tracking-tight text-primary md:text-6xl">
+      <p className="mt-1.5 text-5xl font-bold tracking-tight text-primary md:text-6xl">
         {value.toLocaleString()}
       </p>
-      <p className="mt-1 text-base font-medium text-muted-foreground">{unit}</p>
+      <p className="mt-0.5 text-base font-medium text-muted-foreground">{unit}</p>
     </div>
   );
 }
@@ -438,9 +438,9 @@ function SummaryCard({
   className?: string;
 }) {
   return (
-    <div className={`rounded-lg border bg-muted/30 px-3 py-2.5 ${className ?? ""}`}>
+    <div className={`rounded-lg border bg-muted/30 px-3 py-2 ${className ?? ""}`}>
       <p className="text-xs text-muted-foreground">{label}</p>
-      <p className="mt-0.5 text-xl font-semibold">{value.toLocaleString()}店舗</p>
+      <p className="text-xl font-semibold leading-tight">{value.toLocaleString()}店舗</p>
     </div>
   );
 }
