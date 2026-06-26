@@ -2,7 +2,8 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { Button } from "@/components/ui/button";
-import { Field, FieldLabel } from "@/components/ui/field";
+import { FileUploadButton, UploadStatus } from "@/components/file-upload-button";
+import { FieldLabel } from "@/components/ui/field";
 import {
   Select,
   SelectContent,
@@ -190,22 +191,22 @@ export function StoreIntroductionPanel({
 
   return (
     <section className="grid gap-4">
-      <Panel title="導入店舗取込（フェーズ1）">
+      <Panel title="導入店舗取込">
         <div className="grid gap-4">
-          <p className="text-sm text-muted-foreground">
-            対応形式: 店舗一覧表（店名・JANの行リスト）と、店舗コード付きの 0/1 フラグ表。棚割り・導入表Excelをアップロードすると、導入店舗数と店舗一覧を更新します。
-          </p>
-          <Field>
-            <FieldLabel>Excelファイル</FieldLabel>
-            <input
+          <div className="flex flex-col gap-2">
+            <FieldLabel>導入店舗ファイル</FieldLabel>
+            <FileUploadButton
               key={fileInputKey}
-              type="file"
-              accept=".xlsx,.xls"
+              accept=".xlsx,.xls,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
               disabled={isUploading || !clientId}
-              onChange={(event) => void handleFileChange(event.target.files?.[0] ?? null)}
+              fullWidth
+              label="導入店舗ファイルをアップロード"
+              description="Excelファイルを選択できます。店舗一覧表・0/1フラグ表に対応しています。"
+              onFileChange={(file) => void handleFileChange(file)}
             />
-          </Field>
-          {notice ? <p className="text-sm text-muted-foreground">{notice}</p> : null}
+            {isUploading ? <UploadStatus isProcessing message="読み取り中" /> : null}
+          </div>
+          {notice && !isUploading ? <p className="text-sm text-muted-foreground">{notice}</p> : null}
         </div>
       </Panel>
 
