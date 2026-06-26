@@ -29,10 +29,21 @@ export const defaultStoreChains: Store[] = [
 ];
 
 export function applyStoreNamesToOrders(orders: Order[], stores: Store[]) {
-  return orders.map((order) => ({
-    ...order,
-    storeName: resolveStoreNameForOrder(order, stores),
-  }));
+  return orders.map((order) => {
+    const storeName = resolveStoreNameForOrder(order, stores);
+    const reviewReasons = Array.from(new Set(order.reviewReasons ?? []));
+
+    if (storeName === "店舗不明") {
+      reviewReasons.push("店舗マスタ未登録");
+    }
+
+    return {
+      ...order,
+      storeName,
+      needsReview: order.needsReview || reviewReasons.length > 0,
+      reviewReasons,
+    };
+  });
 }
 
 export function resolveStoreNameForOrder(order: Order, stores: Store[]) {

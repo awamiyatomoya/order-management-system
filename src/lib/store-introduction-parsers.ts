@@ -95,6 +95,7 @@ function tryParseFlagListSheet(sheet: XLSX.WorkSheet, workbook: XLSX.WorkBook): 
   const workbookProduct = findWorkbookJanAndProduct(workbook);
   const jan = workbookProduct.jan;
   const productName = workbookProduct.productName;
+  const addressBook = loadPromotionalAddressBook(workbook);
   const entries: ParsedStoreIntroductionEntry[] = [];
 
   for (const row of rows) {
@@ -118,10 +119,10 @@ function tryParseFlagListSheet(sheet: XLSX.WorkSheet, workbook: XLSX.WorkBook): 
     entries.push({
       jan: jan || "UNKNOWN",
       productName,
-      storeName,
+      storeName: addressBook.get(storeCode)?.storeName || storeName,
       storeCode,
-      address: "",
-      postalCode: "",
+      address: addressBook.get(storeCode)?.address ?? "",
+      postalCode: addressBook.get(storeCode)?.postalCode ?? "",
       isIntroduced: normalizedFlag === "1",
     });
   }
@@ -138,6 +139,40 @@ function tryParseFlagListSheet(sheet: XLSX.WorkSheet, workbook: XLSX.WorkBook): 
     formatKey: "flag-list",
     entries: dedupeEntries(entries),
   };
+}
+
+type PromotionalAddressEntry = {
+  storeName: string;
+  postalCode: string;
+  address: string;
+  tel: string;
+};
+
+function loadPromotionalAddressBook(workbook: XLSX.WorkBook) {
+  const map = new Map<string, PromotionalAddressEntry>();
+  const sheet = workbook.Sheets["販促物送付先"];
+
+  if (!sheet) {
+    return map;
+  }
+
+  for (const row of sheetToRows(sheet)) {
+    const storeCode = stringCell(row[0]);
+    const storeName = stringCell(row[1]);
+
+    if (!/^\d{2,4}$/.test(storeCode) || !storeName) {
+      continue;
+    }
+
+    map.set(storeCode, {
+      storeName,
+      postalCode: stringCell(row[2]),
+      address: stringCell(row[3]),
+      tel: stringCell(row[4]),
+    });
+  }
+
+  return map;
 }
 
 function findWorkbookJanAndProduct(workbook: XLSX.WorkBook) {

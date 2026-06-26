@@ -47,6 +47,8 @@ const orderSchema = z.object({
   sourceFileUrl: z.string().optional(),
   importedAt: z.string(),
   storeName: z.string(),
+  needsReview: z.boolean().default(false),
+  reviewReasons: z.array(z.string()).default([]),
   lines: z.array(orderLineSchema).min(1),
 });
 
@@ -289,6 +291,8 @@ export async function saveImportedOrders(params: {
         : {}),
       imported_at: order.importedAt,
       store_name: order.storeName,
+      needs_review: order.needsReview,
+      review_reasons: order.reviewReasons.join("|"),
     };
 
     const { error: orderError } = existingOrder

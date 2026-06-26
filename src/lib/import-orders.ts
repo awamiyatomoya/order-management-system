@@ -23,6 +23,8 @@ type NormalizedRow = {
   jan: string;
   qty: number;
   memo: string;
+  needsReview: boolean;
+  reviewReasons: string[];
 };
 
 export type ImportDraft = {
@@ -43,6 +45,8 @@ const normalizedRowSchema = z.object({
   jan: z.string().min(1, "JANが空です"),
   qty: z.coerce.number().int("数量は整数にしてください").positive("数量は1以上にしてください"),
   memo: z.string(),
+  needsReview: z.boolean().default(false),
+  reviewReasons: z.array(z.string()).default([]),
 });
 
 export function buildImportDraft(params: {
@@ -229,7 +233,20 @@ function normalizeRow(row: RawRow, mapping: SupplierMapping) {
     jan: stringCell(row[mapping.columns.jan]),
     qty: row[mapping.columns.qty],
     memo: stringCell(row["備考"]),
+    needsReview: row._needsReview === true || row._needsReview === "true",
+    reviewReasons: parseReviewReasons(row._reviewReasons),
   };
+}
+
+function parseReviewReasons(value: unknown) {
+  if (Array.isArray(value)) {
+    return value.map((item) => String(item).trim()).filter(Boolean);
+  }
+
+  return stringCell(value)
+    .split(/[;/|]/)
+    .map((item) => item.trim())
+    .filter(Boolean);
 }
 
 function stringCell(value: unknown) {
@@ -282,6 +299,8 @@ function buildOrder(params: {
     sourceFile: params.sourceFile,
     importedAt: params.importedAt,
     storeName: "",
+    needsReview: first.needsReview,
+    reviewReasons: [...first.reviewReasons],
     lines: params.rows.map((row, index) => ({
       id: createId(),
       lineNo: index + 1,

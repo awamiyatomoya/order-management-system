@@ -62,10 +62,7 @@ export const deliveryDestinations: DeliveryDestination[] = [
     "aliases": [
       "株式会社大山埼玉流通センターM倉庫",
       "K.K オオヤマ サイタマ リュウツウ センター",
-      "K.K オオヤマ サイタマリュウツウセンター",
-      "株式会社オオヤマ",
-      "株式会社大山",
-      "オオヤマ"
+      "K.K オオヤマ サイタマリュウツウセンター"
     ]
   },
   {
@@ -77,7 +74,11 @@ export const deliveryDestinations: DeliveryDestination[] = [
     "address3": "",
     "tel": "0725-32-6031",
     "aliases": [
-      "㈱フィットエクスプレス泉大津センター"
+      "㈱フィットエクスプレス泉大津センター",
+      "K.K オオヤマ オオサカ イズミオオツ センター",
+      "K.K オオヤマ オオサカ イズミオオツ",
+      "オオヤマ イズミオオツ",
+      "泉大津センター"
     ]
   },
   {
@@ -262,6 +263,15 @@ export const deliveryDestinations: DeliveryDestination[] = [
   }
 ];
 
+export type DeliveryDestinationMatchMethod = "code" | "postal" | "tel" | "alias" | "none";
+
+export type DeliveryDestinationMatchResult = {
+  destination: DeliveryDestination | null;
+  method: DeliveryDestinationMatchMethod;
+  needsReview: boolean;
+  reviewReasons: string[];
+};
+
 export function extractDeliveryDestinationCodes(
   text: string,
   destinations: DeliveryDestination[] = deliveryDestinations,
@@ -286,60 +296,99 @@ export function extractDeliveryDestinationCodes(
   return Array.from(codes).sort((left, right) => right.length - left.length);
 }
 
-export function findDeliveryDestination(params: {
+export function resolveDeliveryDestination(params: {
   code?: string;
   text?: string;
   destinations?: DeliveryDestination[];
-}) {
-  const normalizedText = normalizeText(params.text ?? "");
-  const destinationsBySpecificCode = [...(params.destinations ?? deliveryDestinations)].sort(
-    (a, b) => normalizeCode(b.code).length - normalizeCode(a.code).length,
+}): DeliveryDestinationMatchResult {
+  const destinations = [...(params.destinations ?? deliveryDestinations)].sort(
+    (left, right) => normalizeCode(right.code).length - normalizeCode(left.code).length,
   );
-  const codesFromText = extractDeliveryDestinationCodes(params.text ?? "", params.destinations ?? deliveryDestinations);
+  const codesFromText = extractDeliveryDestinationCodes(params.text ?? "", destinations);
+  const reviewReasons: string[] = [];
+
+  if (codesFromText.length > 1) {
+    reviewReasons.push(`センターコードが複数見つかりました（${codesFromText.join(" / ")}）`);
+  }
 
   for (const code of codesFromText) {
-    const exactMatch = destinationsBySpecificCode.find(
-      (destination) => normalizeCode(destination.code) === normalizeCode(code),
+    const destination = destinations.find(
+      (candidate) => normalizeCode(candidate.code) === normalizeCode(code),
     );
 
-    if (exactMatch) {
-      return exactMatch;
+    if (!destination) {
+      continue;
     }
+
+    const reasons = [...reviewReasons];
+
+    if (normalizeCode(code) === "081701") {
+      reasons.push("センターコードが本部共通コードのみです");
+    }
+
+    return {
+      destination,
+      method: "code",
+      needsReview: reasons.length > 0,
+      reviewReasons: reasons,
+    };
   }
 
   const normalizedCode = normalizeCode(params.code ?? "");
 
   if (normalizedCode) {
-    const exactMatch = destinationsBySpecificCode.find(
-      (destination) => normalizeCode(destination.code) === normalizedCode,
+    const destination = destinations.find(
+      (candidate) => normalizeCode(candidate.code) === normalizedCode,
     );
 
-    if (exactMatch) {
-      return exactMatch;
+    if (destination) {
+      const reasons = [...reviewReasons];
+
+      if (normalizedCode === "081701") {
+        reasons.push("センターコードが本部共通コードのみです");
+      }
+
+      return {
+        destination,
+        method: "code",
+        needsReview: reasons.length > 0,
+        reviewReasons: reasons,
+      };
     }
   }
 
   const postalCode = params.text?.match(/\d{3}-\d{4}/)?.[0];
 
   if (postalCode) {
-    const postalMatch = destinationsBySpecificCode.find((destination) => destination.postalCode === postalCode);
+    const destination = destinations.find((candidate) => candidate.postalCode === postalCode);
 
-    if (postalMatch) {
-      return postalMatch;
+    if (destination) {
+      return {
+        destination,
+        method: "postal",
+        needsReview: reviewReasons.length > 0,
+        reviewReasons,
+      };
     }
   }
 
   const tel = params.text?.match(/0\d{1,4}-\d{1,4}-\d{3,4}/)?.[0];
 
   if (tel) {
-    const telMatch = destinationsBySpecificCode.find((destination) => destination.tel === tel);
+    const destination = destinations.find((candidate) => candidate.tel === tel);
 
-    if (telMatch) {
-      return telMatch;
+    if (destination) {
+      return {
+        destination,
+        method: "tel",
+        needsReview: reviewReasons.length > 0,
+        reviewReasons,
+      };
     }
   }
 
-  return destinationsBySpecificCode.find((destination) => {
+  const normalizedText = normalizeText(params.text ?? "");
+  const aliasDestination = destinations.find((destination) => {
     const destinationCode = normalizeCode(destination.code);
 
     if (destinationCode.length > 6 && normalizedText.includes(destinationCode)) {
@@ -356,6 +405,36 @@ export function findDeliveryDestination(params: {
       return normalizedText.includes(normalizedAlias);
     });
   });
+
+  if (aliasDestination) {
+    return {
+      destination: aliasDestination,
+      method: "alias",
+      needsReview: true,
+      reviewReasons: [...reviewReasons, "配送先を別名照合で判定しました"],
+    };
+  }
+
+  if (codesFromText.length > 0) {
+    reviewReasons.push("配送先マスタに一致するセンターが見つかりませんでした");
+  } else {
+    reviewReasons.push("センターコードをPDFから特定できませんでした");
+  }
+
+  return {
+    destination: null,
+    method: "none",
+    needsReview: true,
+    reviewReasons,
+  };
+}
+
+export function findDeliveryDestination(params: {
+  code?: string;
+  text?: string;
+  destinations?: DeliveryDestination[];
+}) {
+  return resolveDeliveryDestination(params).destination;
 }
 
 function isGenericDeliveryAlias(alias: string) {

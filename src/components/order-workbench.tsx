@@ -3832,22 +3832,15 @@ export function OrderWorkbench({
         ) : null}
 
         {view === "storeIntroductions" ? (
-          <section className="grid gap-4">
-            <Panel title="クライアント選択" titleSize="lg">
-              <ClientSelectField
-                clients={clients}
-                selectedClientId={selectedClientId}
-                onClientChange={handleClientChange}
-              />
-            </Panel>
-            <StoreIntroductionPanel
-              clientId={selectedClientId}
-              products={products}
-              stores={stores}
-              initialImports={initialData.storeIntroductionImports}
-              initialEntries={initialData.storeIntroductionEntries}
-            />
-          </section>
+          <StoreIntroductionPanel
+            clientId={selectedClientId}
+            clients={clients}
+            onClientChange={handleClientChange}
+            products={products}
+            stores={stores}
+            initialImports={initialData.storeIntroductionImports}
+            initialEntries={initialData.storeIntroductionEntries}
+          />
         ) : null}
 
         {view === "deliveryDestinations" ? (
@@ -6491,9 +6484,10 @@ function OrderCard({
     (sum, line) => sum + calculateLineAmount(order, line, products),
     0,
   );
+  const reviewReasons = order.reviewReasons ?? [];
 
   return (
-    <Card size="sm" className={getOrderCardClassName(order.status)}>
+    <Card size="sm" className={getOrderCardClassName(order)}>
       <CardHeader>
         <div className="flex flex-col gap-1">
           <div className="flex flex-wrap items-center gap-2">
@@ -6502,6 +6496,11 @@ function OrderCard({
                 発注番号 {order.orderNo}
               </span>
             </CardTitle>
+            {order.needsReview ? (
+              <Badge variant="secondary" className="border border-amber-200 bg-amber-100 text-amber-900">
+                要確認
+              </Badge>
+            ) : null}
             <label className="inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white px-3 py-1 text-xs font-medium text-slate-700">
               到着指定日
               <input
@@ -6574,6 +6573,11 @@ function OrderCard({
       </CardHeader>
 
       <CardContent className="flex flex-col gap-3">
+        {order.needsReview && reviewReasons.length > 0 ? (
+          <p className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
+            {reviewReasons.join(" / ")}
+          </p>
+        ) : null}
         <Table>
           <TableHeader>
             <TableRow>
@@ -6752,7 +6756,15 @@ function StatusBadge({ status }: { status: string }) {
   );
 }
 
-function getOrderCardClassName(status: Order["status"]) {
+function getOrderCardClassName(order: Order) {
+  if (order.needsReview && order.status === "imported") {
+    return "border border-amber-300 bg-amber-50/80 ring-amber-200";
+  }
+
+  return getOrderStatusCardClassName(order.status);
+}
+
+function getOrderStatusCardClassName(status: Order["status"]) {
   if (status === "imported") {
     return "border border-red-200 bg-red-50/75 ring-red-200";
   }

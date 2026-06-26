@@ -100,6 +100,8 @@ export type Order = {
   sourceFileUrl?: string;
   importedAt: string;
   storeName: string;
+  needsReview: boolean;
+  reviewReasons: string[];
   lines: OrderLine[];
 };
 

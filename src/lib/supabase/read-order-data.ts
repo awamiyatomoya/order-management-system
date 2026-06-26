@@ -118,6 +118,8 @@ type OrderRow = {
   source_file: string | null;
   source_file_path?: string | null;
   store_name?: string | null;
+  needs_review?: boolean | null;
+  review_reasons?: string | null;
   imported_at: string;
   order_lines: OrderLineRow[] | null;
 };
@@ -309,6 +311,8 @@ function readOrders(supabase: ReturnType<typeof createServerSupabaseClient>) {
       source_file,
       source_file_path,
       store_name,
+      needs_review,
+      review_reasons,
       imported_at,
       order_lines (
         id,
@@ -489,9 +493,22 @@ function mapOrder(row: OrderRow): Order {
     sourceFile: row.source_file ?? "",
     sourceFilePath: row.source_file_path ?? undefined,
     storeName: row.store_name ?? "",
+    needsReview: row.needs_review ?? false,
+    reviewReasons: parseStoredReviewReasons(row.review_reasons),
     importedAt: row.imported_at,
     lines: (row.order_lines ?? []).map(mapOrderLine),
   };
+}
+
+function parseStoredReviewReasons(value: string | null | undefined) {
+  if (!value) {
+    return [];
+  }
+
+  return value
+    .split(/[|]/)
+    .map((item) => item.trim())
+    .filter(Boolean);
 }
 
 function mapOrderLine(row: OrderLineRow): OrderLine {

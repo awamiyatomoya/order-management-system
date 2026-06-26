@@ -2,7 +2,7 @@ import {
   buildDeliveryAddress,
   extractDeliveryDestinationCodes,
   type DeliveryDestination,
-  findDeliveryDestination,
+  resolveDeliveryDestination,
 } from "./delivery-destination-master";
 import type { ImportError, SupplierMapping } from "./types";
 
@@ -66,6 +66,8 @@ export function parsePdfOrderText(params: {
       [params.mapping.columns.jan]: item.jan,
       [params.mapping.columns.qty]: item.qty,
       備考: metadata.memo,
+      _needsReview: metadata.deliveryNeedsReview,
+      _reviewReasons: metadata.deliveryReviewReasons,
     })),
     errors: [],
   };
@@ -115,11 +117,12 @@ function extractMetadata(
       /TEL\s*[:：]?\s*([0-9\-()]+)/i,
     ]) || extractTelAfterLabel(lines, ["お届先TEL", "お届け先TEL", "TEL", "電話番号"]);
   const shipToCode = extractDeliveryDestinationCode(lines, deliveryDestinations);
-  const deliveryDestination = findDeliveryDestination({
+  const deliveryMatch = resolveDeliveryDestination({
     code: shipToCode,
     text,
     destinations: deliveryDestinations,
   });
+  const deliveryDestination = deliveryMatch.destination;
   const warehouse = extractWarehouse(text, lines, Object.keys(warehouseValueMap));
   const orderDate =
     orderTableMetadata.orderDate ||
@@ -153,6 +156,12 @@ function extractMetadata(
     shipToTel: deliveryDestination?.tel ?? normalizeTel(shipToTel),
     warehouse,
     memo: extractMemo(lines),
+    deliveryNeedsReview: deliveryMatch.needsReview || !deliveryDestination,
+    deliveryReviewReasons: [
+      ...deliveryMatch.reviewReasons,
+      ...(!deliveryDestination ? ["配送先マスタに一致するセンターが見つかりませんでした"] : []),
+      ...(!shipToName ? ["お届け先名称をPDFから特定できませんでした"] : []),
+    ],
   };
 }
 

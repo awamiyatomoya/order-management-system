@@ -2,11 +2,13 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { Button } from "@/components/ui/button";
+import { Card, CardContent } from "@/components/ui/card";
 import { FileUploadButton, UploadStatus } from "@/components/file-upload-button";
-import { FieldLabel } from "@/components/ui/field";
+import { Field, FieldLabel } from "@/components/ui/field";
 import {
   Select,
   SelectContent,
+  SelectGroup,
   SelectItem,
   SelectTrigger,
   SelectValue,
@@ -26,45 +28,31 @@ import {
   getMatchedStoreNameForIntroduction,
   isLoftSeriesIntroductionSheet,
 } from "@/lib/store-matching";
+import { summarizeIntroducedStoresByChannel } from "@/lib/store-channel";
 import {
   importStoreIntroductionWorkbook,
   readStoreIntroductionData,
 } from "@/lib/supabase/store-introduction-actions";
 import type {
+  Client,
   Product,
   Store,
   StoreIntroductionEntry,
   StoreIntroductionImport,
 } from "@/lib/types";
 
-function Panel({
-  title,
-  children,
-  action,
-}: {
-  title: string;
-  children: React.ReactNode;
-  action?: React.ReactNode;
-}) {
-  return (
-    <section className="rounded-xl border bg-card p-5 shadow-sm">
-      <div className="mb-4 flex items-center justify-between gap-3">
-        <h2 className="text-lg font-semibold">{title}</h2>
-        {action}
-      </div>
-      {children}
-    </section>
-  );
-}
-
 export function StoreIntroductionPanel({
   clientId,
+  clients,
+  onClientChange,
   products,
   stores,
   initialImports,
   initialEntries,
 }: {
   clientId: string;
+  clients: Client[];
+  onClientChange: (clientId: string) => void;
   products: Product[];
   stores: Store[];
   initialImports: StoreIntroductionImport[];
@@ -140,6 +128,20 @@ export function StoreIntroductionPanel({
 
     return isLoftSeriesIntroductionSheet(activeImport.formatKey, importEntries);
   }, [activeImport, entries]);
+
+  function getEntryMatchedStoreName(entry: StoreIntroductionEntry) {
+    if (!activeImport) {
+      return entry.matchedStoreName;
+    }
+
+    return getMatchedStoreNameForIntroduction(
+      entry,
+      activeImport.formatKey,
+      stores,
+      isLoftSeriesSheet,
+    );
+  }
+
   const showAddressColumn = useMemo(() => {
     const importEntries = entries.filter((entry) => entry.importId === activeImport?.id);
     return importEntries.some((entry) => entry.address.trim());
@@ -177,11 +179,22 @@ export function StoreIntroductionPanel({
     const filtered =
       selectedJan === "all" ? importEntries : importEntries.filter((entry) => getEntryJan(entry) === selectedJan);
 
-    return {
-      total: filtered.length,
-      introduced: filtered.filter((entry) => entry.isIntroduced).length,
-    };
-  }, [activeImport?.id, clientId, entries, products, selectedJan]);
+    return summarizeIntroducedStoresByChannel(
+      filtered.map((entry) => ({
+        storeName: entry.storeName,
+        matchedStoreName: getEntryMatchedStoreName(entry),
+        isIntroduced: entry.isIntroduced,
+      })),
+    );
+  }, [
+    activeImport?.id,
+    clientId,
+    entries,
+    isLoftSeriesSheet,
+    products,
+    selectedJan,
+    stores,
+  ]);
 
   async function handleFileChange(file: File | null) {
     if (!file || !clientId) {
@@ -221,19 +234,6 @@ export function StoreIntroductionPanel({
     }
   }
 
-  function getEntryMatchedStoreName(entry: StoreIntroductionEntry) {
-    if (!activeImport) {
-      return entry.matchedStoreName;
-    }
-
-    return getMatchedStoreNameForIntroduction(
-      entry,
-      activeImport.formatKey,
-      stores,
-      isLoftSeriesSheet,
-    );
-  }
-
   function getJanFilterLabel(jan: string) {
     const entry = entries.find((item) => item.importId === activeImport?.id && getEntryJan(item) === jan);
     if (!entry) {
@@ -245,9 +245,33 @@ export function StoreIntroductionPanel({
   }
 
   return (
-    <section className="grid gap-4">
-      <Panel title="導入店舗取込">
-        <div className="grid gap-4">
+    <Card>
+      <CardContent className="flex flex-col gap-6 pt-6">
+        <div className="grid gap-4 lg:grid-cols-[minmax(320px,420px)_minmax(280px,1fr)]">
+          <Field>
+            <FieldLabel>クライアント</FieldLabel>
+            <Select
+              items={clients.map((client) => ({
+                label: client.name,
+                value: client.id,
+              }))}
+              value={clientId}
+              onValueChange={(value) => onClientChange(value ?? "")}
+            >
+              <SelectTrigger className="w-full">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectGroup>
+                  {clients.map((client) => (
+                    <SelectItem key={client.id} value={client.id}>
+                      {client.name}
+                    </SelectItem>
+                  ))}
+                </SelectGroup>
+              </SelectContent>
+            </Select>
+          </Field>
           <div className="flex flex-col gap-2">
             <FieldLabel>導入店舗ファイル</FieldLabel>
             <FileUploadButton
@@ -255,94 +279,103 @@ export function StoreIntroductionPanel({
               accept=".xlsx,.xls,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
               disabled={isUploading || !clientId}
               fullWidth
-              label="導入店舗ファイルをアップロード"
-              description="Excelファイルを選択できます。店舗一覧表・0/1フラグ表に対応しています。"
               onFileChange={(file) => void handleFileChange(file)}
             />
             {isUploading ? <UploadStatus isProcessing message="読み取り中" /> : null}
           </div>
-          {notice && !isUploading ? <p className="text-sm text-muted-foreground">{notice}</p> : null}
         </div>
-      </Panel>
 
-      <Panel
-        title="導入店舗一覧"
-        action={
-          <div className="flex flex-wrap items-center gap-2">
-            <Select
-              value={selectedImportId}
-              onValueChange={(value) => setSelectedImportId(value ?? "")}
-            >
-              <SelectTrigger className="min-w-56">
-                <SelectValue placeholder="取込履歴" />
-              </SelectTrigger>
-              <SelectContent>
-                {imports.map((item) => (
-                  <SelectItem key={item.id} value={item.id}>
-                    {item.fileName}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-            <Select value={selectedJan} onValueChange={(value) => setSelectedJan(value ?? "all")}>
-              <SelectTrigger className="min-w-48">
-                <SelectValue placeholder="JAN" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">すべてのJAN</SelectItem>
-                {janOptions.map((jan) => (
-                  <SelectItem key={jan} value={jan}>
-                    {getJanFilterLabel(jan)}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-            <Button
-              type="button"
-              size="sm"
-              variant={showIntroducedOnly ? "default" : "outline"}
-              onClick={() => setShowIntroducedOnly((current) => !current)}
-            >
-              {showIntroducedOnly ? "導入店のみ" : "全店舗表示"}
-            </Button>
-          </div>
-        }
-      >
+        {notice && !isUploading ? <p className="text-sm text-muted-foreground">{notice}</p> : null}
+
         {!activeImport ? (
-          <p className="text-sm text-muted-foreground">
+          <p className="border-t pt-6 text-base text-muted-foreground">
             {isLoading
               ? "導入店舗データを読み込んでいます..."
               : "まだ導入店舗データがありません。Excelをアップロードしてください。"}
           </p>
         ) : (
-          <div className="grid gap-4">
-            <div className="grid gap-2 sm:grid-cols-3">
-              <SummaryCard label="導入店舗数" value={`${summary.introduced}店舗`} />
-              <SummaryCard label="一覧件数" value={`${summary.total}件`} />
-              <SummaryCard
-                label="取込形式"
-                value={activeImport.formatKey === "row-list" ? "店舗一覧表" : "0/1フラグ表"}
-              />
+          <div className="grid gap-6 border-t pt-6">
+            <div className="grid grid-cols-2 gap-4">
+              <FeaturedSummaryCard label="全店舗" value={summary.introduced} unit="店舗" />
+              <div className="grid grid-cols-2 gap-2">
+                <SummaryCard label="バラエティ" value={summary.variety} />
+                <SummaryCard label="ドラッグストア" value={summary.drugstore} />
+                <SummaryCard label="ディスカウント" value={summary.discount} />
+                <SummaryCard label="GMS" value={summary.gms} />
+                <SummaryCard label="CVS" value={summary.cvs} className="col-span-2" />
+              </div>
             </div>
+
+            <div className="grid gap-3 md:grid-cols-[minmax(220px,1fr)_minmax(180px,1fr)_auto]">
+              <Field>
+                <FieldLabel>取込履歴</FieldLabel>
+                <Select
+                  value={selectedImportId}
+                  onValueChange={(value) => setSelectedImportId(value ?? "")}
+                >
+                  <SelectTrigger className="w-full">
+                    <SelectValue placeholder="取込履歴" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {imports.map((item) => (
+                      <SelectItem key={item.id} value={item.id}>
+                        {item.fileName}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </Field>
+              <Field>
+                <FieldLabel>JAN</FieldLabel>
+                <Select value={selectedJan} onValueChange={(value) => setSelectedJan(value ?? "all")}>
+                  <SelectTrigger className="w-full">
+                    <SelectValue placeholder="JAN" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">すべてのJAN</SelectItem>
+                    {janOptions.map((jan) => (
+                      <SelectItem key={jan} value={jan}>
+                        {getJanFilterLabel(jan)}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </Field>
+              <div className="flex items-end">
+                <Button
+                  type="button"
+                  className="w-full md:w-auto"
+                  variant={showIntroducedOnly ? "default" : "outline"}
+                  onClick={() => setShowIntroducedOnly((current) => !current)}
+                >
+                  {showIntroducedOnly ? "導入店のみ" : "全店舗表示"}
+                </Button>
+              </div>
+            </div>
+
             <p className="text-sm text-muted-foreground">
               ファイル: {activeImport.fileName} / 取込日時:{" "}
               {new Date(activeImport.importedAt).toLocaleString("ja-JP")}
             </p>
-            <div className="overflow-x-auto">
+
+            <div className="overflow-x-auto rounded-lg border">
               <Table className="min-w-[720px]">
                 <TableHeader>
                   <TableRow>
-                    <TableHead>JAN</TableHead>
-                    <TableHead>商品名</TableHead>
-                    <TableHead>店舗名</TableHead>
-                    <TableHead>マスタ照合</TableHead>
-                    {showAddressColumn ? <TableHead>住所</TableHead> : null}
+                    <TableHead className="text-sm">JAN</TableHead>
+                    <TableHead className="text-sm">商品名</TableHead>
+                    <TableHead className="text-base">店舗名</TableHead>
+                    <TableHead className="text-sm">マスタ照合</TableHead>
+                    {showAddressColumn ? <TableHead className="text-sm">住所</TableHead> : null}
                   </TableRow>
                 </TableHeader>
                 <TableBody>
                   {visibleEntries.length === 0 ? (
                     <TableRow>
-                      <TableCell colSpan={showAddressColumn ? 5 : 4} className="text-muted-foreground">
+                      <TableCell
+                        colSpan={showAddressColumn ? 5 : 4}
+                        className="py-8 text-center text-base text-muted-foreground"
+                      >
                         表示対象の店舗がありません。
                       </TableCell>
                     </TableRow>
@@ -352,13 +385,15 @@ export function StoreIntroductionPanel({
 
                       return (
                         <TableRow key={entry.id}>
-                          <TableCell className="font-mono text-xs">{getEntryJan(entry)}</TableCell>
-                          <TableCell>{getEntryProductName(entry)}</TableCell>
-                          <TableCell>{entry.storeName}</TableCell>
-                          <TableCell>
+                          <TableCell className="font-mono text-sm">{getEntryJan(entry)}</TableCell>
+                          <TableCell className="text-sm">{getEntryProductName(entry)}</TableCell>
+                          <TableCell className="text-base font-medium">{entry.storeName}</TableCell>
+                          <TableCell className="text-sm">
                             {matchedStoreName === "店舗不明" ? "-" : matchedStoreName}
                           </TableCell>
-                          {showAddressColumn ? <TableCell>{entry.address}</TableCell> : null}
+                          {showAddressColumn ? (
+                            <TableCell className="text-sm">{entry.address}</TableCell>
+                          ) : null}
                         </TableRow>
                       );
                     })
@@ -368,16 +403,44 @@ export function StoreIntroductionPanel({
             </div>
           </div>
         )}
-      </Panel>
-    </section>
+      </CardContent>
+    </Card>
   );
 }
 
-function SummaryCard({ label, value }: { label: string; value: string }) {
+function FeaturedSummaryCard({
+  label,
+  value,
+  unit,
+}: {
+  label: string;
+  value: number;
+  unit: string;
+}) {
   return (
-    <div className="rounded-lg border bg-muted/30 px-4 py-3">
-      <p className="text-xs text-muted-foreground">{label}</p>
-      <p className="mt-1 text-lg font-semibold">{value}</p>
+    <div className="flex min-h-full flex-col justify-center rounded-xl border-2 border-primary/30 bg-primary/5 px-8 py-10 text-center">
+      <p className="text-base font-medium text-muted-foreground">{label}</p>
+      <p className="mt-4 text-6xl font-bold tracking-tight text-primary md:text-7xl">
+        {value.toLocaleString()}
+      </p>
+      <p className="mt-2 text-lg font-medium text-muted-foreground">{unit}</p>
+    </div>
+  );
+}
+
+function SummaryCard({
+  label,
+  value,
+  className,
+}: {
+  label: string;
+  value: number;
+  className?: string;
+}) {
+  return (
+    <div className={`rounded-lg border bg-muted/30 px-4 py-4 ${className ?? ""}`}>
+      <p className="text-sm text-muted-foreground">{label}</p>
+      <p className="mt-1 text-2xl font-semibold">{value.toLocaleString()}店舗</p>
     </div>
   );
 }
