@@ -165,8 +165,8 @@ function extractLineItems(lines: string[]) {
       const jan = match[0].replace(/\D/g, "");
       const rest = line.slice((match.index ?? 0) + match[0].length);
       const qty =
+        extractQtyFromDetailLine(rest) ??
         extractQty(rest) ??
-        extractQty(lines[index + 1] ?? "") ??
         extractQtyFromFollowingLines(lines, index + 1);
 
       if (jan.length === 13 && qty !== null) {
@@ -179,7 +179,17 @@ function extractLineItems(lines: string[]) {
 }
 
 function extractQtyFromFollowingLines(lines: string[], startIndex: number) {
-  for (const line of lines.slice(startIndex, startIndex + 8)) {
+  const following = lines.slice(startIndex, startIndex + 8);
+
+  for (const line of following) {
+    const detailQty = extractQtyFromDetailLine(line);
+
+    if (detailQty !== null) {
+      return detailQty;
+    }
+  }
+
+  for (const line of following) {
     const qty = extractQty(line);
 
     if (qty !== null) {
@@ -188,6 +198,28 @@ function extractQtyFromFollowingLines(lines: string[], startIndex: number) {
   }
 
   return null;
+}
+
+function extractQtyFromDetailLine(line: string) {
+  const normalized = line.replace(/,/g, "").trim();
+
+  if (isLikelyNonQuantityLine(normalized)) {
+    return null;
+  }
+
+  const match = normalized.match(/^(?:[A-Z]\s+)?(\d{1,5})\s+\d{3,}\s+\d{3,}$/u);
+
+  if (!match) {
+    return null;
+  }
+
+  const value = Number(match[1]);
+
+  if (!Number.isInteger(value) || value <= 0) {
+    return null;
+  }
+
+  return value;
 }
 
 function extractQty(text: string) {
@@ -502,12 +534,38 @@ function extractDeliveryDestinationCode(lines: string[]) {
 }
 
 function extractMemo(lines: string[]) {
-  const value =
-    extractBlockAfterLabel(lines, ["摘要", "備考"], ["金額合計", "受付日時"]) ||
-    lines.find((line) => /^\*[^\s]+/.test(line.trim()))?.trim() ||
-    "";
+  const asteriskValue = lines.find((line) => /^\*[^\s]+/.test(line.trim()))?.trim() ?? "";
 
-  return cleanupValue(value);
+  if (asteriskValue) {
+    return cleanupValue(asteriskValue.normalize("NFKC"));
+  }
+
+  const summaryValue = extractBlockAfterLabel(lines, ["摘要"], ["金額合計", "受付日時"]);
+
+  if (summaryValue) {
+    return cleanupValue(summaryValue.normalize("NFKC"));
+  }
+
+  const memoLabelIndex = lines.findIndex((line) => isStandaloneLabelLine(line, "備考"));
+
+  if (memoLabelIndex !== -1) {
+    const memoValue = extractBlockAfterLabel(
+      lines.slice(memoLabelIndex),
+      ["備考"],
+      ["金額合計", "受付日時"],
+    );
+
+    if (memoValue) {
+      return cleanupValue(memoValue.normalize("NFKC"));
+    }
+  }
+
+  return "";
+}
+
+function isStandaloneLabelLine(line: string, label: string) {
+  const trimmed = line.trim();
+  return trimmed === label || trimmed === `${label}:` || trimmed === `${label}：` || new RegExp(`^${label}[:：]?\\s*$`).test(trimmed);
 }
 
 function isUsableOcrValue(value: string) {

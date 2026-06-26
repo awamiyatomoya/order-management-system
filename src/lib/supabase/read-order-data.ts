@@ -11,6 +11,8 @@ import type {
   OrderStatus,
   Product,
   Store,
+  StoreIntroductionEntry,
+  StoreIntroductionImport,
   Supplier,
 } from "@/lib/types";
 import { productMasterExtraFields } from "@/lib/product-master-fields";
@@ -40,7 +42,8 @@ export type OrderWorkbenchDataScope =
   | "orderFiles"
   | "payouts"
   | "sellIn"
-  | "history";
+  | "history"
+  | "storeIntroductions";
 
 export type OrderWorkbenchInitialData = {
   clients: Client[];
@@ -51,6 +54,8 @@ export type OrderWorkbenchInitialData = {
   importBatches: ImportBatch[];
   deliveryDestinations: DeliveryDestination[];
   stores: Store[];
+  storeIntroductionImports: StoreIntroductionImport[];
+  storeIntroductionEntries: StoreIntroductionEntry[];
   source: "supabase" | "error";
   message: string;
 };
@@ -112,6 +117,7 @@ type OrderRow = {
   status: OrderStatus;
   source_file: string | null;
   source_file_path?: string | null;
+  store_name?: string | null;
   imported_at: string;
   order_lines: OrderLineRow[] | null;
 };
@@ -213,6 +219,8 @@ export async function getOrderWorkbenchInitialData(
       importBatches,
       deliveryDestinations,
       stores,
+      storeIntroductionImports: [],
+      storeIntroductionEntries: [],
       source: "supabase",
       message: "Supabaseから読み取ったデータを表示しています。保存処理はまだ仮実装です。",
     };
@@ -228,11 +236,17 @@ function getDataRequirements(scope: OrderWorkbenchDataScope) {
   return {
     clients: scope !== "stores",
     suppliers: scope === "orders",
-    products: scope === "orders" || scope === "products" || scope === "sellIn" || scope === "payouts" || scope === "history",
+    products:
+      scope === "orders" ||
+      scope === "products" ||
+      scope === "sellIn" ||
+      scope === "payouts" ||
+      scope === "history" ||
+      scope === "storeIntroductions",
     orders: scope === "orders" || scope === "sellIn" || scope === "payouts" || scope === "orderFiles" || scope === "history",
     importBatches: scope === "orderFiles" || scope === "history",
     deliveryDestinations: scope === "orders" || scope === "deliveryDestinations",
-    stores: scope === "orders" || scope === "sellIn" || scope === "stores",
+    stores: scope === "orders" || scope === "sellIn" || scope === "stores" || scope === "storeIntroductions",
   };
 }
 
@@ -246,6 +260,8 @@ function getEmptyInitialData(message: string): OrderWorkbenchInitialData {
     importBatches: [],
     deliveryDestinations: [],
     stores: [],
+    storeIntroductionImports: [],
+    storeIntroductionEntries: [],
     source: "error",
     message,
   };
@@ -292,6 +308,7 @@ function readOrders(supabase: ReturnType<typeof createServerSupabaseClient>) {
       status,
       source_file,
       source_file_path,
+      store_name,
       imported_at,
       order_lines (
         id,
@@ -471,6 +488,7 @@ function mapOrder(row: OrderRow): Order {
     status: row.status,
     sourceFile: row.source_file ?? "",
     sourceFilePath: row.source_file_path ?? undefined,
+    storeName: row.store_name ?? "",
     importedAt: row.imported_at,
     lines: (row.order_lines ?? []).map(mapOrderLine),
   };

@@ -1,4 +1,5 @@
-import { hasGoogleCloudVisionApiKey, recognizeWithCloudVision } from "@/lib/google-cloud-vision-ocr";
+import { hasGoogleCloudVisionApiKey, probeCloudVisionApiKey, recognizeWithCloudVision } from "@/lib/google-cloud-vision-ocr";
+import { getPdfParseLoadOptions } from "@/lib/pdf-js-load-options";
 import { execFile } from "node:child_process";
 import { mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
@@ -59,10 +60,22 @@ async function createPdfParser(buffer: Buffer) {
   await ensurePdfJsGlobals();
   const { PDFParse } = await import("pdf-parse");
   PDFParse.setWorker(getPdfWorkerPath());
-  return new PDFParse({ data: buffer });
+  return new PDFParse(getPdfParseLoadOptions(buffer));
 }
 
-export async function GET() {
+export async function GET(request: Request) {
+  const diagnose = new URL(request.url).searchParams.get("diagnose") === "1";
+
+  if (diagnose) {
+    const visionProbe = await probeCloudVisionApiKey();
+    return Response.json({
+      ok: visionProbe.ok,
+      visionConfigured: hasGoogleCloudVisionApiKey(),
+      runtime: process.env.VERCEL === "1" ? "vercel" : "local",
+      visionProbe,
+    });
+  }
+
   return Response.json({
     ok: true,
     visionConfigured: hasGoogleCloudVisionApiKey(),
@@ -105,9 +118,10 @@ export async function POST(request: Request) {
         imageDataUrl: false,
         imageBuffer: true,
       });
-      const cloudVisionResult = await recognizeWithCloudVision(
-        screenshotResult.pages.map((page) => Buffer.from(page.data)),
+      const preparedImages = await Promise.all(
+        screenshotResult.pages.map((page) => prepareOcrImage(Buffer.from(page.data))),
       );
+      const cloudVisionResult = await recognizeWithCloudVision(preparedImages);
 
       if (!hasUsefulText(cloudVisionResult.text)) {
         return Response.json(

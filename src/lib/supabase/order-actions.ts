@@ -501,8 +501,10 @@ export async function markOrderCheckedInSupabase(params: {
 export async function deleteOrderInSupabase(params: {
   clientId: string;
   orderId: string;
+  supplierId: string;
+  orderNo: string;
 }): Promise<SaveOrderStatusResult> {
-  if (!params.clientId || !params.orderId) {
+  if (!params.clientId || !params.orderId || !params.supplierId || !params.orderNo) {
     return {
       ok: false,
       message: "受注削除に必要な情報が不足しています。",
@@ -517,7 +519,12 @@ export async function deleteOrderInSupabase(params: {
     };
   }
 
-  const identity = orderIdentitySchema.safeParse(params);
+  const identity = orderIdentitySchema
+    .extend({
+      supplierId: z.string().min(1),
+      orderNo: z.string().min(1),
+    })
+    .safeParse(params);
   if (!identity.success) {
     return {
       ok: false,
@@ -526,17 +533,46 @@ export async function deleteOrderInSupabase(params: {
   }
 
   const supabase = createServerSupabaseClient();
-  const { data: order, error: orderError } = await supabase
+  const { data: orderById, error: orderByIdError } = await supabase
     .from("orders")
     .select("id, status")
     .eq("client_id", identity.data.clientId)
     .eq("id", identity.data.orderId)
-    .single();
+    .maybeSingle();
 
-  if (orderError || !order) {
+  if (orderByIdError) {
     return {
       ok: false,
-      message: `受注の確認に失敗しました: ${orderError?.message ?? "受注が見つかりません"}`,
+      message: `受注の確認に失敗しました: ${orderByIdError.message}`,
+    };
+  }
+
+  let order = orderById;
+
+  if (!order) {
+    const { data: orderByNumber, error: orderByNumberError } = await supabase
+      .from("orders")
+      .select("id, status")
+      .eq("client_id", identity.data.clientId)
+      .eq("supplier_id", identity.data.supplierId)
+      .eq("order_no", identity.data.orderNo)
+      .maybeSingle();
+
+    if (orderByNumberError) {
+      return {
+        ok: false,
+        message: `受注の確認に失敗しました: ${orderByNumberError.message}`,
+      };
+    }
+
+    order = orderByNumber;
+  }
+
+  if (!order) {
+    return {
+      ok: true,
+      savedToSupabase: false,
+      message: "受注は既に削除済みです。画面を更新しました。",
     };
   }
 
@@ -551,7 +587,7 @@ export async function deleteOrderInSupabase(params: {
     .from("order_lines")
     .delete()
     .eq("client_id", identity.data.clientId)
-    .eq("order_id", identity.data.orderId);
+    .eq("order_id", order.id);
 
   if (linesDeleteError) {
     return {
@@ -564,7 +600,7 @@ export async function deleteOrderInSupabase(params: {
     .from("orders")
     .delete()
     .eq("client_id", identity.data.clientId)
-    .eq("id", identity.data.orderId);
+    .eq("id", order.id);
 
   if (orderDeleteError) {
     return {

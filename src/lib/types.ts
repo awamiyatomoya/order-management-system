@@ -40,6 +40,32 @@ export type Store = {
   aliases: string[];
 };
 
+export type StoreIntroductionFormatKey = "row-list" | "flag-list";
+
+export type StoreIntroductionImport = {
+  id: string;
+  clientId: string;
+  fileName: string;
+  formatKey: StoreIntroductionFormatKey;
+  importedAt: string;
+  totalStoreCount: number;
+  introducedStoreCount: number;
+};
+
+export type StoreIntroductionEntry = {
+  id: string;
+  importId: string;
+  clientId: string;
+  jan: string;
+  productName: string;
+  storeName: string;
+  storeCode: string;
+  address: string;
+  postalCode: string;
+  isIntroduced: boolean;
+  matchedStoreName: string;
+};
+
 export type OrderLine = {
   id: string;
   lineNo: number;
@@ -73,6 +99,7 @@ export type Order = {
   sourceFilePath?: string;
   sourceFileUrl?: string;
   importedAt: string;
+  storeName: string;
   lines: OrderLine[];
 };
 

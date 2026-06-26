@@ -46,7 +46,14 @@ import {
   confirmOrderWithPayoutFee,
 } from "@/lib/import-orders";
 import { parsePdfOrderText } from "@/lib/pdf-order-parser";
+import {
+  applyStoreNamesToOrders,
+  extractUnknownStoreCandidates,
+  getOrderStoreName,
+  normalizeStoreMatchText,
+} from "@/lib/store-matching";
 import { supplierMappings } from "@/lib/supplier-mappings";
+import { StoreIntroductionPanel } from "@/components/store-introduction-panel";
 import {
   productMasterExtraFields,
   type ProductMasterExtraKey,
@@ -157,7 +164,8 @@ type WorkbenchView =
   | "orderFiles"
   | "payouts"
   | "sellIn"
-  | "history";
+  | "history"
+  | "storeIntroductions";
 type OrderPeriodFilter = "all" | "thisMonth" | "lastMonth" | "custom";
 
 type PayoutLineRow = {
@@ -727,33 +735,6 @@ function parseProductMasterTaxRate(value: string | undefined) {
 
   return numericValue > 1 ? numericValue / 100 : numericValue;
 }
-const defaultStoreChains: Store[] = [
-  {
-    id: "default-store-ainz",
-    name: "アインズ",
-    aliases: ["アインズ", "アインズ&トルペ", "アインズアンドトルペ", "AINZ", "AINZ&TULPE"],
-  },
-  {
-    id: "default-store-hands",
-    name: "ハンズ",
-    aliases: ["ハンズ", "東急ハンズ", "HANDS", "TOKYU HANDS"],
-  },
-  {
-    id: "default-store-loft",
-    name: "ロフト",
-    aliases: ["ロフト", "LOFT", "ロフトホング", "*ロフトホング"],
-  },
-  {
-    id: "default-store-mimosa",
-    name: "ミモザ",
-    aliases: ["ミモザ", "イナイミモザ", "*イナイミモザ", "*イナイミモザ 78"],
-  },
-  {
-    id: "default-store-other",
-    name: "その他",
-    aliases: ["その他", "在庫分", "ザイコブン", "ザ イコブン", "*ザ イコブン"],
-  },
-];
 
 export function OrderWorkbench({
   initialData,
@@ -771,7 +752,7 @@ export function OrderWorkbench({
   const [selectedSupplierId, setSelectedSupplierId] = useState(initialSelection.supplierId);
   const [products, setProducts] = useState<Product[]>(initialData.products);
   const [productTotalCount, setProductTotalCount] = useState(initialData.productTotalCount);
-  const [orders, setOrders] = useState<Order[]>(initialData.orders);
+  const [orders, setOrders] = useState<Order[]>(dedupeOrdersByKey(initialData.orders));
   const [importBatches, setImportBatches] = useState<ImportBatch[]>(initialData.importBatches);
   const [deliveryDestinations, setDeliveryDestinations] = useState<DeliveryDestination[]>(
     initialData.deliveryDestinations,
@@ -1343,12 +1324,13 @@ export function OrderWorkbench({
     }
 
     setIsSavingImport(true);
+    const ordersToSave = applyStoreNamesToOrders(draft.orders, stores);
     const saveResult = await saveImportedOrders({
       clientId: selectedClientId,
       supplierId: selectedSupplier.id,
       fileName,
       fileStoragePath: uploadedFile?.path,
-      orders: draft.orders,
+      orders: ordersToSave,
     });
     setIsSavingImport(false);
 
@@ -1381,7 +1363,7 @@ export function OrderWorkbench({
       return;
     }
 
-    const savedOrders = applySavedOrderIds(draft.orders, saveResult.orderIds).map((order) => ({
+    const savedOrders = applySavedOrderIds(ordersToSave, saveResult.orderIds).map((order) => ({
       ...order,
       sourceFilePath: uploadedFile?.path,
       sourceFileUrl: uploadedFile?.url,
@@ -1393,7 +1375,7 @@ export function OrderWorkbench({
       buildImportBatch(fileName, "saved", [], uploadedFile?.path, uploadedFile?.url),
       ...current,
     ]);
-    setNotice(`${draft.orders.length}件の受注を imported として保存しました。${saveResult.message}`);
+    setNotice(`${ordersToSave.length}件の受注を imported として保存しました。${saveResult.message}`);
   }
 
   async function promptToRegisterUnknownStores(importedOrders: Order[]) {
@@ -2265,12 +2247,13 @@ export function OrderWorkbench({
     }
 
     setIsSavingImport(true);
+    const ordersToSave = applyStoreNamesToOrders(draft.orders, stores);
     const saveResult = await saveImportedOrders({
       clientId: selectedClientId,
       supplierId: selectedSupplier.id,
       fileName,
       fileStoragePath,
-      orders: draft.orders,
+      orders: ordersToSave,
     });
     setIsSavingImport(false);
 
@@ -2303,7 +2286,7 @@ export function OrderWorkbench({
       return;
     }
 
-    const savedOrders = applySavedOrderIds(draft.orders, saveResult.orderIds).map((order) => ({
+    const savedOrders = applySavedOrderIds(ordersToSave, saveResult.orderIds).map((order) => ({
       ...order,
       sourceFilePath: fileStoragePath,
       sourceFileUrl: fileStorageUrl,
@@ -2488,6 +2471,8 @@ export function OrderWorkbench({
     const saveResult = await deleteOrderInSupabase({
       clientId: targetOrder.clientId,
       orderId: targetOrder.id,
+      supplierId: targetOrder.supplierId,
+      orderNo: targetOrder.orderNo,
     });
     setSavingOrderId(null);
 
@@ -2496,7 +2481,8 @@ export function OrderWorkbench({
       return;
     }
 
-    setOrders((current) => current.filter((order) => order.id !== orderId));
+    const orderKey = buildOrderMergeKey(targetOrder);
+    setOrders((current) => current.filter((order) => buildOrderMergeKey(order) !== orderKey));
     setNotice(saveResult.message);
   }
 
@@ -2906,6 +2892,7 @@ export function OrderWorkbench({
                     <OrderCard
                       key={order.id}
                       order={order}
+                      storeName={getOrderStoreName(order, stores)}
                       products={products}
                       isSaving={savingOrderId === order.id}
                       hasExportedCsv={csvExportedOrderIds.includes(order.id)}
@@ -3843,6 +3830,25 @@ export function OrderWorkbench({
           </section>
         ) : null}
 
+        {view === "storeIntroductions" ? (
+          <section className="grid gap-4">
+            <Panel title="クライアント選択" titleSize="lg">
+              <ClientSelectField
+                clients={clients}
+                selectedClientId={selectedClientId}
+                onClientChange={handleClientChange}
+              />
+            </Panel>
+            <StoreIntroductionPanel
+              clientId={selectedClientId}
+              products={products}
+              stores={stores}
+              initialImports={initialData.storeIntroductionImports}
+              initialEntries={initialData.storeIntroductionEntries}
+            />
+          </section>
+        ) : null}
+
         {view === "deliveryDestinations" ? (
         <section className="grid gap-4 xl:grid-cols-[360px_1fr]">
           <Panel title="配送先マスタ登録" titleSize="lg">
@@ -4431,6 +4437,10 @@ function getWorkbenchPageTitle(view: WorkbenchView) {
     return "履歴";
   }
 
+  if (view === "storeIntroductions") {
+    return "導入店舗";
+  }
+
   return "受注管理システム";
 }
 
@@ -4467,6 +4477,10 @@ function getWorkbenchPageDescription(view: WorkbenchView) {
     return "発注ファイルの取り込み結果とエラー履歴を確認します。";
   }
 
+  if (view === "storeIntroductions") {
+    return "棚割り・導入表Excelから導入店舗数と店舗一覧を取り込み、商品ごとに確認できます。";
+  }
+
   return "発注ファイルの取り込み、CSVファイルの出力、発送、未発送の管理ができます。";
 }
 
@@ -4483,6 +4497,7 @@ function MasterSidebar({
     { href: "/products", label: "商品マスタ", view: "products" },
     { href: "/delivery-destinations", label: "配送先マスタ", view: "deliveryDestinations" },
     { href: "/stores", label: "店舗マスタ", view: "stores" },
+    { href: "/store-introductions", label: "導入店舗", view: "storeIntroductions" },
     { href: "/order-files", label: "受注DB", view: "orderFiles" },
     { href: "/payouts", label: "振り込み管理", view: "payouts" },
     { href: "/sell-in", label: "セルイン", view: "sellIn" },
@@ -6020,21 +6035,15 @@ function getSupplierMapping(mappingKey: string) {
 }
 
 function compareOrdersForWorkbench(a: Order, b: Order) {
-  const statusCompare = getOrderStatusSortRank(a.status) - getOrderStatusSortRank(b.status);
-
-  if (statusCompare !== 0) {
-    return statusCompare;
-  }
-
-  const dateCompare = getSortableDateValue(a.arrivalDueDate).localeCompare(
-    getSortableDateValue(b.arrivalDueDate),
+  const dateCompare = getSortableDateValue(b.arrivalDueDate).localeCompare(
+    getSortableDateValue(a.arrivalDueDate),
   );
 
   if (dateCompare !== 0) {
     return dateCompare;
   }
 
-  return a.orderNo.localeCompare(b.orderNo, "ja");
+  return b.orderNo.localeCompare(a.orderNo, "ja");
 }
 
 function getOrderStatusSortRank(status: Order["status"]) {
@@ -6118,7 +6127,7 @@ function buildSellInRows({
       order.lines.map((line) => {
         const date = normalizeDateValue(order.orderDate);
         const product = productsByKey.get(`${order.clientId}:${line.jan}`);
-        const storeName = getStoreNameFromOrderLine(line, stores);
+        const storeName = getOrderStoreName(order, stores);
         const hasIssue = storeName === "店舗不明" || !product || product.retailPrice === null;
         const wholesaleAmount = product ? Math.floor(product.wholesalePrice * line.qty) : null;
         const retailAmount = product?.retailPrice === null || !product
@@ -6255,7 +6264,7 @@ function buildSellInStoreOptions({
             (product?.name ?? "").toLowerCase().includes(normalizedSearch)
           );
         })
-        .map((line) => getStoreNameFromMemo(line.memo, stores)),
+        .map((line) => getOrderStoreName(order, stores)),
     );
 
   return Array.from(new Set(orderStoreNames)).sort((a, b) => a.localeCompare(b, "ja"));
@@ -6288,7 +6297,7 @@ function countSellInOrders({
     }
 
     return order.lines.some((line) => {
-      const storeName = getStoreNameFromOrderLine(line, stores);
+      const storeName = getOrderStoreName(order, stores);
       const product = productsByKey.get(`${order.clientId}:${line.jan}`);
 
       if (storeFilter !== "all" && storeName !== storeFilter) {
@@ -6305,157 +6314,6 @@ function countSellInOrders({
       );
     });
   }).length;
-}
-
-function getStoreNameFromOrderLine(line: Order["lines"][number], stores: Store[]) {
-  return getStoreNameFromMemo(line.memo, stores);
-}
-
-function extractUnknownStoreCandidates(orders: Order[], stores: Store[]) {
-  const candidates = orders.flatMap((order) =>
-    order.lines
-      .map((line) => normalizeStoreName(line.memo))
-      .filter((candidate) => isUnknownStoreCandidate(candidate, stores)),
-  );
-
-  return Array.from(new Set(candidates));
-}
-
-function isUnknownStoreCandidate(candidate: string, stores: Store[]) {
-  if (!candidate) {
-    return false;
-  }
-
-  if (getDefaultStoreNameFromMemo(candidate)) {
-    return false;
-  }
-
-  const matchingStores = mergeStoreChains(defaultStoreChains, stores);
-  return matchingStores.every((store) => getStoreMatchScore(candidate, store) === 0);
-}
-
-function getStoreNameFromMemo(memo: string, stores: Store[]) {
-  const memoStoreName = normalizeStoreName(memo);
-
-  if (!memoStoreName) {
-    return "店舗不明";
-  }
-
-  const defaultStoreName = getDefaultStoreNameFromMemo(memoStoreName);
-  if (defaultStoreName) {
-    return defaultStoreName;
-  }
-
-  const matchingStores = mergeStoreChains(defaultStoreChains, stores);
-  const matchedStore = matchingStores
-    .map((store) => ({
-      store,
-      score: getStoreMatchScore(memoStoreName, store),
-    }))
-    .filter((match) => match.score > 0)
-    .sort((a, b) => b.score - a.score)[0]?.store;
-
-  return matchedStore?.name ?? memoStoreName;
-}
-
-function getDefaultStoreNameFromMemo(memoStoreName: string) {
-  const memo = memoStoreName
-    .toLowerCase()
-    .replaceAll(" ", "")
-    .replaceAll("　", "")
-    .replaceAll("*", "")
-    .replaceAll("＊", "");
-
-  if (memo.includes("ロフト") || memo.includes("loft")) {
-    return "ロフト";
-  }
-
-  if (memo.includes("ハンズ") || memo.includes("tokyuhands") || memo.includes("hands")) {
-    return "ハンズ";
-  }
-
-  if (memo.includes("アインズ") || memo.includes("ainz")) {
-    return "アインズ";
-  }
-
-  if (memo.includes("イナイミモザ") || memo.includes("ミモザ")) {
-    return "ミモザ";
-  }
-
-  return null;
-}
-
-function mergeStoreChains(defaultStores: Store[], stores: Store[]) {
-  const mergedStores: Store[] = [];
-
-  defaultStores.forEach((store) => {
-    mergedStores.push({
-      ...store,
-      aliases: Array.from(new Set([...store.aliases, store.name])),
-    });
-  });
-
-  stores.forEach((store) => {
-    const existingIndex = mergedStores.findIndex((candidate) => storesRepresentSameChain(candidate, store));
-
-    if (existingIndex === -1) {
-      mergedStores.push({
-        ...store,
-        aliases: Array.from(new Set([...store.aliases, store.name])),
-      });
-      return;
-    }
-
-    const existing = mergedStores[existingIndex];
-    mergedStores[existingIndex] = {
-      ...existing,
-      aliases: Array.from(new Set([...existing.aliases, existing.name, store.name, ...store.aliases])),
-    };
-  });
-
-  return mergedStores;
-}
-
-function storesRepresentSameChain(a: Store, b: Store) {
-  const aCandidates = [a.name, ...a.aliases].map(normalizeStoreMatchText).filter(Boolean);
-  const bCandidates = [b.name, ...b.aliases].map(normalizeStoreMatchText).filter(Boolean);
-
-  return aCandidates.some((aCandidate) => bCandidates.some((bCandidate) => aCandidate === bCandidate));
-}
-
-function normalizeStoreName(value: string) {
-  return value
-    .replace(/^入荷先[:：]?/, "")
-    .replace(/^店舗[:：]?/, "")
-    .replace(/^店名[:：]?/, "")
-    .replace(/^\*+/, "")
-    .replace(/\s+/g, " ")
-    .trim();
-}
-
-function normalizeStoreMatchText(value: string) {
-  return normalizeStoreName(value)
-    .toLowerCase()
-    .replace(/[\\s　・･\\/／\\-ー‐‑‒–—―_,，、.．()（）［\]\\[【】]/g, "");
-}
-
-function getStoreMatchScore(memoStoreName: string, store: Store) {
-  const memo = normalizeStoreMatchText(memoStoreName);
-  const candidates = [store.name, ...store.aliases]
-    .map((alias) => normalizeStoreMatchText(alias))
-    .filter(Boolean);
-
-  return candidates.reduce((score, candidate) => {
-    if (memo === candidate) {
-      return Math.max(score, candidate.length + 1000);
-    }
-
-    if (memo.includes(candidate)) {
-      return Math.max(score, candidate.length);
-    }
-
-    return score;
-  }, 0);
 }
 
 function buildSellInKey(date: string, storeName: string, jan: string) {
@@ -6670,6 +6528,7 @@ function normalizeMonthValue(value: string) {
 
 function OrderCard({
   order,
+  storeName,
   products,
   isSaving,
   hasExportedCsv,
@@ -6681,6 +6540,7 @@ function OrderCard({
   onUpdateArrivalDueDate,
 }: {
   order: Order;
+  storeName: string;
   products: Product[];
   isSaving: boolean;
   hasExportedCsv: boolean;
@@ -6783,6 +6643,7 @@ function OrderCard({
             <TableRow>
               <TableHead>JAN</TableHead>
               <TableHead>商品名</TableHead>
+              <TableHead>店舗</TableHead>
               <TableHead>COOOLaコード</TableHead>
               <TableHead>数量</TableHead>
               <TableHead>単価</TableHead>
@@ -6805,6 +6666,7 @@ function OrderCard({
                     {line.jan}
                   </TableCell>
                   <TableCell>{product?.name ?? "未登録"}</TableCell>
+                  <TableCell>{storeName === "店舗不明" ? "-" : storeName}</TableCell>
                   <TableCell>{product?.cooolaCode ?? "-"}</TableCell>
                   <TableCell>{line.qty}</TableCell>
                   <TableCell>
@@ -7019,15 +6881,27 @@ function buildImportBatch(
   };
 }
 
-function mergeImportedOrders(current: Order[], importedOrders: Order[]) {
-  const importedKeys = new Set(
-    importedOrders.map((order) => `${order.clientId}:${order.supplierId}:${order.orderNo}`),
-  );
+function buildOrderMergeKey(order: Pick<Order, "clientId" | "supplierId" | "orderNo">) {
+  return `${order.clientId}:${order.supplierId}:${order.orderNo}`;
+}
 
-  return [
-    ...current.filter((order) => !importedKeys.has(`${order.clientId}:${order.supplierId}:${order.orderNo}`)),
+function dedupeOrdersByKey(orders: Order[]) {
+  const merged = new Map<string, Order>();
+
+  orders.forEach((order) => {
+    merged.set(buildOrderMergeKey(order), order);
+  });
+
+  return Array.from(merged.values());
+}
+
+function mergeImportedOrders(current: Order[], importedOrders: Order[]) {
+  const importedKeys = new Set(importedOrders.map((order) => buildOrderMergeKey(order)));
+
+  return dedupeOrdersByKey([
+    ...current.filter((order) => !importedKeys.has(buildOrderMergeKey(order))),
     ...importedOrders,
-  ];
+  ]);
 }
 
 function applySavedOrderIds(orders: Order[], orderIds?: Record<string, string>) {

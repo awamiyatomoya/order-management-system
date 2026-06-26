@@ -281,6 +281,7 @@ function buildOrder(params: {
     status: "imported",
     sourceFile: params.sourceFile,
     importedAt: params.importedAt,
+    storeName: "",
     lines: params.rows.map((row, index) => ({
       id: createId(),
       lineNo: index + 1,
