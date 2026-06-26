@@ -1832,13 +1832,13 @@ export function OrderWorkbench({
     try {
       const { destinations, errors } = await parseDeliveryDestinationSpreadsheet(file);
 
-      if (errors.length > 0) {
-        showImportErrorPopup(errors, "配送先一覧を登録できませんでした。");
-        setDeliveryDestinationNotice("配送先一覧の内容に不足があります。");
-        return;
-      }
-
       if (destinations.length === 0) {
+        if (errors.length > 0) {
+          showImportErrorPopup(errors, "配送先一覧を登録できませんでした。");
+          setDeliveryDestinationNotice("配送先一覧の内容に不足があります。");
+          return;
+        }
+
         const message = "登録できる配送先がありませんでした。";
         showImportErrorPopup([{ row: 0, field: "file", message }], message);
         setDeliveryDestinationNotice(message);
@@ -1869,7 +1869,12 @@ export function OrderWorkbench({
         ...destinations,
       ]);
       setDeliveryDestinationPage(0);
-      setDeliveryDestinationNotice(`${destinations.length}件の配送先マスタを一括登録しました。`);
+      const skippedRows = errors.map((error) => `${error.row}行目`).join("、");
+      const noticeMessage =
+        errors.length > 0
+          ? `${destinations.length}件の配送先マスタを登録しました。${errors.length}件は情報不足のためスキップしました（${skippedRows}）。`
+          : `${destinations.length}件の配送先マスタを一括登録しました。`;
+      setDeliveryDestinationNotice(noticeMessage);
     } catch (error) {
       const message = getErrorMessage(error);
       showImportErrorPopup([{ row: 0, field: "file", message }], "配送先一覧を読み込めませんでした。");

@@ -52,10 +52,8 @@ export function parseArataDeliveryWorkbook(workbook: XLSX.WorkBook) {
       currentBranch = branch;
     }
 
-    const centerName = normalizeCenterName(stringCell(row[1]));
-    const postalCode = normalizePostalCode(stringCell(row[2]));
-    const address1 = normalizeAddress(stringCell(row[3]));
-    const tel = parseArataTel(stringCell(row[4]));
+    const parsedRow = parseArataDeliveryRow(row);
+    const { centerName, postalCode, address1, tel } = parsedRow;
 
     if (!centerName && !address1) {
       continue;
@@ -68,7 +66,7 @@ export function parseArataDeliveryWorkbook(workbook: XLSX.WorkBook) {
         errors.push({
           row: rowNumber,
           field: "deliveryDestination",
-          message: "納品拠点の拠点名・郵便番号・住所・TELが不足しています。",
+          message: "納品拠点の拠点名・郵便番号・住所・TELが不足しているためスキップしました。",
         });
       }
       continue;
@@ -101,6 +99,43 @@ export function parseArataDeliveryWorkbook(workbook: XLSX.WorkBook) {
     destinations: dedupeDestinations(destinations),
     errors,
   };
+}
+
+function parseArataDeliveryRow(row: unknown[]) {
+  let centerName = normalizeCenterName(stringCell(row[1]));
+  let postalCode = normalizePostalCode(stringCell(row[2]));
+  let address1 = normalizeAddress(stringCell(row[3]));
+  let tel = parseArataTel(stringCell(row[4]));
+
+  const rightName = normalizeCenterName(stringCell(row[5]));
+  const rightPostal = normalizePostalCode(stringCell(row[6]));
+  const rightAddress = normalizeAddress(stringCell(row[7]));
+  const rightTel = parseArataTel(stringCell(row[8]));
+
+  if (centerName && !isArataOrderOfficeName(centerName) && !isArataOrderOfficeName(rightName)) {
+    if (!postalCode && rightPostal) {
+      postalCode = rightPostal;
+    }
+
+    if (!address1 && rightAddress) {
+      address1 = rightAddress;
+    }
+
+    if (!tel && rightTel) {
+      tel = rightTel;
+    }
+  }
+
+  return {
+    centerName,
+    postalCode,
+    address1,
+    tel,
+  };
+}
+
+function isArataOrderOfficeName(name: string) {
+  return /発注管理課|発注業務|仕入業務課|業務本部/.test(name);
 }
 
 function buildArataDestinationCode(
@@ -220,6 +255,10 @@ export function parseArataTel(value: string) {
   const digits = matched.replace(/\D/g, "");
 
   if (digits.length === 10) {
+    if (/^0\d{3}/.test(digits) && ["0"].includes(digits[2])) {
+      return `${digits.slice(0, 4)}-${digits.slice(4, 6)}-${digits.slice(6)}`;
+    }
+
     return `${digits.slice(0, 3)}-${digits.slice(3, 6)}-${digits.slice(6)}`;
   }
 
