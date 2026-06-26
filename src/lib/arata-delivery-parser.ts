@@ -255,7 +255,7 @@ export function parseArataTel(value: string) {
   const digits = matched.replace(/\D/g, "");
 
   if (digits.length === 10) {
-    if (/^0\d{3}/.test(digits) && ["0"].includes(digits[2])) {
+    if (/^04/.test(digits)) {
       return `${digits.slice(0, 4)}-${digits.slice(4, 6)}-${digits.slice(6)}`;
     }
 
