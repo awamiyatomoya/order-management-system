@@ -1,5 +1,6 @@
 import {
   buildDeliveryAddress,
+  extractDeliveryDestinationCodes,
   type DeliveryDestination,
   findDeliveryDestination,
 } from "./delivery-destination-master";
@@ -113,7 +114,7 @@ function extractMetadata(
       /電話番号\s*[:：]?\s*([0-9\-()]+)/,
       /TEL\s*[:：]?\s*([0-9\-()]+)/i,
     ]) || extractTelAfterLabel(lines, ["お届先TEL", "お届け先TEL", "TEL", "電話番号"]);
-  const shipToCode = extractDeliveryDestinationCode(lines);
+  const shipToCode = extractDeliveryDestinationCode(lines, deliveryDestinations);
   const deliveryDestination = findDeliveryDestination({
     code: shipToCode,
     text,
@@ -522,27 +523,22 @@ function extractTelAfterLabel(lines: string[], labels: string[]) {
   return "";
 }
 
-function extractDeliveryDestinationCode(lines: string[]) {
-  const index = lines.findIndex((line) =>
-    ["お届先", "お届け先", "配送先", "納品先"].some((label) => line.includes(label)),
-  );
-  const searchLines = index === -1 ? lines : lines.slice(index + 1, index + 8);
+function extractDeliveryDestinationCode(lines: string[], destinations?: DeliveryDestination[]) {
+  const codes = extractDeliveryDestinationCodes(lines.join("\n"), destinations);
 
-  return searchLines
-    .map((line) => line.match(/\d{5,}\p{Letter}?/iu)?.[0] ?? "")
-    .find(Boolean) ?? "";
+  return codes[0] ?? "";
 }
 
 function extractMemo(lines: string[]) {
   const asteriskValue = lines.find((line) => /^\*[^\s]+/.test(line.trim()))?.trim() ?? "";
 
-  if (asteriskValue) {
+  if (asteriskValue && !isLikelyNonStoreMemo(asteriskValue)) {
     return cleanupValue(asteriskValue.normalize("NFKC"));
   }
 
   const summaryValue = extractBlockAfterLabel(lines, ["摘要"], ["金額合計", "受付日時"]);
 
-  if (summaryValue) {
+  if (summaryValue && !isLikelyNonStoreMemo(summaryValue)) {
     return cleanupValue(summaryValue.normalize("NFKC"));
   }
 
@@ -555,12 +551,34 @@ function extractMemo(lines: string[]) {
       ["金額合計", "受付日時"],
     );
 
-    if (memoValue) {
+    if (memoValue && !isLikelyNonStoreMemo(memoValue)) {
       return cleanupValue(memoValue.normalize("NFKC"));
     }
   }
 
   return "";
+}
+
+function isLikelyNonStoreMemo(value: string) {
+  const normalized = value
+    .normalize("NFKC")
+    .replace(/\s+/g, "")
+    .toUpperCase();
+
+  if (!normalized) {
+    return true;
+  }
+
+  if (
+    normalized.includes("キンガクゴウケイ") ||
+    normalized.includes("金額合計") ||
+    normalized.includes("ゴウケイ") ||
+    normalized.includes("受付日時")
+  ) {
+    return true;
+  }
+
+  return /^[¥￥]?[\d,./]+$/.test(normalized);
 }
 
 function isStandaloneLabelLine(line: string, label: string) {

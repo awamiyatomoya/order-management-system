@@ -262,16 +262,52 @@ export const deliveryDestinations: DeliveryDestination[] = [
   }
 ];
 
+export function extractDeliveryDestinationCodes(
+  text: string,
+  destinations: DeliveryDestination[] = deliveryDestinations,
+) {
+  const codes = new Set<string>();
+  const lines = text.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+  const knownCodes = destinations
+    .map((destination) => destination.code)
+    .sort((left, right) => right.length - left.length);
+
+  for (const line of lines) {
+    const normalizedLine = normalizeCode(line);
+
+    for (const code of knownCodes) {
+      if (line === code || normalizedLine === normalizeCode(code)) {
+        codes.add(code);
+        break;
+      }
+    }
+  }
+
+  return Array.from(codes).sort((left, right) => right.length - left.length);
+}
+
 export function findDeliveryDestination(params: {
   code?: string;
   text?: string;
   destinations?: DeliveryDestination[];
 }) {
-  const normalizedCode = normalizeCode(params.code ?? "");
   const normalizedText = normalizeText(params.text ?? "");
   const destinationsBySpecificCode = [...(params.destinations ?? deliveryDestinations)].sort(
     (a, b) => normalizeCode(b.code).length - normalizeCode(a.code).length,
   );
+  const codesFromText = extractDeliveryDestinationCodes(params.text ?? "", params.destinations ?? deliveryDestinations);
+
+  for (const code of codesFromText) {
+    const exactMatch = destinationsBySpecificCode.find(
+      (destination) => normalizeCode(destination.code) === normalizeCode(code),
+    );
+
+    if (exactMatch) {
+      return exactMatch;
+    }
+  }
+
+  const normalizedCode = normalizeCode(params.code ?? "");
 
   if (normalizedCode) {
     const exactMatch = destinationsBySpecificCode.find(
@@ -283,15 +319,47 @@ export function findDeliveryDestination(params: {
     }
   }
 
+  const postalCode = params.text?.match(/\d{3}-\d{4}/)?.[0];
+
+  if (postalCode) {
+    const postalMatch = destinationsBySpecificCode.find((destination) => destination.postalCode === postalCode);
+
+    if (postalMatch) {
+      return postalMatch;
+    }
+  }
+
+  const tel = params.text?.match(/0\d{1,4}-\d{1,4}-\d{3,4}/)?.[0];
+
+  if (tel) {
+    const telMatch = destinationsBySpecificCode.find((destination) => destination.tel === tel);
+
+    if (telMatch) {
+      return telMatch;
+    }
+  }
+
   return destinationsBySpecificCode.find((destination) => {
     const destinationCode = normalizeCode(destination.code);
 
-    if (normalizedText.includes(destinationCode)) {
+    if (destinationCode.length > 6 && normalizedText.includes(destinationCode)) {
       return true;
     }
 
-    return destination.aliases.some((alias) => normalizedText.includes(normalizeText(alias)));
+    return destination.aliases.some((alias) => {
+      const normalizedAlias = normalizeText(alias);
+
+      if (isGenericDeliveryAlias(normalizedAlias)) {
+        return false;
+      }
+
+      return normalizedText.includes(normalizedAlias);
+    });
   });
+}
+
+function isGenericDeliveryAlias(alias: string) {
+  return ["株式会社大山", "株式会社オオヤマ", "オオヤマ", "大山"].includes(alias);
 }
 
 export function buildDeliveryAddress(destination: DeliveryDestination) {

@@ -73,7 +73,7 @@ export function getStoreNameFromMemo(memo: string, stores: Store[]) {
     .filter((match) => match.score > 0)
     .sort((a, b) => b.score - a.score)[0]?.store;
 
-  return matchedStore?.name ?? memoStoreName;
+  return matchedStore?.name ?? "店舗不明";
 }
 
 export function isLoftSeriesIntroductionSheet(
