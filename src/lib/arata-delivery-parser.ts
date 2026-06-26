@@ -73,7 +73,7 @@ export function parseArataDeliveryWorkbook(workbook: XLSX.WorkBook) {
     }
 
     const displayName = currentBranch ? `${currentBranch} ${centerName}` : centerName;
-    const code = buildArataDestinationCode(postalCode, centerName, usedCodes);
+    const code = buildArataDestinationCode(postalCode, usedCodes);
     const aliases = buildArataAliases({
       branchName: currentBranch,
       centerName,
@@ -138,25 +138,15 @@ function isArataOrderOfficeName(name: string) {
   return /発注管理課|発注業務|仕入業務課|業務本部/.test(name);
 }
 
-function buildArataDestinationCode(
-  postalCode: string,
-  centerName: string,
-  usedCodes: Map<string, number>,
-) {
-  const baseCode = postalCode;
-  const count = usedCodes.get(baseCode) ?? 0;
-  usedCodes.set(baseCode, count + 1);
+function buildArataDestinationCode(postalCode: string, usedCodes: Map<string, number>) {
+  const count = usedCodes.get(postalCode) ?? 0;
+  usedCodes.set(postalCode, count + 1);
 
   if (count === 0) {
-    return baseCode;
+    return postalCode;
   }
 
-  const slug = centerName
-    .normalize("NFKC")
-    .replace(/[^\p{Letter}\p{Number}]/gu, "")
-    .slice(0, 8);
-
-  return `${baseCode}-${slug || count + 1}`;
+  return `${postalCode}-${count + 1}`;
 }
 
 function buildArataAliases(params: {
@@ -252,6 +242,17 @@ export function parseArataTel(value: string) {
     return "";
   }
 
+  const hyphenated = matched.replace(/\u2010/g, "-");
+  const parts = hyphenated.split("-");
+
+  if (parts.length === 3) {
+    const digits = parts.join("").replace(/\D/g, "");
+
+    if (digits.length === 10 || digits.length === 11) {
+      return parts.map((part) => part.replace(/\D/g, "")).join("-");
+    }
+  }
+
   const digits = matched.replace(/\D/g, "");
 
   if (digits.length === 10) {
@@ -266,5 +267,5 @@ export function parseArataTel(value: string) {
     return `${digits.slice(0, 3)}-${digits.slice(3, 7)}-${digits.slice(7)}`;
   }
 
-  return matched;
+  return hyphenated;
 }
