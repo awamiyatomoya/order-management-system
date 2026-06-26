@@ -92,8 +92,9 @@ function tryParseRowListSheet(sheet: XLSX.WorkSheet): ParsedStoreIntroduction {
 
 function tryParseFlagListSheet(sheet: XLSX.WorkSheet, workbook: XLSX.WorkBook): ParsedStoreIntroduction {
   const rows = sheetToRows(sheet);
-  const jan = findWorkbookJan(workbook);
-  const productName = findWorkbookProductName(workbook);
+  const workbookProduct = findWorkbookJanAndProduct(workbook);
+  const jan = workbookProduct.jan;
+  const productName = workbookProduct.productName;
   const entries: ParsedStoreIntroductionEntry[] = [];
 
   for (const row of rows) {
@@ -137,6 +138,137 @@ function tryParseFlagListSheet(sheet: XLSX.WorkSheet, workbook: XLSX.WorkBook): 
     formatKey: "flag-list",
     entries: dedupeEntries(entries),
   };
+}
+
+function findWorkbookJanAndProduct(workbook: XLSX.WorkBook) {
+  let best: { jan: string; productName: string; score: number } | null = null;
+
+  for (const sheetName of workbook.SheetNames) {
+    const sheet = workbook.Sheets[sheetName];
+    if (!sheet) {
+      continue;
+    }
+
+    const rows = sheetToRows(sheet);
+    const headerIndex = rows.findIndex((row) => {
+      const normalized = row.map(normalizeHeaderCell);
+      return normalized.some((cell) =>
+        ["メーカjanコード", "janコード", "単品コード", "単品名称"].includes(cell),
+      );
+    });
+
+    if (headerIndex === -1) {
+      continue;
+    }
+
+    const header = rows[headerIndex].map(normalizeHeaderCell);
+    const janIndex = findColumnIndex(header, ["メーカjanコード", "janコード"]);
+    const altJanIndex = findColumnIndex(header, ["単品コード"]);
+    const productNameIndex = findColumnIndex(header, ["単品名称", "商品名称", "商品名"]);
+
+    for (const row of rows.slice(headerIndex + 1, headerIndex + 25)) {
+      const jan = extractJan(row[janIndex] ?? "") || extractJan(row[altJanIndex] ?? "");
+      const productName = stringCell(row[productNameIndex]);
+
+      if (!jan) {
+        continue;
+      }
+
+      const score = scoreWorkbookProductRow(productName);
+
+      if (!best || score > best.score) {
+        best = { jan, productName, score };
+      }
+    }
+  }
+
+  if (best) {
+    return { jan: best.jan, productName: best.productName };
+  }
+
+  return {
+    jan: findWorkbookJan(workbook),
+    productName: findWorkbookProductName(workbook),
+  };
+}
+
+function scoreWorkbookProductRow(productName: string) {
+  const normalized = normalizeProductMatchText(productName);
+
+  if (!normalized) {
+    return 0;
+  }
+
+  let score = normalized.length;
+
+  if (normalized === "エシエンス") {
+    score -= 50;
+  }
+
+  if (normalized.includes("ダーマインショット") || normalized.includes("ダーマ")) {
+    score += 100;
+  }
+
+  return score;
+}
+
+export function normalizeProductMatchText(value: string) {
+  return value
+    .normalize("NFKC")
+    .toLowerCase()
+    .replace(/\s+/g, "")
+    .replace(/[×x]/g, "")
+    .replace(/[ｰ\-ー‐]/g, "");
+}
+
+export function resolveIntroductionProduct(
+  parsedJan: string,
+  productName: string,
+  clientId: string,
+  products: { clientId: string; jan: string; name: string }[],
+) {
+  const normalizedExcel = normalizeProductMatchText(productName);
+  const clientProducts = products.filter((product) => product.clientId === clientId);
+
+  const matchedProduct = clientProducts
+    .map((product) => ({
+      product,
+      score: getIntroductionProductMatchScore(normalizedExcel, normalizeProductMatchText(product.name)),
+    }))
+    .filter((match) => match.score > 0)
+    .sort((a, b) => b.score - a.score)[0]?.product;
+
+  if (matchedProduct) {
+    return {
+      jan: matchedProduct.jan,
+      productName: matchedProduct.name,
+    };
+  }
+
+  return {
+    jan: parsedJan,
+    productName: productName.trim() || parsedJan,
+  };
+}
+
+function getIntroductionProductMatchScore(excelName: string, masterName: string) {
+  if (!excelName || !masterName) {
+    return 0;
+  }
+
+  if (excelName === masterName) {
+    return masterName.length + 1000;
+  }
+
+  if (excelName.includes(masterName) || masterName.includes(excelName)) {
+    return Math.min(excelName.length, masterName.length) + 100;
+  }
+
+  if (masterName.includes("ダーマインショット") && excelName.includes("ダーマインショット")) {
+    return 500;
+  }
+
+  return 0;
 }
 
 function findWorkbookJan(workbook: XLSX.WorkBook) {

@@ -20,6 +20,13 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import {
+  resolveIntroductionProduct,
+} from "@/lib/store-introduction-parsers";
+import {
+  getMatchedStoreNameForIntroduction,
+  isLoftSeriesIntroductionSheet,
+} from "@/lib/store-matching";
+import {
   importStoreIntroductionWorkbook,
   readStoreIntroductionData,
 } from "@/lib/supabase/store-introduction-actions";
@@ -111,12 +118,37 @@ export function StoreIntroductionPanel({
     };
   }, [clientId]);
 
+  function getResolvedProduct(entry: StoreIntroductionEntry) {
+    return resolveIntroductionProduct(entry.jan, entry.productName, clientId, products);
+  }
+
+  function getEntryProductName(entry: StoreIntroductionEntry) {
+    return getResolvedProduct(entry).productName;
+  }
+
+  function getEntryJan(entry: StoreIntroductionEntry) {
+    return getResolvedProduct(entry).jan;
+  }
+
   const activeImport = imports.find((item) => item.id === selectedImportId) ?? imports[0];
+  const isLoftSeriesSheet = useMemo(() => {
+    if (!activeImport) {
+      return false;
+    }
+
+    const importEntries = entries.filter((entry) => entry.importId === activeImport.id);
+
+    return isLoftSeriesIntroductionSheet(activeImport.formatKey, importEntries);
+  }, [activeImport, entries]);
+  const showAddressColumn = useMemo(() => {
+    const importEntries = entries.filter((entry) => entry.importId === activeImport?.id);
+    return importEntries.some((entry) => entry.address.trim());
+  }, [activeImport?.id, entries]);
   const visibleEntries = useMemo(() => {
     const importEntries = entries.filter((entry) => entry.importId === activeImport?.id);
 
     return importEntries.filter((entry) => {
-      if (selectedJan !== "all" && entry.jan !== selectedJan) {
+      if (selectedJan !== "all" && getEntryJan(entry) !== selectedJan) {
         return false;
       }
 
@@ -126,26 +158,30 @@ export function StoreIntroductionPanel({
 
       return true;
     });
-  }, [activeImport?.id, entries, selectedJan, showIntroducedOnly]);
+  }, [activeImport?.id, clientId, entries, products, selectedJan, showIntroducedOnly]);
 
   const janOptions = useMemo(() => {
     const jans = Array.from(
-      new Set(entries.filter((entry) => entry.importId === activeImport?.id).map((entry) => entry.jan)),
+      new Set(
+        entries
+          .filter((entry) => entry.importId === activeImport?.id)
+          .map((entry) => getEntryJan(entry)),
+      ),
     );
 
     return jans.sort();
-  }, [activeImport?.id, entries]);
+  }, [activeImport?.id, clientId, entries, products]);
 
   const summary = useMemo(() => {
     const importEntries = entries.filter((entry) => entry.importId === activeImport?.id);
     const filtered =
-      selectedJan === "all" ? importEntries : importEntries.filter((entry) => entry.jan === selectedJan);
+      selectedJan === "all" ? importEntries : importEntries.filter((entry) => getEntryJan(entry) === selectedJan);
 
     return {
       total: filtered.length,
       introduced: filtered.filter((entry) => entry.isIntroduced).length,
     };
-  }, [activeImport?.id, entries, selectedJan]);
+  }, [activeImport?.id, clientId, entries, products, selectedJan]);
 
   async function handleFileChange(file: File | null) {
     if (!file || !clientId) {
@@ -160,6 +196,7 @@ export function StoreIntroductionPanel({
       formData.append("clientId", clientId);
       formData.append("file", file);
       formData.append("storesJson", JSON.stringify(stores));
+      formData.append("productsJson", JSON.stringify(products));
 
       const result = await importStoreIntroductionWorkbook(formData);
 
@@ -184,9 +221,27 @@ export function StoreIntroductionPanel({
     }
   }
 
-  function getProductLabel(jan: string) {
-    const product = products.find((item) => item.clientId === clientId && item.jan === jan);
-    return product ? `${product.name} (${jan})` : jan;
+  function getEntryMatchedStoreName(entry: StoreIntroductionEntry) {
+    if (!activeImport) {
+      return entry.matchedStoreName;
+    }
+
+    return getMatchedStoreNameForIntroduction(
+      entry,
+      activeImport.formatKey,
+      stores,
+      isLoftSeriesSheet,
+    );
+  }
+
+  function getJanFilterLabel(jan: string) {
+    const entry = entries.find((item) => item.importId === activeImport?.id && getEntryJan(item) === jan);
+    if (!entry) {
+      return jan;
+    }
+
+    const productName = getEntryProductName(entry);
+    return productName === jan ? jan : `${productName} (${jan})`;
   }
 
   return (
@@ -237,7 +292,7 @@ export function StoreIntroductionPanel({
                 <SelectItem value="all">すべてのJAN</SelectItem>
                 {janOptions.map((jan) => (
                   <SelectItem key={jan} value={jan}>
-                    {getProductLabel(jan)}
+                    {getJanFilterLabel(jan)}
                   </SelectItem>
                 ))}
               </SelectContent>
@@ -274,37 +329,39 @@ export function StoreIntroductionPanel({
               {new Date(activeImport.importedAt).toLocaleString("ja-JP")}
             </p>
             <div className="overflow-x-auto">
-              <Table className="min-w-[920px]">
+              <Table className="min-w-[720px]">
                 <TableHeader>
                   <TableRow>
                     <TableHead>JAN</TableHead>
                     <TableHead>商品名</TableHead>
-                    <TableHead>店舗コード</TableHead>
                     <TableHead>店舗名</TableHead>
                     <TableHead>マスタ照合</TableHead>
-                    <TableHead>住所</TableHead>
-                    <TableHead>導入</TableHead>
+                    {showAddressColumn ? <TableHead>住所</TableHead> : null}
                   </TableRow>
                 </TableHeader>
                 <TableBody>
                   {visibleEntries.length === 0 ? (
                     <TableRow>
-                      <TableCell colSpan={7} className="text-muted-foreground">
+                      <TableCell colSpan={showAddressColumn ? 5 : 4} className="text-muted-foreground">
                         表示対象の店舗がありません。
                       </TableCell>
                     </TableRow>
                   ) : (
-                    visibleEntries.map((entry) => (
-                      <TableRow key={entry.id}>
-                        <TableCell className="font-mono text-xs">{entry.jan}</TableCell>
-                        <TableCell>{getProductLabel(entry.jan)}</TableCell>
-                        <TableCell>{entry.storeCode || "-"}</TableCell>
-                        <TableCell>{entry.storeName}</TableCell>
-                        <TableCell>{entry.matchedStoreName === "店舗不明" ? "-" : entry.matchedStoreName}</TableCell>
-                        <TableCell>{entry.address || "-"}</TableCell>
-                        <TableCell>{entry.isIntroduced ? "導入" : "非導入"}</TableCell>
-                      </TableRow>
-                    ))
+                    visibleEntries.map((entry) => {
+                      const matchedStoreName = getEntryMatchedStoreName(entry);
+
+                      return (
+                        <TableRow key={entry.id}>
+                          <TableCell className="font-mono text-xs">{getEntryJan(entry)}</TableCell>
+                          <TableCell>{getEntryProductName(entry)}</TableCell>
+                          <TableCell>{entry.storeName}</TableCell>
+                          <TableCell>
+                            {matchedStoreName === "店舗不明" ? "-" : matchedStoreName}
+                          </TableCell>
+                          {showAddressColumn ? <TableCell>{entry.address}</TableCell> : null}
+                        </TableRow>
+                      );
+                    })
                   )}
                 </TableBody>
               </Table>

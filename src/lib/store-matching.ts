@@ -1,4 +1,4 @@
-import type { Order, Store } from "@/lib/types";
+import type { Order, Store, StoreIntroductionFormatKey } from "@/lib/types";
 
 export const defaultStoreChains: Store[] = [
   {
@@ -74,6 +74,50 @@ export function getStoreNameFromMemo(memo: string, stores: Store[]) {
     .sort((a, b) => b.score - a.score)[0]?.store;
 
   return matchedStore?.name ?? memoStoreName;
+}
+
+export function isLoftSeriesIntroductionSheet(
+  formatKey: StoreIntroductionFormatKey,
+  entries: { storeName: string; storeCode: string }[],
+) {
+  if (formatKey !== "flag-list" || entries.length < 5) {
+    return false;
+  }
+
+  const loftNameMatches = entries.filter((entry) => {
+    const normalized = normalizeStoreMatchText(entry.storeName);
+    return normalized.includes("ロフト") || normalized.includes("loft");
+  }).length;
+
+  if (loftNameMatches >= 3) {
+    return true;
+  }
+
+  const loftCodeMatches = entries.filter((entry) => isLoftSeriesStoreCode(entry.storeCode)).length;
+
+  return loftCodeMatches >= Math.min(10, Math.ceil(entries.length * 0.2));
+}
+
+export function getMatchedStoreNameForIntroduction(
+  entry: { storeName: string; storeCode: string },
+  formatKey: StoreIntroductionFormatKey,
+  stores: Store[],
+  isLoftSeriesSheet: boolean,
+) {
+  if (formatKey === "flag-list" && isLoftSeriesSheet) {
+    return "ロフト";
+  }
+
+  if (formatKey === "flag-list" && isLoftSeriesStoreCode(entry.storeCode)) {
+    return "ロフト";
+  }
+
+  return getStoreNameFromMemo(entry.storeName, stores);
+}
+
+function isLoftSeriesStoreCode(storeCode: string) {
+  const normalized = storeCode.trim();
+  return /^2\d{2}$/.test(normalized) || normalized === "501";
 }
 
 export function extractUnknownStoreCandidates(orders: Order[], stores: Store[]) {

@@ -3,10 +3,14 @@
 import { revalidatePath } from "next/cache";
 import {
   parseStoreIntroductionWorkbook,
+  resolveIntroductionProduct,
   summarizeStoreIntroduction,
 } from "@/lib/store-introduction-parsers";
-import { getStoreNameFromMemo } from "@/lib/store-matching";
-import type { Store, StoreIntroductionEntry, StoreIntroductionImport } from "@/lib/types";
+import {
+  getMatchedStoreNameForIntroduction,
+  isLoftSeriesIntroductionSheet,
+} from "@/lib/store-matching";
+import type { Product, Store, StoreIntroductionEntry, StoreIntroductionImport } from "@/lib/types";
 import { createId } from "@/lib/uuid";
 import { createServerSupabaseClient, hasSupabaseServerEnv } from "./server";
 
@@ -29,13 +33,21 @@ export async function importStoreIntroductionWorkbook(
   const clientId = String(formData.get("clientId") ?? "");
   const file = formData.get("file");
   const storesJson = String(formData.get("storesJson") ?? "[]");
+  const productsJson = String(formData.get("productsJson") ?? "[]");
 
   let stores: Store[] = [];
+  let products: Product[] = [];
 
   try {
     stores = JSON.parse(storesJson) as Store[];
   } catch {
     stores = [];
+  }
+
+  try {
+    products = JSON.parse(productsJson) as Product[];
+  } catch {
+    products = [];
   }
 
   if (!clientId || !(file instanceof File) || file.size === 0) {
@@ -65,21 +77,31 @@ export async function importStoreIntroductionWorkbook(
   }
 
   const summary = summarizeStoreIntroduction(parsed.entries);
+  const isLoftSeriesSheet = isLoftSeriesIntroductionSheet(parsed.formatKey, parsed.entries);
   const importId = createId();
   const importedAt = new Date().toISOString();
-  const entries: StoreIntroductionEntry[] = parsed.entries.map((entry) => ({
-    id: createId(),
-    importId,
-    clientId,
-    jan: entry.jan,
-    productName: entry.productName,
-    storeName: entry.storeName,
-    storeCode: entry.storeCode,
-    address: entry.address,
-    postalCode: entry.postalCode,
-    isIntroduced: entry.isIntroduced,
-    matchedStoreName: getStoreNameFromMemo(entry.storeName, stores),
-  }));
+  const entries: StoreIntroductionEntry[] = parsed.entries.map((entry) => {
+    const resolvedProduct = resolveIntroductionProduct(entry.jan, entry.productName, clientId, products);
+
+    return {
+      id: createId(),
+      importId,
+      clientId,
+      jan: resolvedProduct.jan,
+      productName: resolvedProduct.productName,
+      storeName: entry.storeName,
+      storeCode: entry.storeCode,
+      address: entry.address,
+      postalCode: entry.postalCode,
+      isIntroduced: entry.isIntroduced,
+      matchedStoreName: getMatchedStoreNameForIntroduction(
+        entry,
+        parsed.formatKey,
+        stores,
+        isLoftSeriesSheet,
+      ),
+    };
+  });
 
   const importBatch: StoreIntroductionImport = {
     id: importId,
