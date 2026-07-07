@@ -628,13 +628,14 @@ export function resolveDeliveryDestination(params: {
     reviewReasons.push("センター名が複数候補と一致しました");
   }
 
-  const postalCode = extractPostalCode(searchText);
+  const postalCandidates = findDestinationsByPostalCodesInText(searchText, destinations);
 
-  if (postalCode) {
-    const postalMatches = findDestinationsByPostalCode(destinations, postalCode);
-    const postalMatch = pickBestDestinationMatch(postalMatches, searchText, params.tel);
+  if (postalCandidates.length > 0) {
+    const postalMatch = pickBestDestinationMatch(postalCandidates, searchText, params.tel);
 
     if (postalMatch.destination) {
+      const postalCode = normalizePostalCode(postalMatch.destination.postalCode);
+
       if (!isDeliveryAddressCompatible(searchText, postalMatch.destination)) {
         reviewReasons.push(
           `郵便番号 ${postalCode} は ${postalMatch.destination.name} と一致しましたが、発注書の住所とマスターの住所が一致しません`,
@@ -642,9 +643,9 @@ export function resolveDeliveryDestination(params: {
       } else {
         const reasons = [...reviewReasons];
 
-        if (postalMatches.length > 1) {
+        if (postalCandidates.length > 1) {
           reasons.push(
-            `郵便番号 ${postalCode} が複数センターと一致したため、住所・TELで ${postalMatch.destination.code} を特定しました`,
+            `郵便番号候補から ${postalMatch.destination.code} を特定しました`,
           );
         }
 
@@ -659,7 +660,7 @@ export function resolveDeliveryDestination(params: {
 
     if (postalMatch.ambiguous) {
       reviewReasons.push(
-        `郵便番号 ${postalCode} が複数センターと一致し、配送先コード・センター名・住所・TELだけでは特定できませんでした`,
+        "PDF内の郵便番号候補が複数センターと一致し、配送先コード・センター名・住所・TELだけでは特定できませんでした",
       );
     }
   }
@@ -767,7 +768,19 @@ function normalizePostalCode(value: string) {
   return `${digits.slice(0, 3)}-${digits.slice(3)}`;
 }
 
-function extractPostalCode(text: string) {
+function extractPostalCodes(text: string) {
+  const matches = text.match(/\b\d{3}-?\d{4}\b/g) ?? [];
+
+  return [...new Set(matches.map((matched) => normalizePostalCode(matched)).filter(Boolean))];
+}
+
+function extractPostalCode(text: string, preferredPostal = "") {
+  const normalizedPreferred = normalizePostalCode(preferredPostal);
+
+  if (normalizedPreferred && text.includes(normalizedPreferred)) {
+    return normalizedPreferred;
+  }
+
   const matched = text.match(/\b\d{3}-?\d{4}\b/)?.[0];
 
   if (!matched) {
@@ -801,6 +814,21 @@ function findDestinationsByPostalCode(destinations: DeliveryDestination[], posta
   return destinations.filter(
     (candidate) => normalizePostalCode(candidate.postalCode) === postalCode,
   );
+}
+
+function findDestinationsByPostalCodesInText(
+  searchText: string,
+  destinations: DeliveryDestination[],
+) {
+  const matched = new Map<string, DeliveryDestination>();
+
+  for (const postalCode of extractPostalCodes(searchText)) {
+    for (const destination of findDestinationsByPostalCode(destinations, postalCode)) {
+      matched.set(getDeliveryDestinationStorageKey(destination), destination);
+    }
+  }
+
+  return Array.from(matched.values());
 }
 
 function matchDestinationByCenterName(
@@ -954,8 +982,15 @@ export function isDeliveryAddressCompatible(
   searchText: string,
   destination: DeliveryDestination,
 ) {
-  const pdfPostal = extractPostalCode(searchText);
   const destPostal = normalizePostalCode(destination.postalCode);
+  const destCodePostal = isPostalCodeOnlyDestinationCode(destination.code)
+    ? normalizePostalCode(destination.code)
+    : "";
+  const pdfPostals = extractPostalCodes(searchText);
+  const pdfPostal =
+    (destPostal && pdfPostals.includes(destPostal) ? destPostal : "") ||
+    (destCodePostal && pdfPostals.includes(destCodePostal) ? destCodePostal : "") ||
+    extractPostalCode(searchText);
 
   if (pdfPostal && destPostal && pdfPostal !== destPostal) {
     return false;
@@ -968,6 +1003,13 @@ export function isDeliveryAddressCompatible(
     const telMatches = Boolean(tel && normalizeTelDigits(destination.tel) === tel);
 
     return score >= 5 || telMatches || hasMatchingAliasInText(searchText, destination);
+  }
+
+  if (destCodePostal && pdfPostals.includes(destCodePostal)) {
+    const tel = extractTel(searchText);
+    const telMatches = Boolean(tel && normalizeTelDigits(destination.tel) === tel);
+
+    return telMatches || hasMatchingAliasInText(searchText, destination) || score >= 5;
   }
 
   return score >= 15;

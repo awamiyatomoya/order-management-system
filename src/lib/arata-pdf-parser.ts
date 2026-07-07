@@ -84,16 +84,35 @@ export function extractArataPdfArrivalDueDate(lines: string[], orderDate = ""): 
 
 export function extractArataPdfDelivery(lines: string[]): ArataPdfDelivery {
   const shipToTel = extractArataPdfTel(lines);
+  const shipToPostalCode = extractArataPdfShipToPostalCode(lines) || extractArataPdfPostalCode(lines);
+  const postalLineIndex = lines.findIndex(
+    (line) => /住所/.test(line) && Boolean(extractArataPdfShipToPostalCode([line])),
+  );
   const postalIndex = lines.findIndex((line) => /^\d{3}-?\d{4}$/.test(cleanupArataValue(line)));
-  const shipToPostalCode =
-    postalIndex >= 0
-      ? normalizePostalCode(lines[postalIndex])
-      : extractArataPdfPostalCode(lines);
 
   let shipToAddress = "";
   let shipToName = "";
 
-  if (postalIndex > 0) {
+  if (postalLineIndex > 0) {
+    for (let index = postalLineIndex - 1; index >= Math.max(0, postalLineIndex - 3); index -= 1) {
+      const candidate = cleanupArataValue(lines[index]);
+
+      if (!candidate || isArataNoiseLine(candidate)) {
+        continue;
+      }
+
+      if (!shipToAddress && isArataPdfAddressLine(candidate)) {
+        shipToAddress = candidate;
+        continue;
+      }
+
+      if (!shipToName && /(?:アラタ|あらた|センター|倉庫|物流)/.test(candidate)) {
+        shipToName = candidate;
+      }
+    }
+  }
+
+  if (postalIndex > 0 && !shipToAddress) {
     const addressCandidate = cleanupArataValue(lines[postalIndex - 1]);
 
     if (!isArataNoiseLine(addressCandidate)) {
@@ -101,7 +120,7 @@ export function extractArataPdfDelivery(lines: string[]): ArataPdfDelivery {
     }
   }
 
-  if (postalIndex > 1) {
+  if (postalIndex > 1 && !shipToName) {
     const nameCandidate = cleanupArataValue(lines[postalIndex - 2]);
 
     if (!isArataNoiseLine(nameCandidate)) {
@@ -115,7 +134,10 @@ export function extractArataPdfDelivery(lines: string[]): ArataPdfDelivery {
   }
 
   if (!shipToName) {
-    shipToName = extractArataPdfName(lines, lines.findIndex((line) => cleanupArataValue(line) === shipToAddress));
+    shipToName = extractArataPdfName(
+      lines,
+      lines.findIndex((line) => cleanupArataValue(line) === shipToAddress),
+    );
   }
 
   return {
@@ -173,8 +195,12 @@ function extractArataPdfTel(lines: string[]) {
   return "";
 }
 
-function extractArataPdfPostalCode(lines: string[]) {
+function extractArataPdfShipToPostalCode(lines: string[]) {
   for (const line of lines) {
+    if (!/住所/.test(line)) {
+      continue;
+    }
+
     const normalized = normalizePostalCode(line);
 
     if (normalized) {
@@ -183,6 +209,35 @@ function extractArataPdfPostalCode(lines: string[]) {
   }
 
   return "";
+}
+
+function extractArataPdfPostalCode(lines: string[]) {
+  for (const line of lines) {
+    if (/ご発注先|発注元|お届先\s+\d|お届け先\s+\d/.test(line)) {
+      continue;
+    }
+
+    const normalized = normalizePostalCode(line);
+
+    if (normalized) {
+      return normalized;
+    }
+  }
+
+  return "";
+}
+
+function isArataPdfAddressLine(line: string) {
+  if (/^(?:取引区分|発注番号|着荷指定|発注日|単価|摘要)$/.test(line)) {
+    return false;
+  }
+
+  return (
+    /[都道府県]/.test(line) ||
+    /ケン.{2,}/.test(line) ||
+    (/(?:市|区|町|村|郡)/.test(line) && /\d/.test(line)) ||
+    /\d+[-－]\d+/.test(line)
+  );
 }
 
 function normalizePostalCode(value: string) {
@@ -205,16 +260,11 @@ function findArataAddressLineIndex(lines: string[]) {
   return lines.findIndex((line) => {
     const trimmed = cleanupArataValue(line);
 
-    if (!trimmed || isArataStoreCodeLine(trimmed)) {
+    if (!trimmed || isArataStoreCodeLine(trimmed) || isArataNoiseLine(trimmed)) {
       return false;
     }
 
-    return (
-      /[都道府県]/.test(trimmed) ||
-      /[市区町村郡]/.test(trimmed) ||
-      /ケン.{2,}/.test(trimmed) ||
-      /\d+[-－]\d+/.test(trimmed)
-    );
+    return isArataPdfAddressLine(trimmed);
   });
 }
 

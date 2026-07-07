@@ -937,7 +937,6 @@ export function OrderWorkbench({
     [importBatches, selectedClientId],
   );
   const pageTitle = getWorkbenchPageTitle(view);
-  const pageDescription = getWorkbenchPageDescription(view);
   const missingJans = pendingImport?.missingJans ?? [];
   const filteredOrders = useMemo(
     () =>
@@ -3035,9 +3034,7 @@ export function OrderWorkbench({
         <header className="flex flex-col gap-3">
           <div className="flex flex-col gap-2">
             <h1 className="text-4xl font-bold tracking-tight">{pageTitle}</h1>
-            <p className="max-w-3xl text-base leading-7 text-muted-foreground">
-              {pageDescription}
-            </p>
+            <WorkbenchPageIntro view={view} />
           </div>
         </header>
 
@@ -4574,7 +4571,7 @@ export function OrderWorkbench({
         ) : null}
 
         {view === "history" ? (
-        <section className="grid gap-4 xl:grid-cols-2">
+        <section className="grid grid-cols-1 gap-4 xl:grid-cols-4">
           <Panel title="取込履歴">
             {selectedImportBatches.length === 0 ? (
               <p className="text-sm text-muted-foreground">取込履歴はまだありません。</p>
@@ -4931,6 +4928,70 @@ function getWorkbenchPageDescription(view: WorkbenchView) {
   }
 
   return "発注ファイルの取り込み、CSVファイルの出力、発送、未発送の管理ができます。";
+}
+
+function WorkbenchPageIntro({ view }: { view: WorkbenchView }) {
+  const description = getWorkbenchPageDescription(view);
+
+  if (view !== "orders") {
+    return (
+      <p className="max-w-3xl text-base leading-7 text-muted-foreground">{description}</p>
+    );
+  }
+
+  return (
+    <div className="max-w-3xl space-y-2 text-base leading-7 text-muted-foreground">
+      <p>{description}</p>
+      <details className="group text-sm leading-6">
+        <summary className="inline-flex cursor-pointer list-none items-center gap-1 font-medium text-foreground hover:text-primary [&::-webkit-details-marker]:hidden">
+          <ChevronRight className="size-4 shrink-0 transition-transform group-open:rotate-90" />
+          取り込みロジック
+        </summary>
+        <div className="mt-3 space-y-3 border-l-2 border-border pl-4">
+          <p>
+            発注書PDFは画像の場合、OCRで読み取ります。配送先マスタはクライアント共通です。商品マスタだけクライアントごとに照合します。
+          </p>
+          <div>
+            <p className="font-medium text-foreground">取り込みに必要な情報</p>
+            <ul className="mt-1 list-disc space-y-1 pl-5">
+              <li>発注番号・発注日・着荷指定日</li>
+              <li>JANコードと数量（1行以上）</li>
+              <li>配送先マスタに一致する納品センター</li>
+              <li>商品マスタに登録済みのJAN（クライアント別）</li>
+            </ul>
+          </div>
+          <div>
+            <p className="font-medium text-foreground">発注書の種類</p>
+            <ul className="mt-1 list-disc space-y-1 pl-5">
+              <li>
+                <span className="text-foreground">あらた</span>
+                ：FAX発注票などの形式を自動判定し、あらたの配送先マスタだけを参照します。住所は
+                <span className="text-foreground">住所〒</span>
+                行を優先し、ご発注先の数字は郵便番号として扱いません。
+              </li>
+              <li>
+                <span className="text-foreground">大山</span>
+                ：上記以外の発注書。大山の配送先マスタを参照します。発注元の本部共通コード
+                （081701）と個別センターコードが両方ある場合、081701は配送先判定から除外します。
+              </li>
+            </ul>
+          </div>
+          <div>
+            <p className="font-medium text-foreground">配送先の照合順</p>
+            <ol className="mt-1 list-decimal space-y-1 pl-5">
+              <li>PDF内のセンターコード（お届け先欄を優先）</li>
+              <li>センター名</li>
+              <li>PDF内の郵便番号候補のうち、マスタに登録されているもの</li>
+              <li>TEL</li>
+            </ol>
+            <p className="mt-2">
+              発注書の住所はカタカナ、マスタは漢字で登録されていても問題ありません。郵便番号とTEL、または別名（OCR用カタカナ名）が一致すれば採用します。同一TELで複数センターがある場合は郵便番号で区別します。
+            </p>
+          </div>
+        </div>
+      </details>
+    </div>
+  );
 }
 
 const sidebarGroupViews: Record<string, WorkbenchView[]> = {

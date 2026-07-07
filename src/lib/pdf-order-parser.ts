@@ -14,6 +14,7 @@ import {
   type DeliveryDestinationMatchResult,
   resolveDeliveryDestination,
 } from "./delivery-destination-master";
+import { normalizeOrderNo } from "./cooola-export";
 import type { ImportError, SupplierMapping } from "./types";
 
 type ParsePdfOrderTextResult = {
@@ -106,15 +107,9 @@ function extractMetadata(
   const dates = extractDates(text);
   const warehouseValueMap = mapping.valueMaps.warehouse ?? {};
   const orderTableMetadata = extractOrderTableMetadata(lines);
-  const orderNo =
-    orderTableMetadata.orderNo ||
-    extractValue(text, [
-      /発注\s*(?:No|NO|番号|書番号)\s*[:：]?\s*([A-Z0-9][A-Z0-9\-_/]*)/i,
-      /注文\s*(?:No|NO|番号)\s*[:：]?\s*([A-Z0-9][A-Z0-9\-_/]*)/i,
-      /NO\.\s*([A-Z0-9][A-Z0-9\-_/]*)/i,
-    ]) ||
-    extractOrderNoFromHeaderRows(lines) ||
-    extractValueAfterLabel(lines, ["発注番号", "注文番号"]);
+  const orderNo = normalizeOrderNo(
+    resolveOrderNoFromLines(lines, text, orderTableMetadata.orderNo),
+  );
   const shipToName =
     extractValue(text, [
       /お届け先会社名\s*[:：]?\s*([^\n]+)/,
@@ -215,15 +210,9 @@ function extractArataMetadata(
   const pdfShipToName = arataDelivery.shipToName;
   const pdfShipToAddress = buildArataPdfShipToAddress(arataDelivery);
   const pdfShipToTel = arataDelivery.shipToTel;
-  const orderNo =
-    orderTableMetadata.orderNo ||
-    extractValue(text, [
-      /発注\s*(?:No|NO|番号|書番号)\s*[:：]?\s*([A-Z0-9][A-Z0-9\-_/]*)/i,
-      /注文\s*(?:No|NO|番号)\s*[:：]?\s*([A-Z0-9][A-Z0-9\-_/]*)/i,
-      /NO\.\s*([A-Z0-9][A-Z0-9\-_/]*)/i,
-    ]) ||
-    extractOrderNoFromHeaderRows(lines) ||
-    extractValueAfterLabel(lines, ["発注番号", "注文番号"]);
+  const orderNo = normalizeOrderNo(
+    resolveOrderNoFromLines(lines, text, orderTableMetadata.orderNo),
+  );
   const deliveryMatch = resolveDeliveryDestination({
     text: [pdfShipToName, pdfShipToAddress, pdfShipToTel, text].join("\n"),
     centerName: pdfShipToName,
@@ -542,8 +531,27 @@ function extractOrderTableMetadata(lines: string[]) {
 
 function extractOrderNoCandidate(value: string) {
   const withoutDates = value.replace(datePattern, " ");
+  const matches = withoutDates.match(/\b\d{5,10}\b/g) ?? [];
+  const orderMatches = matches.filter((matched) => matched.length <= 8);
 
-  return withoutDates.match(/\b\d{5,10}\b/)?.[0] ?? "";
+  if (orderMatches.length === 0) {
+    return "";
+  }
+
+  return orderMatches.find((matched) => matched.length === 8) ?? orderMatches[0];
+}
+
+function resolveOrderNoFromLines(lines: string[], text: string, fallbackOrderNo = "") {
+  return (
+    extractValueAfterLabel(lines, ["発注番号", "注文番号"]) ||
+    extractOrderNoFromHeaderRows(lines) ||
+    extractValue(text, [
+      /発注\s*(?:No|NO|番号|書番号)\s*[:：]?\s*([A-Z0-9][A-Z0-9\-_/]*)/i,
+      /注文\s*(?:No|NO|番号)\s*[:：]?\s*([A-Z0-9][A-Z0-9\-_/]*)/i,
+      /NO\.\s*([A-Z0-9][A-Z0-9\-_/]*)/i,
+    ]) ||
+    fallbackOrderNo
+  );
 }
 
 function extractDatesFromLinesAfterLabel(lines: string[], labels: string[]) {

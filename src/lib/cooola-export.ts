@@ -51,9 +51,7 @@ export function buildCooolaCsv(
   const shipToName = destination?.name ?? order.shipToName;
   const shipToCode = destination?.code ?? order.shipToCenter;
   const shipToTel = destination?.tel ?? order.shipToTel;
-  const addressParts = destination
-    ? [destination.address1, destination.address2, destination.address3]
-    : splitAddressForMakerCsv(order.shipToAddress);
+  const addressParts = resolveMakerCsvAddressParts(destination, order.shipToAddress);
   const postalCode = destination?.postalCode ?? extractPostalCode(order.shipToAddress);
 
   const orderTotal = order.lines.reduce((total, line) => {
@@ -73,7 +71,7 @@ export function buildCooolaCsv(
     const amount = line.amount ?? unitPrice * line.qty;
 
     return [
-      order.orderNo,
+      formatOrderNoForMakerCsv(order.orderNo),
       shipToCode,
       "FBP",
       shipToName,
@@ -84,7 +82,7 @@ export function buildCooolaCsv(
       shipToTel,
       "佐川急便宅配便",
       formatDateForMakerCsv(order.deliveryDueDate || order.arrivalDueDate),
-      "午前中",
+      "",
       formatNumber(orderTotal),
       product?.cooolaCode ?? "",
       resolveProductNameForCsvExport(product),
@@ -99,8 +97,26 @@ export function buildCooolaCsv(
   return [makerExportHeaders, ...rows].map(toCsvRow).join("\n");
 }
 
+export function formatOrderNoForMakerCsv(orderNo: string) {
+  return normalizeOrderNo(orderNo);
+}
+
+export function normalizeOrderNo(orderNo: string) {
+  const trimmed = orderNo.trim();
+
+  if (!trimmed) {
+    return "";
+  }
+
+  if (/^\d+$/.test(trimmed)) {
+    return trimmed.padStart(8, "0");
+  }
+
+  return trimmed;
+}
+
 export function buildCooolaExportFileName(order: Order) {
-  const safeOrderNo = order.orderNo.replace(/[^\w.-]+/g, "_");
+  const safeOrderNo = normalizeOrderNo(order.orderNo).replace(/[^\w.-]+/g, "_");
 
   return `maker-order-${safeOrderNo}.csv`;
 }
@@ -115,6 +131,27 @@ function formatNumber(value: number) {
 
 function extractPostalCode(address: string) {
   return address.match(/\d{3}-?\d{4}/)?.[0] ?? "";
+}
+
+function resolveMakerCsvAddressParts(
+  destination: DeliveryDestination | null,
+  shipToAddress: string,
+): [string, string, string] {
+  if (destination) {
+    if (destination.address2.trim() || destination.address3.trim()) {
+      return [destination.address1, destination.address2, destination.address3];
+    }
+
+    const combined = [destination.address1, destination.address2, destination.address3]
+      .filter(Boolean)
+      .join("");
+
+    if (combined) {
+      return splitAddressForMakerCsv(combined);
+    }
+  }
+
+  return splitAddressForMakerCsv(shipToAddress);
 }
 
 export function splitAddressForMakerCsv(address: string): [string, string, string] {
