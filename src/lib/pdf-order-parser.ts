@@ -1,13 +1,17 @@
 import {
   buildArataPdfShipToAddress,
+  extractArataPdfArrivalDueDate,
   extractArataPdfDelivery,
   extractArataPdfLineItems,
+  extractArataPdfOrderDate,
   isArataPdfOrder,
 } from "./arata-pdf-parser";
 import {
   buildDeliveryAddress,
-  extractDeliveryDestinationCodes,
+  detectOrderWholesalerName,
+  extractDeliveryDestinationCodesFromOrderText,
   type DeliveryDestination,
+  type DeliveryDestinationMatchResult,
   resolveDeliveryDestination,
 } from "./delivery-destination-master";
 import type { ImportError, SupplierMapping } from "./types";
@@ -55,6 +59,14 @@ export function parsePdfOrderText(params: {
 
   if (lineItems.length === 0) {
     errors.push(buildFileError("JANコードと数量の組み合わせをPDFから特定できませんでした。"));
+  }
+
+  if (!metadata.deliveryDestination) {
+    errors.push(
+      buildFileError(
+        buildDeliveryResolutionErrorMessage(metadata.deliveryReviewReasons),
+      ),
+    );
   }
 
   if (errors.length > 0) {
@@ -129,16 +141,24 @@ function extractMetadata(
       /TEL\s*[:：]?\s*([0-9\-()]+)/i,
     ]) || extractTelAfterLabel(lines, ["お届先TEL", "お届け先TEL", "TEL", "電話番号"]);
   const shipToCode = extractDeliveryDestinationCode(lines, deliveryDestinations);
+  const pdfCenterName = shipToName;
+  const wholesalerName = detectOrderWholesalerName(text, false);
   const deliveryMatch = resolveDeliveryDestination({
     code: shipToCode,
+    centerName: pdfCenterName,
     text,
+    address: shipToAddress,
+    tel: shipToTel,
+    wholesalerName,
     destinations: deliveryDestinations,
   });
   const deliveryDestination = deliveryMatch.destination;
   const warehouse = extractWarehouse(text, lines, Object.keys(warehouseValueMap));
   const orderDate =
     orderTableMetadata.orderDate ||
-    (extractDateByLabel(text, [/発注日\s*[:：]?\s*([0-9年月日/\-. ]+)/]) ?? dates[0] ?? "");
+    extractDateByLabel(text, [/発注日\s*[:：]?\s*([0-9年月日/\-. ]+)/]) ||
+    extractDateAfterOrderNo(lines, orderNo) ||
+    "";
   const arrivalDueDate =
     orderTableMetadata.arrivalDueDate ||
     (extractDateByLabel(text, [
@@ -158,6 +178,14 @@ function extractMetadata(
       dates.find((date) => date !== orderDate) ??
       "");
 
+  const deliveryReview = buildDeliveryImportReview({
+    deliveryDestination,
+    deliveryMatch,
+    pdfShipToName: Boolean(shipToName),
+    pdfShipToAddress: Boolean(shipToAddress),
+    notFoundMessage: "配送先マスタに一致するセンターが見つかりませんでした",
+  });
+
   return {
     orderNo,
     orderDate,
@@ -168,12 +196,9 @@ function extractMetadata(
     shipToTel: deliveryDestination?.tel ?? normalizeTel(shipToTel),
     warehouse,
     memo: extractMemo(lines),
-    deliveryNeedsReview: deliveryMatch.needsReview || !deliveryDestination,
-    deliveryReviewReasons: [
-      ...deliveryMatch.reviewReasons,
-      ...(!deliveryDestination ? ["配送先マスタに一致するセンターが見つかりませんでした"] : []),
-      ...(!shipToName ? ["お届け先名称をPDFから特定できませんでした"] : []),
-    ],
+    deliveryDestination,
+    deliveryNeedsReview: deliveryReview.deliveryNeedsReview,
+    deliveryReviewReasons: deliveryReview.deliveryReviewReasons,
   };
 }
 
@@ -201,13 +226,19 @@ function extractArataMetadata(
     extractValueAfterLabel(lines, ["発注番号", "注文番号"]);
   const deliveryMatch = resolveDeliveryDestination({
     text: [pdfShipToName, pdfShipToAddress, pdfShipToTel, text].join("\n"),
+    centerName: pdfShipToName,
+    address: pdfShipToAddress,
+    tel: pdfShipToTel,
+    wholesalerName: detectOrderWholesalerName(text, true),
     destinations: deliveryDestinations,
   });
   const warehouse = extractWarehouse(text, lines, Object.keys(warehouseValueMap));
   const orderDate =
-    orderTableMetadata.orderDate ||
-    (extractDateByLabel(text, [/発注日\s*[:：]?\s*([0-9年月日/\-. ]+)/]) ?? dates[0] ?? "");
+    extractArataPdfOrderDate(lines, orderNo) ||
+    extractDateByLabel(text, [/発注日\s*[:：]?\s*([0-9年月日/\-. ]+)/]) ||
+    "";
   const arrivalDueDate =
+    extractArataPdfArrivalDueDate(lines, orderDate) ||
     orderTableMetadata.arrivalDueDate ||
     (extractDateByLabel(text, [
         /着荷指定日\s*[:：]?\s*([0-9年月日/\-. ]+)/,
@@ -226,23 +257,28 @@ function extractArataMetadata(
       dates.find((date) => date !== orderDate) ??
       "");
 
+  const deliveryDestination = deliveryMatch.destination;
+  const deliveryReview = buildDeliveryImportReview({
+    deliveryDestination,
+    deliveryMatch,
+    pdfShipToName: Boolean(pdfShipToName),
+    pdfShipToAddress: Boolean(pdfShipToAddress),
+    notFoundMessage: "配送先マスタに一致する納品拠点が見つかりませんでした",
+  });
+
   return {
     orderNo,
     orderDate,
     arrivalDueDate,
-    shipToName: pdfShipToName || "お届け先未判定",
-    shipToCenter: deliveryMatch.destination?.code ?? "",
-    shipToAddress: pdfShipToAddress,
-    shipToTel: pdfShipToTel,
+    shipToName: deliveryDestination?.name ?? (pdfShipToName || "お届け先未判定"),
+    shipToCenter: deliveryDestination?.code ?? "",
+    shipToAddress: deliveryDestination ? buildDeliveryAddress(deliveryDestination) : pdfShipToAddress,
+    shipToTel: deliveryDestination?.tel ?? normalizeTel(pdfShipToTel),
     warehouse,
     memo: extractMemo(lines),
-    deliveryNeedsReview: !deliveryMatch.destination || deliveryMatch.needsReview,
-    deliveryReviewReasons: [
-      ...deliveryMatch.reviewReasons,
-      ...(!deliveryMatch.destination ? ["配送先マスタに一致する納品拠点が見つかりませんでした"] : []),
-      ...(!pdfShipToName ? ["お届け先名称をPDFから特定できませんでした"] : []),
-      ...(!pdfShipToAddress ? ["お届け先住所をPDFから特定できませんでした"] : []),
-    ],
+    deliveryDestination,
+    deliveryNeedsReview: deliveryReview.deliveryNeedsReview,
+    deliveryReviewReasons: deliveryReview.deliveryReviewReasons,
   };
 }
 
@@ -398,6 +434,30 @@ function extractArrivalDateAfterLabel(lines: string[], orderDate: string) {
   return dates.find((date) => date !== orderDate) ?? dates[0] ?? null;
 }
 
+function extractDateAfterOrderNo(lines: string[], orderNo: string) {
+  if (!orderNo) {
+    return "";
+  }
+
+  const orderIndex = lines.findIndex((line) => line.includes(orderNo));
+
+  if (orderIndex === -1) {
+    return "";
+  }
+
+  for (const line of lines.slice(orderIndex + 1, orderIndex + 4)) {
+    const date = [...line.matchAll(datePattern)]
+      .map((match) => normalizeDate(match[0]))
+      .find(Boolean);
+
+    if (date) {
+      return date;
+    }
+  }
+
+  return "";
+}
+
 function extractOrderTableMetadata(lines: string[]) {
   const empty = { orderNo: "", orderDate: "", arrivalDueDate: "" };
   const headerIndex = lines.findIndex((_, index) => {
@@ -416,10 +476,45 @@ function extractOrderTableMetadata(lines: string[]) {
 
   const valueLines = lines.slice(headerIndex, headerIndex + 16);
   const valueText = valueLines.join(" ");
+  const orderNoFromWindow = extractOrderNoCandidate(valueText);
+
+  for (let index = 0; index < valueLines.length; index += 1) {
+    const orderNo = extractOrderNoCandidate(valueLines[index]);
+
+    if (!orderNo) {
+      continue;
+    }
+
+    for (const line of valueLines.slice(index + 1, index + 4)) {
+      const orderDate = [...line.matchAll(datePattern)]
+        .map((match) => normalizeDate(match[0]))
+        .find(Boolean);
+
+      if (!orderDate) {
+        continue;
+      }
+
+      const arrivalDueDate =
+        extractDatesFromLinesAfterLabel(valueLines, [
+          "着荷指定日",
+          "着荷指定",
+          "若荷指定",
+          "若狗指定",
+          "指定到着日",
+          "到着指定日",
+        ]).find((date) => date !== orderDate) ?? "";
+
+      return {
+        orderNo,
+        orderDate,
+        arrivalDueDate,
+      };
+    }
+  }
+
   const datesFromWindow = [...valueText.matchAll(datePattern)]
     .map((match) => normalizeDate(match[0]))
     .filter(Boolean);
-  const orderNoFromWindow = extractOrderNoCandidate(valueText);
 
   if (orderNoFromWindow && datesFromWindow.length >= 2) {
     return {
@@ -614,12 +709,18 @@ function extractTelAfterLabel(lines: string[], labels: string[]) {
 }
 
 function extractDeliveryDestinationCode(lines: string[], destinations?: DeliveryDestination[]) {
-  const codes = extractDeliveryDestinationCodes(lines.join("\n"), destinations);
+  const codes = extractDeliveryDestinationCodesFromOrderText(lines.join("\n"), destinations);
 
   return codes[0] ?? "";
 }
 
 function extractMemo(lines: string[]) {
+  const summaryStoreMemo = extractSummaryStoreMemo(lines);
+
+  if (summaryStoreMemo) {
+    return summaryStoreMemo;
+  }
+
   const asteriskValue = lines.find((line) => /^\*[^\s]+/.test(line.trim()))?.trim() ?? "";
 
   if (asteriskValue && !isLikelyNonStoreMemo(asteriskValue)) {
@@ -628,7 +729,7 @@ function extractMemo(lines: string[]) {
 
   const summaryValue = extractBlockAfterLabel(lines, ["摘要"], ["金額合計", "受付日時"]);
 
-  if (summaryValue && !isLikelyNonStoreMemo(summaryValue)) {
+  if (summaryValue && !isLikelyNonStoreMemo(summaryValue) && !isLikelyProductLineMemo(summaryValue)) {
     return cleanupValue(summaryValue.normalize("NFKC"));
   }
 
@@ -641,12 +742,106 @@ function extractMemo(lines: string[]) {
       ["金額合計", "受付日時"],
     );
 
-    if (memoValue && !isLikelyNonStoreMemo(memoValue)) {
+    if (memoValue && !isLikelyNonStoreMemo(memoValue) && !isLikelyProductLineMemo(memoValue)) {
       return cleanupValue(memoValue.normalize("NFKC"));
     }
   }
 
+  return summaryStoreMemo;
+}
+
+function extractSummaryStoreMemo(lines: string[]) {
+  const summaryIndex = lines.findIndex((line) => {
+    const trimmed = line.trim();
+    return trimmed === "摘要" || trimmed.startsWith("摘要 ");
+  });
+
+  if (summaryIndex === -1) {
+    return "";
+  }
+
+  for (const line of lines.slice(summaryIndex + 1, summaryIndex + 10)) {
+    const trimmed = line.trim();
+
+    if (!trimmed || /^(?:受付日時|金額合計|トータル)/.test(trimmed)) {
+      break;
+    }
+
+    if (isStandaloneLabelLine(trimmed, "着荷指定日") || trimmed === "着荷指定日") {
+      continue;
+    }
+
+    const cleaned = cleanupValue(trimmed.normalize("NFKC"));
+
+    if (!cleaned || isLikelyNonStoreMemo(cleaned) || isLikelyProductLineMemo(cleaned)) {
+      continue;
+    }
+
+    if (/^\d{2,4}[./-]\d{1,2}(?:[./-]\d{1,2})?$/.test(cleaned)) {
+      continue;
+    }
+
+    if (containsKnownStoreKeyword(cleaned)) {
+      return cleaned;
+    }
+  }
+
   return "";
+}
+
+function containsKnownStoreKeyword(value: string) {
+  const normalized = value.normalize("NFKC").toLowerCase();
+
+  return /ドンキ|ドン・キホーテ|donki|ロフト|loft|ハンズ|hands|アインズ|ainz|ミモザ|mimosa/.test(
+    normalized,
+  );
+}
+
+function isLikelyProductLineMemo(value: string) {
+  const normalized = value.replace(/\s/g, "");
+
+  return /\d{13}/.test(normalized) || /^\|/.test(value.trim()) || /^J\d/.test(normalized);
+}
+
+function buildDeliveryImportReview(params: {
+  deliveryDestination: DeliveryDestination | null;
+  deliveryMatch: DeliveryDestinationMatchResult;
+  pdfShipToName: boolean;
+  pdfShipToAddress: boolean;
+  notFoundMessage: string;
+}) {
+  if (params.deliveryDestination) {
+    const seriousReasons = params.deliveryMatch.reviewReasons.filter((reason) =>
+      /複数見つかりました|本部共通コードのみ|特定できませんでした/.test(reason),
+    );
+
+    return {
+      deliveryDestination: params.deliveryDestination,
+      deliveryNeedsReview: seriousReasons.length > 0,
+      deliveryReviewReasons: seriousReasons,
+    };
+  }
+
+  return {
+    deliveryDestination: null,
+    deliveryNeedsReview: true,
+    deliveryReviewReasons: [
+      ...params.deliveryMatch.reviewReasons,
+      params.notFoundMessage,
+      ...(!params.pdfShipToName ? ["お届け先名称をPDFから特定できませんでした"] : []),
+      ...(!params.pdfShipToAddress ? ["お届け先住所をPDFから特定できませんでした"] : []),
+    ],
+  };
+}
+
+function buildDeliveryResolutionErrorMessage(reasons: string[]) {
+  const uniqueReasons = Array.from(new Set(reasons.filter(Boolean)));
+
+  if (uniqueReasons.length === 0) {
+    return "配送先センターを特定できませんでした。配送先コードまたはセンター名を確認してください。";
+  }
+
+  return `配送先センターを特定できませんでした: ${uniqueReasons.join(" / ")}`;
 }
 
 function isLikelyNonStoreMemo(value: string) {

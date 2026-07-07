@@ -1,4 +1,21 @@
+import type { DeliveryDestination } from "./delivery-destination-master";
+import {
+  deliveryDestinations,
+  findDeliveryDestinationByCode,
+} from "./delivery-destination-master";
 import type { Order, Product } from "./types";
+
+export function resolveProductNameForCsvExport(product: Product | undefined) {
+  const rawCsvExportName = product?.csvExportProductName;
+  const csvExportName =
+    typeof rawCsvExportName === "string" ? rawCsvExportName.trim() : "";
+
+  if (csvExportName) {
+    return csvExportName;
+  }
+
+  return product?.name ?? "";
+}
 
 const makerExportHeaders = [
   "受注番号",
@@ -23,7 +40,22 @@ const makerExportHeaders = [
   "送り状備考",
 ];
 
-export function buildCooolaCsv(order: Order, products: Product[]) {
+export function buildCooolaCsv(
+  order: Order,
+  products: Product[],
+  destinations: DeliveryDestination[] = deliveryDestinations,
+) {
+  const destination = order.shipToCenter
+    ? findDeliveryDestinationByCode(order.shipToCenter, destinations)
+    : null;
+  const shipToName = destination?.name ?? order.shipToName;
+  const shipToCode = destination?.code ?? order.shipToCenter;
+  const shipToTel = destination?.tel ?? order.shipToTel;
+  const addressParts = destination
+    ? [destination.address1, destination.address2, destination.address3]
+    : splitAddressForMakerCsv(order.shipToAddress);
+  const postalCode = destination?.postalCode ?? extractPostalCode(order.shipToAddress);
+
   const orderTotal = order.lines.reduce((total, line) => {
     const product = products.find(
       (candidate) => candidate.clientId === order.clientId && candidate.jan === line.jan,
@@ -32,7 +64,6 @@ export function buildCooolaCsv(order: Order, products: Product[]) {
 
     return total + (line.amount ?? unitPrice * line.qty);
   }, 0);
-  const addressParts = splitAddress(order.shipToAddress);
 
   const rows = order.lines.map((line) => {
     const product = products.find(
@@ -43,20 +74,20 @@ export function buildCooolaCsv(order: Order, products: Product[]) {
 
     return [
       order.orderNo,
-      "",
+      shipToCode,
       "FBP",
-      order.shipToName,
-      extractPostalCode(order.shipToAddress),
+      shipToName,
+      postalCode,
       addressParts[0] ?? "",
       addressParts[1] ?? "",
       addressParts[2] ?? "",
-      order.shipToTel,
+      shipToTel,
       "佐川急便宅配便",
       formatDateForMakerCsv(order.deliveryDueDate || order.arrivalDueDate),
       "午前中",
       formatNumber(orderTotal),
       product?.cooolaCode ?? "",
-      product?.name ?? "",
+      resolveProductNameForCsvExport(product),
       String(line.qty),
       formatNumber(unitPrice),
       formatNumber(amount),
@@ -86,7 +117,7 @@ function extractPostalCode(address: string) {
   return address.match(/\d{3}-?\d{4}/)?.[0] ?? "";
 }
 
-function splitAddress(address: string) {
+export function splitAddressForMakerCsv(address: string): [string, string, string] {
   const lines = address
     .split(/\r?\n/)
     .map((line) => line.trim())
@@ -95,16 +126,51 @@ function splitAddress(address: string) {
   if (lines.length > 1) {
     const addressLines = /^\d{3}-?\d{4}$/.test(lines[0]) ? lines.slice(1) : lines;
 
-    return [addressLines[0] ?? "", addressLines[1] ?? "", addressLines[2] ?? ""];
+    if (addressLines.length >= 2) {
+      return [
+        addressLines[0] ?? "",
+        addressLines[1] ?? "",
+        addressLines.slice(2).join(" ") ?? "",
+      ];
+    }
   }
 
-  const withoutPostalCode = address.replace(/\d{3}-?\d{4}/, "").trim();
+  const body =
+    lines.length > 1
+      ? (/^\d{3}-?\d{4}$/.test(lines[0]) ? lines.slice(1) : lines).join("")
+      : address.replace(/\d{3}-?\d{4}/, "").trim();
 
-  if (!withoutPostalCode) {
+  if (!body) {
     return ["", "", ""];
   }
 
-  return [withoutPostalCode, "", ""];
+  const splitIndex = findJapaneseMunicipalitySplitIndex(body);
+
+  if (splitIndex <= 0) {
+    return [body, "", ""];
+  }
+
+  return [body.slice(0, splitIndex).trim(), body.slice(splitIndex).trim(), ""];
+}
+
+function findJapaneseMunicipalitySplitIndex(address: string) {
+  const municipalityPatterns = [
+    /^(.+?[都道府県].+?郡.+?[町村])/,
+    /^(.+?[都道府県].+?市.+?区)/,
+    /^(.+?[都道府県].+?市)/,
+    /^(.+?[都道府県].+?区)/,
+    /^(.+?[都道府県].+?[町村])/,
+  ];
+
+  for (const pattern of municipalityPatterns) {
+    const match = address.match(pattern);
+
+    if (match?.[1]) {
+      return match[1].length;
+    }
+  }
+
+  return -1;
 }
 
 function buildInvoiceMemo(memo: string, amount: number) {

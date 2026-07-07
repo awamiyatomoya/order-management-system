@@ -1,8 +1,9 @@
 import * as XLSX from "xlsx";
 import type { DeliveryDestination } from "@/lib/delivery-destination-master";
+import { ARATA_WHOLESALER_NAME } from "@/lib/delivery-destination-master";
 import type { ImportError } from "@/lib/types";
 
-export const ARATA_WHOLESALER_NAME = "あらた";
+export { ARATA_WHOLESALER_NAME };
 
 const dataStartRowIndex = 7;
 
@@ -73,7 +74,7 @@ export function parseArataDeliveryWorkbook(workbook: XLSX.WorkBook) {
     }
 
     const displayName = currentBranch ? `${currentBranch} ${centerName}` : centerName;
-    const code = buildArataDestinationCode(postalCode, usedCodes);
+    const code = buildArataDestinationCode(postalCode, centerName, usedCodes);
     const aliases = buildArataAliases({
       branchName: currentBranch,
       centerName,
@@ -138,7 +139,11 @@ function isArataOrderOfficeName(name: string) {
   return /発注管理課|発注業務|仕入業務課|業務本部/.test(name);
 }
 
-function buildArataDestinationCode(postalCode: string, usedCodes: Map<string, number>) {
+function buildArataDestinationCode(
+  postalCode: string,
+  centerName: string,
+  usedCodes: Map<string, number>,
+) {
   const count = usedCodes.get(postalCode) ?? 0;
   usedCodes.set(postalCode, count + 1);
 
@@ -146,7 +151,16 @@ function buildArataDestinationCode(postalCode: string, usedCodes: Map<string, nu
     return postalCode;
   }
 
-  return `${postalCode}-${count + 1}`;
+  const slug = buildArataDestinationCodeSlug(centerName);
+
+  return slug ? `${postalCode}-${slug}` : `${postalCode}-${count + 1}`;
+}
+
+function buildArataDestinationCodeSlug(centerName: string) {
+  return centerName
+    .normalize("NFKC")
+    .replace(/[^\p{Letter}\p{Number}]/gu, "")
+    .slice(0, 12);
 }
 
 function buildArataAliases(params: {
