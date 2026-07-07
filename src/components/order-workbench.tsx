@@ -87,6 +87,7 @@ import {
 import { saveStore } from "@/lib/supabase/store-actions";
 import type { Client, ImportBatch, ImportError, Order, Product, Store, Supplier } from "@/lib/types";
 import { createId } from "@/lib/uuid";
+import { filterImportBatchesForOrderFiles } from "@/lib/import-batch-display";
 
 type ProductForm = {
   jan: string;
@@ -882,10 +883,14 @@ export function OrderWorkbench({
         .sort(compareOrdersForWorkbench),
     [orderPeriodEnd, orderPeriodFilter, orderPeriodStart, orderSearch, orderStatusFilter, selectedOrders],
   );
+  const savedImportBatches = useMemo(
+    () => filterImportBatchesForOrderFiles(selectedImportBatches),
+    [selectedImportBatches],
+  );
   const filteredOrderFiles = useMemo(() => {
     const normalizedSearch = orderFileSearch.trim().toLowerCase();
 
-    return selectedImportBatches.filter((batch) => {
+    return savedImportBatches.filter((batch) => {
       if (!normalizedSearch) {
         return true;
       }
@@ -896,7 +901,7 @@ export function OrderWorkbench({
         .toLowerCase()
         .includes(normalizedSearch);
     });
-  }, [orderFileSearch, selectedImportBatches, selectedOrders]);
+  }, [orderFileSearch, savedImportBatches, selectedOrders]);
 
   const totalAmount = useMemo(
     () =>
@@ -4087,9 +4092,9 @@ export function OrderWorkbench({
               </Field>
             }
           >
-            {selectedImportBatches.length === 0 ? (
+            {savedImportBatches.length === 0 ? (
               <p className="text-sm text-muted-foreground">
-                このクライアントのアップロード済み発注書はまだありません。
+                このクライアントで取込に成功した発注書はまだありません。取込に失敗したファイルは「取込履歴」で確認できます。
               </p>
             ) : filteredOrderFiles.length === 0 ? (
               <p className="text-sm text-muted-foreground">
@@ -4461,7 +4466,7 @@ function getWorkbenchPageDescription(view: WorkbenchView) {
   }
 
   if (view === "orderFiles") {
-    return "取り込んだ発注書PDF・ファイルを検索し、内容を確認できます。";
+    return "取込に成功した発注書PDFだけを検索し、内容を確認できます。";
   }
 
   if (view === "payouts") {
