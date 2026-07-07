@@ -553,6 +553,16 @@ export function resolveDeliveryDestination(params: {
       continue;
     }
 
+    if (
+      isPostalCodeOnlyDestinationCode(code) &&
+      !isDeliveryAddressCompatible(searchText, destination)
+    ) {
+      reviewReasons.push(
+        `配送先コード ${code} は郵便番号形式ですが、発注書の住所とマスター（${destination.name}）の住所が一致しません`,
+      );
+      continue;
+    }
+
     const reasons = [...reviewReasons];
 
     if (isHeadquartersCenterCode(code)) {
@@ -573,30 +583,45 @@ export function resolveDeliveryDestination(params: {
     const destination = findDestinationByCode(normalizedCode, destinations);
 
     if (destination) {
-      const reasons = [...reviewReasons];
+      if (
+        isPostalCodeOnlyDestinationCode(normalizedCode) &&
+        !isDeliveryAddressCompatible(searchText, destination)
+      ) {
+        reviewReasons.push(
+          `配送先コード ${normalizedCode} は郵便番号形式ですが、発注書の住所とマスター（${destination.name}）の住所が一致しません`,
+        );
+      } else {
+        const reasons = [...reviewReasons];
 
-      if (isHeadquartersCenterCode(normalizedCode)) {
-        reasons.push("センターコードが本部共通コードのみです");
+        if (isHeadquartersCenterCode(normalizedCode)) {
+          reasons.push("センターコードが本部共通コードのみです");
+        }
+
+        return {
+          destination,
+          method: "code",
+          needsReview: reasons.length > 0,
+          reviewReasons: reasons,
+        };
       }
-
-      return {
-        destination,
-        method: "code",
-        needsReview: reasons.length > 0,
-        reviewReasons: reasons,
-      };
     }
   }
 
   const centerNameMatch = matchDestinationByCenterName(params.centerName ?? "", destinations);
 
   if (centerNameMatch.destination) {
-    return {
-      destination: centerNameMatch.destination,
-      method: "centerName",
-      needsReview: true,
-      reviewReasons: [...reviewReasons, "配送先コードが見つからないため、センター名で判定しました"],
-    };
+    if (!isDeliveryAddressCompatible(searchText, centerNameMatch.destination)) {
+      reviewReasons.push(
+        `センター名は ${centerNameMatch.destination.name} と一致しましたが、発注書の住所とマスターの住所が一致しません`,
+      );
+    } else {
+      return {
+        destination: centerNameMatch.destination,
+        method: "centerName",
+        needsReview: true,
+        reviewReasons: [...reviewReasons, "配送先コードが見つからないため、センター名で判定しました"],
+      };
+    }
   }
 
   if (centerNameMatch.ambiguous) {
@@ -610,20 +635,26 @@ export function resolveDeliveryDestination(params: {
     const postalMatch = pickBestDestinationMatch(postalMatches, searchText, params.tel);
 
     if (postalMatch.destination) {
-      const reasons = [...reviewReasons];
-
-      if (postalMatches.length > 1) {
-        reasons.push(
-          `郵便番号 ${postalCode} が複数センターと一致したため、住所・TELで ${postalMatch.destination.code} を特定しました`,
+      if (!isDeliveryAddressCompatible(searchText, postalMatch.destination)) {
+        reviewReasons.push(
+          `郵便番号 ${postalCode} は ${postalMatch.destination.name} と一致しましたが、発注書の住所とマスターの住所が一致しません`,
         );
-      }
+      } else {
+        const reasons = [...reviewReasons];
 
-      return {
-        destination: postalMatch.destination,
-        method: "postal",
-        needsReview: reasons.length > 0,
-        reviewReasons: reasons,
-      };
+        if (postalMatches.length > 1) {
+          reasons.push(
+            `郵便番号 ${postalCode} が複数センターと一致したため、住所・TELで ${postalMatch.destination.code} を特定しました`,
+          );
+        }
+
+        return {
+          destination: postalMatch.destination,
+          method: "postal",
+          needsReview: reasons.length > 0,
+          reviewReasons: reasons,
+        };
+      }
     }
 
     if (postalMatch.ambiguous) {
@@ -642,12 +673,18 @@ export function resolveDeliveryDestination(params: {
     const telMatch = pickBestDestinationMatch(telMatches, searchText, params.tel);
 
     if (telMatch.destination) {
-      return {
-        destination: telMatch.destination,
-        method: "tel",
-        needsReview: reviewReasons.length > 0,
-        reviewReasons,
-      };
+      if (!isDeliveryAddressCompatible(searchText, telMatch.destination)) {
+        reviewReasons.push(
+          `TELは ${telMatch.destination.name} と一致しましたが、発注書の住所とマスターの住所が一致しません`,
+        );
+      } else {
+        return {
+          destination: telMatch.destination,
+          method: "tel",
+          needsReview: reviewReasons.length > 0,
+          reviewReasons,
+        };
+      }
     }
 
     if (telMatch.ambiguous) {
@@ -843,7 +880,13 @@ function pickBestDestinationMatch(
   }
 
   if (candidates.length === 1) {
-    return { destination: candidates[0], ambiguous: false };
+    const destination = candidates[0];
+
+    if (!isDeliveryAddressCompatible(searchText, destination)) {
+      return { destination: null, ambiguous: false };
+    }
+
+    return { destination, ambiguous: false };
   }
 
   if (hasSameAddressAndTelGroup(candidates)) {
@@ -905,6 +948,39 @@ function hasSameAddressAndTelGroup(candidates: DeliveryDestination[]) {
   });
 
   return Array.from(groups.values()).some((group) => group.length > 1);
+}
+
+export function isDeliveryAddressCompatible(
+  searchText: string,
+  destination: DeliveryDestination,
+) {
+  const pdfPostal = extractPostalCode(searchText);
+  const destPostal = normalizePostalCode(destination.postalCode);
+
+  if (pdfPostal && destPostal && pdfPostal !== destPostal) {
+    return false;
+  }
+
+  const score = scoreDeliveryDestinationAddressMatch(destination, searchText);
+
+  if (pdfPostal && destPostal && pdfPostal === destPostal) {
+    const tel = extractTel(searchText);
+    const telMatches = Boolean(tel && normalizeTelDigits(destination.tel) === tel);
+
+    return score >= 5 || telMatches || hasMatchingAliasInText(searchText, destination);
+  }
+
+  return score >= 15;
+}
+
+function hasMatchingAliasInText(searchText: string, destination: DeliveryDestination) {
+  const normalizedSearch = normalizeAddressText(searchText);
+
+  return [destination.name, ...destination.aliases].some((alias) => {
+    const normalizedAlias = normalizeAddressText(alias);
+
+    return normalizedAlias.length >= 6 && normalizedSearch.includes(normalizedAlias);
+  });
 }
 
 function scoreDeliveryDestinationAddressMatch(

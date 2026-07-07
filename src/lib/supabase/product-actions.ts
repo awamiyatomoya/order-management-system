@@ -3,6 +3,7 @@
 import { revalidatePath } from "next/cache";
 import { z } from "zod";
 import { normalizeProductImageForUpload } from "@/lib/normalize-product-image";
+import { calculatePayoutRateFromPrices } from "@/lib/payout-rate";
 import { productMasterExtraFields } from "@/lib/product-master-fields";
 import type { Product } from "@/lib/types";
 import { mapProduct, productSelectColumns, type ProductRow, attachProductImageUrls } from "./read-order-data";
@@ -237,7 +238,11 @@ export async function saveProduct(
   product: Product,
   options?: { previousJan?: string },
 ): Promise<SaveProductResult> {
-  const result = productSchema.safeParse(product);
+  const productWithPayoutRate: Product = {
+    ...product,
+    payoutRate: calculatePayoutRateFromPrices(product.wholesalePrice, product.retailPrice),
+  };
+  const result = productSchema.safeParse(productWithPayoutRate);
 
   if (!result.success) {
     return {

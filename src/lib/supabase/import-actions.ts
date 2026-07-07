@@ -2,6 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 import { z } from "zod";
+import { requireOperatorName } from "@/lib/operator-session";
 import type { ImportError, Order } from "@/lib/types";
 import { createServerSupabaseClient, hasSupabaseServerEnv } from "./server";
 
@@ -59,6 +60,7 @@ export type SaveImportResult =
       message: string;
       orderIds?: Record<string, string>;
       attachedFileOnly?: boolean;
+      operatorName?: string;
     }
   | {
       ok: false;
@@ -112,6 +114,14 @@ export async function saveBlockedImport(params: {
     };
   }
 
+  const operatorResult = await requireOperatorName();
+  if (!operatorResult.ok) {
+    return {
+      ok: false,
+      message: operatorResult.message,
+    };
+  }
+
   const supabase = createServerSupabaseClient();
   const batchId = crypto.randomUUID();
   const blockedBatchPayload = {
@@ -120,6 +130,7 @@ export async function saveBlockedImport(params: {
     supplier_id: params.supplierId,
     file_name: params.fileName,
     status: "blocked",
+    operator_name: operatorResult.operatorName,
     ...(params.fileStoragePath ? { file_storage_path: params.fileStoragePath } : {}),
   };
   const { error: batchError } = await supabase.from("import_batches").insert(blockedBatchPayload);
@@ -154,6 +165,7 @@ export async function saveBlockedImport(params: {
     ok: true,
     savedToSupabase: true,
     message: "取込エラー履歴をSupabaseに保存しました。",
+    operatorName: operatorResult.operatorName,
   };
 }
 
@@ -176,6 +188,14 @@ export async function saveImportedOrders(params: {
       ok: true,
       savedToSupabase: false,
       message: "Supabase環境変数が未設定のため、受注は画面内だけに保存しました。",
+    };
+  }
+
+  const operatorResult = await requireOperatorName();
+  if (!operatorResult.ok) {
+    return {
+      ok: false,
+      message: operatorResult.message,
     };
   }
 
@@ -240,6 +260,7 @@ export async function saveImportedOrders(params: {
         file_name: params.fileName,
         status: "saved",
         file_storage_path: params.fileStoragePath,
+        operator_name: operatorResult.operatorName,
       };
       const { error: batchError } = await supabase.from("import_batches").insert(batchPayload);
 
@@ -258,6 +279,7 @@ export async function saveImportedOrders(params: {
         message: "既存受注は上書きせず、PDFファイルだけ紐づけました。",
         orderIds: lockedOrderIds,
         attachedFileOnly: true,
+        operatorName: operatorResult.operatorName,
       };
     }
 
@@ -358,6 +380,7 @@ export async function saveImportedOrders(params: {
     supplier_id: params.supplierId,
     file_name: params.fileName,
     status: "saved",
+    operator_name: operatorResult.operatorName,
     ...(params.fileStoragePath ? { file_storage_path: params.fileStoragePath } : {}),
   };
   const { error: batchError } = await supabase.from("import_batches").insert(batchPayload);
@@ -376,6 +399,7 @@ export async function saveImportedOrders(params: {
     savedToSupabase: true,
     message: "受注と取込履歴をSupabaseに保存しました。",
     orderIds,
+    operatorName: operatorResult.operatorName,
   };
 }
 

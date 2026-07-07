@@ -1,5 +1,6 @@
 export type ProductMasterExtraKey =
   | "formalProductName"
+  | "csvExportProductName"
   | "productNameKana"
   | "manufacturerCode"
   | "manufacturerName"
@@ -23,6 +24,7 @@ export type ProductMasterExtraKey =
   | "productFeatures"
   | "productCatchcopy"
   | "usageInstructions"
+  | "usagePrecautions"
   | "ingredients"
   | "countryOfOrigin"
   | "shelfLifeDays"
@@ -38,6 +40,7 @@ export type ProductMasterExtraField = {
 
 export const productMasterExtraFields = [
   { key: "formalProductName", column: "formal_product_name", type: "text" },
+  { key: "csvExportProductName", column: "csv_export_product_name", type: "text" },
   { key: "productNameKana", column: "product_name_kana", type: "text" },
   { key: "manufacturerCode", column: "manufacturer_code", type: "text" },
   { key: "manufacturerName", column: "manufacturer_name", type: "text" },
@@ -61,6 +64,7 @@ export const productMasterExtraFields = [
   { key: "productFeatures", column: "product_features", type: "text" },
   { key: "productCatchcopy", column: "product_catchcopy", type: "text" },
   { key: "usageInstructions", column: "usage_instructions", type: "text" },
+  { key: "usagePrecautions", column: "usage_precautions", type: "text" },
   { key: "ingredients", column: "ingredients", type: "text" },
   { key: "countryOfOrigin", column: "country_of_origin", type: "text" },
   { key: "shelfLifeDays", column: "shelf_life_days", type: "text" },

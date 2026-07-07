@@ -3,6 +3,7 @@ import {
   parseArataDeliveryWorkbook,
 } from "@/lib/arata-delivery-parser";
 import type { DeliveryDestination } from "@/lib/delivery-destination-master";
+import { getDeliveryDestinationStorageKey } from "@/lib/delivery-destination-master";
 import type { ImportError } from "@/lib/types";
 import Papa from "papaparse";
 import * as XLSX from "xlsx";
@@ -148,7 +149,11 @@ function dedupeDeliveryDestinations(destinations: DeliveryDestination[]) {
   const map = new Map<string, DeliveryDestination>();
 
   destinations.forEach((destination) => {
-    map.set(destination.code, destination);
+    const current = map.get(getDeliveryDestinationStorageKey(destination));
+
+    if (!current || (!current.wholesalerName && destination.wholesalerName)) {
+      map.set(getDeliveryDestinationStorageKey(destination), destination);
+    }
   });
 
   return Array.from(map.values());

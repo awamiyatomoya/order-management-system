@@ -3,6 +3,10 @@
 import { revalidatePath } from "next/cache";
 import { z } from "zod";
 import { calculatePayoutLineAmount } from "@/lib/import-orders";
+import { requireOperatorName } from "@/lib/operator-session";
+import { resolveProductPayoutRate } from "@/lib/payout-rate";
+import type { DeletionLog } from "@/lib/types";
+import { insertDeletionLog } from "./deletion-log-actions";
 import { createServerSupabaseClient, hasSupabaseServerEnv } from "./server";
 
 const orderIdentitySchema = z.object({
@@ -12,12 +16,18 @@ const orderIdentitySchema = z.object({
 const orderArrivalDueDateSchema = orderIdentitySchema.extend({
   arrivalDueDate: z.string().min(1),
 });
+const orderStoreNameSchema = orderIdentitySchema.extend({
+  storeName: z.string(),
+});
 
 export type SaveOrderStatusResult =
   | {
       ok: true;
       savedToSupabase: boolean;
       message: string;
+      deletionLog?: DeletionLog;
+      checkedByName?: string;
+      shippedByName?: string;
     }
   | {
       ok: false;
@@ -72,6 +82,53 @@ export async function updateOrderArrivalDueDateInSupabase(params: {
   };
 }
 
+export async function updateOrderStoreNameInSupabase(params: {
+  clientId: string;
+  orderId: string;
+  storeName: string;
+}): Promise<SaveOrderStatusResult> {
+  const result = orderStoreNameSchema.safeParse(params);
+
+  if (!result.success) {
+    return {
+      ok: false,
+      message: "店舗名の更新に必要な情報が不足しています。",
+    };
+  }
+
+  if (!hasSupabaseServerEnv()) {
+    return {
+      ok: true,
+      savedToSupabase: false,
+      message: "Supabase環境変数が未設定のため、店舗名は画面内だけに反映しました。",
+    };
+  }
+
+  const supabase = createServerSupabaseClient();
+  const { error } = await supabase
+    .from("orders")
+    .update({
+      store_name: result.data.storeName,
+    })
+    .eq("client_id", result.data.clientId)
+    .eq("id", result.data.orderId);
+
+  if (error) {
+    return {
+      ok: false,
+      message: `店舗名の更新に失敗しました: ${error.message}`,
+    };
+  }
+
+  revalidatePath("/");
+
+  return {
+    ok: true,
+    savedToSupabase: true,
+    message: "店舗名を更新しました。",
+  };
+}
+
 export async function confirmOrderInSupabase(params: {
   clientId: string;
   orderId: string;
@@ -88,6 +145,14 @@ export async function confirmOrderInSupabase(params: {
       ok: true,
       savedToSupabase: false,
       message: "Supabase環境変数が未設定のため、確定は画面内だけに反映しました。",
+    };
+  }
+
+  const operatorResult = await requireOperatorName();
+  if (!operatorResult.ok) {
+    return {
+      ok: false,
+      message: operatorResult.message,
     };
   }
 
@@ -152,7 +217,7 @@ export async function confirmOrderInSupabase(params: {
 
   const { data: products, error: productsError } = await supabase
     .from("products")
-    .select("jan, wholesale_price, tax_rate, retail_price, payout_rate")
+    .select("jan, wholesale_price, tax_rate, retail_price")
     .eq("client_id", identity.data.clientId)
     .in(
       "jan",
@@ -178,9 +243,11 @@ export async function confirmOrderInSupabase(params: {
 
     const unitPrice = Number(product.wholesale_price);
     const taxRate = Number(product.tax_rate);
-    const hasPayoutTerms = product.retail_price !== null && product.payout_rate !== null;
-    const retailPrice = hasPayoutTerms ? Number(product.retail_price) : null;
-    const payoutRate = hasPayoutTerms ? Number(product.payout_rate) : null;
+    const retailPrice = product.retail_price == null ? null : Number(product.retail_price);
+    const payoutRate = resolveProductPayoutRate({
+      wholesalePrice: Number(product.wholesale_price),
+      retailPrice,
+    });
     const payoutAmount = calculatePayoutLineAmount({
       qty: line.qty,
       retailPrice,
@@ -191,7 +258,7 @@ export async function confirmOrderInSupabase(params: {
     if (payoutAmount === null) {
       return {
         ok: false,
-        message: `JAN ${line.jan} の上代（税抜）・掛け率・FBP手数料率を確認してください。保存値がない状態ではチェック済みにできません。`,
+        message: `JAN ${line.jan} の定価・仕切価格・FBP手数料率を確認してください。定価と仕切価格から掛け率を算出できないため、チェック済みにできません。`,
       };
     }
 
@@ -219,7 +286,10 @@ export async function confirmOrderInSupabase(params: {
 
   const { error: updateOrderError } = await supabase
     .from("orders")
-    .update({ status: "confirmed" })
+    .update({
+      status: "confirmed",
+      checked_by_name: operatorResult.operatorName,
+    })
     .eq("client_id", identity.data.clientId)
     .eq("id", identity.data.orderId);
 
@@ -236,6 +306,7 @@ export async function confirmOrderInSupabase(params: {
     ok: true,
     savedToSupabase: true,
     message: "受注をSupabase上でも confirmed にしました。",
+    checkedByName: operatorResult.operatorName,
   };
 }
 
@@ -311,7 +382,10 @@ export async function undoOrderConfirmationInSupabase(params: {
 
   const { error: orderUpdateError } = await supabase
     .from("orders")
-    .update({ status: "imported" })
+    .update({
+      status: "imported",
+      checked_by_name: null,
+    })
     .eq("client_id", identity.data.clientId)
     .eq("id", identity.data.orderId);
 
@@ -347,6 +421,14 @@ export async function markOrderShippedInSupabase(params: {
       ok: true,
       savedToSupabase: false,
       message: "Supabase環境変数が未設定のため、発送済みは画面内だけに反映しました。",
+    };
+  }
+
+  const operatorResult = await requireOperatorName();
+  if (!operatorResult.ok) {
+    return {
+      ok: false,
+      message: operatorResult.message,
     };
   }
 
@@ -401,13 +483,16 @@ export async function markOrderShippedInSupabase(params: {
     return {
       ok: false,
       message:
-        "上代（税抜）・掛け率・FBP手数料率の保存値がない明細があります。受注を一度 imported に戻して、商品マスタを確認してから再度チェック済みにしてください。",
+        "上代（税抜）・仕切価格・FBP手数料率の保存値がない明細があります。受注を一度 imported に戻して、商品マスタを確認してから再度チェック済みにしてください。",
     };
   }
 
   const { error: orderUpdateError } = await supabase
     .from("orders")
-    .update({ status: "shipped" })
+    .update({
+      status: "shipped",
+      shipped_by_name: operatorResult.operatorName,
+    })
     .eq("client_id", identity.data.clientId)
     .eq("id", identity.data.orderId);
 
@@ -424,6 +509,7 @@ export async function markOrderShippedInSupabase(params: {
     ok: true,
     savedToSupabase: true,
     message: "受注をSupabase上でも shipped にしました。",
+    shippedByName: operatorResult.operatorName,
   };
 }
 
@@ -478,7 +564,10 @@ export async function markOrderCheckedInSupabase(params: {
 
   const { error: orderUpdateError } = await supabase
     .from("orders")
-    .update({ status: "confirmed" })
+    .update({
+      status: "confirmed",
+      shipped_by_name: null,
+    })
     .eq("client_id", identity.data.clientId)
     .eq("id", identity.data.orderId);
 
@@ -519,6 +608,14 @@ export async function deleteOrderInSupabase(params: {
     };
   }
 
+  const operatorResult = await requireOperatorName();
+  if (!operatorResult.ok) {
+    return {
+      ok: false,
+      message: operatorResult.message,
+    };
+  }
+
   const identity = orderIdentitySchema
     .extend({
       supplierId: z.string().min(1),
@@ -535,7 +632,15 @@ export async function deleteOrderInSupabase(params: {
   const supabase = createServerSupabaseClient();
   const { data: orderById, error: orderByIdError } = await supabase
     .from("orders")
-    .select("id, status")
+    .select(
+      `
+      id,
+      status,
+      order_no,
+      source_file,
+      order_lines ( id )
+    `,
+    )
     .eq("client_id", identity.data.clientId)
     .eq("id", identity.data.orderId)
     .maybeSingle();
@@ -552,7 +657,15 @@ export async function deleteOrderInSupabase(params: {
   if (!order) {
     const { data: orderByNumber, error: orderByNumberError } = await supabase
       .from("orders")
-      .select("id, status")
+      .select(
+        `
+        id,
+        status,
+        order_no,
+        source_file,
+        order_lines ( id )
+      `,
+      )
       .eq("client_id", identity.data.clientId)
       .eq("supplier_id", identity.data.supplierId)
       .eq("order_no", identity.data.orderNo)
@@ -580,6 +693,24 @@ export async function deleteOrderInSupabase(params: {
     return {
       ok: false,
       message: "出荷指示済み、または出荷済みの受注は削除できません。",
+    };
+  }
+
+  const lineCount = Array.isArray(order.order_lines) ? order.order_lines.length : null;
+  const deletionLogResult = await insertDeletionLog({
+    clientId: identity.data.clientId,
+    targetType: "order",
+    targetId: order.id,
+    orderNo: order.order_no ?? identity.data.orderNo,
+    fileName: order.source_file ?? "",
+    orderStatus: order.status,
+    lineCount,
+  });
+
+  if (!deletionLogResult.ok) {
+    return {
+      ok: false,
+      message: deletionLogResult.message,
     };
   }
 
@@ -615,5 +746,6 @@ export async function deleteOrderInSupabase(params: {
     ok: true,
     savedToSupabase: true,
     message: "受注をSupabaseから削除しました。",
+    deletionLog: deletionLogResult.log,
   };
 }

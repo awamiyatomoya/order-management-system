@@ -9,7 +9,7 @@ export function FileUploadButton({
   disabled,
   fullWidth = false,
   label = "発注ファイルをアップロード",
-  description = "PDF、CSV、Excelファイルを選択できます。",
+  description = "PDFファイルを選択できます。",
   onFileChange,
 }: {
   accept: string;

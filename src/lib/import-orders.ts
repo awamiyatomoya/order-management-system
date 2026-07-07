@@ -1,5 +1,6 @@
 import { z } from "zod";
 import type {
+  Client,
   ImportError,
   Order,
   OrderLine,
@@ -8,6 +9,7 @@ import type {
   SupplierMapping,
 } from "./types";
 import { createId } from "./uuid";
+import { resolveProductPayoutRate } from "./payout-rate";
 
 type RawRow = Record<string, unknown>;
 
@@ -55,6 +57,7 @@ export function buildImportDraft(params: {
   supplier: Supplier;
   mapping: SupplierMapping;
   products: Product[];
+  clients?: Pick<Client, "id" | "name">[];
   existingOrders: Order[];
   sourceFile: string;
 }): ImportDraft {
@@ -109,7 +112,12 @@ export function buildImportDraft(params: {
     errors.push({
       row: 0,
       field: "jan",
-      message: `商品マスタに未登録のJANがあります: ${jan}`,
+      message: buildMissingJanErrorMessage(
+        jan,
+        params.clientId,
+        params.products,
+        params.clients ?? [],
+      ),
     });
   });
 
@@ -168,9 +176,16 @@ export function confirmOrderWithPayoutFee(
       );
       const unitPrice = product?.wholesalePrice ?? 0;
       const taxRate = product?.taxRate ?? 0;
-      const hasPayoutTerms = product?.retailPrice != null && product?.payoutRate != null;
-      const retailPrice = hasPayoutTerms ? product?.retailPrice ?? null : null;
-      const payoutRate = hasPayoutTerms ? product?.payoutRate ?? null : null;
+      const retailPrice = product?.retailPrice ?? null;
+      const payoutRate =
+        product == null
+          ? null
+          : resolveProductPayoutRate({
+              wholesalePrice: product.wholesalePrice,
+              retailPrice: product.retailPrice,
+              payoutRate: product.payoutRate,
+            });
+      const hasPayoutTerms = retailPrice != null && payoutRate != null;
 
       return {
         ...line,
@@ -251,6 +266,28 @@ function parseReviewReasons(value: unknown) {
 
 function stringCell(value: unknown) {
   return String(value ?? "").trim();
+}
+
+function buildMissingJanErrorMessage(
+  jan: string,
+  clientId: string,
+  products: Product[],
+  clients: Pick<Client, "id" | "name">[],
+) {
+  const registeredClientNames = Array.from(
+    new Set(
+      products
+        .filter((product) => product.jan === jan && product.clientId !== clientId)
+        .map((product) => clients.find((client) => client.id === product.clientId)?.name)
+        .filter((name): name is string => Boolean(name)),
+    ),
+  );
+
+  if (registeredClientNames.length === 0) {
+    return `商品マスタに未登録のJANがあります: ${jan}`;
+  }
+
+  return `商品マスタに未登録のJANがあります: ${jan}（別クライアント「${registeredClientNames.join("」「")}」に登録されています）`;
 }
 
 function mapValue(field: string, value: string, mapping: SupplierMapping) {

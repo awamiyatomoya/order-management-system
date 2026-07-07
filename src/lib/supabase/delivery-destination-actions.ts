@@ -6,9 +6,8 @@ import type { DeliveryDestination } from "@/lib/delivery-destination-master";
 import { createServerSupabaseClient, hasSupabaseServerEnv } from "./server";
 
 const deliveryDestinationSchema = z.object({
-  clientId: z.string().min(1),
   code: z.string().min(1),
-  wholesalerName: z.string().optional(),
+  wholesalerName: z.string().min(1),
   name: z.string().min(1),
   postalCode: z.string(),
   address1: z.string().min(1),
@@ -52,9 +51,8 @@ export async function saveDeliveryDestination(
   const supabase = createServerSupabaseClient();
   const { error } = await supabase.from("delivery_destinations").upsert(
     {
-      client_id: result.data.clientId,
       code: result.data.code,
-      wholesaler_name: result.data.wholesalerName ?? "",
+      wholesaler_name: result.data.wholesalerName,
       name: result.data.name,
       postal_code: result.data.postalCode,
       address1: result.data.address1,
@@ -64,7 +62,7 @@ export async function saveDeliveryDestination(
       aliases: result.data.aliases,
     },
     {
-      onConflict: "client_id,code",
+      onConflict: "wholesaler_name,code",
     },
   );
 
@@ -80,6 +78,6 @@ export async function saveDeliveryDestination(
   return {
     ok: true,
     savedToSupabase: true,
-    message: "Supabaseの配送先マスターに登録しました。",
+    message: "Supabaseの配送先マスタに登録しました。",
   };
 }

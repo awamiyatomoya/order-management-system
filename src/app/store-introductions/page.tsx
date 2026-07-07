@@ -25,6 +25,7 @@ export default async function StoreIntroductionsPage({
       }}
       view="storeIntroductions"
       initialClientId={clientId}
+      initialStoreIntroductionClientId={resolvedClientId}
     />
   );
 }

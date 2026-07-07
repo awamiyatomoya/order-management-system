@@ -50,6 +50,7 @@ export type StoreIntroductionImport = {
   importedAt: string;
   totalStoreCount: number;
   introducedStoreCount: number;
+  chainName: string;
 };
 
 export type StoreIntroductionEntry = {
@@ -102,6 +103,8 @@ export type Order = {
   storeName: string;
   needsReview: boolean;
   reviewReasons: string[];
+  checkedByName?: string;
+  shippedByName?: string;
   lines: OrderLine[];
 };
 
@@ -109,6 +112,21 @@ export type ImportError = {
   row: number;
   field: string;
   message: string;
+};
+
+export type DeletionTargetType = "order" | "import_batch";
+
+export type DeletionLog = {
+  id: string;
+  clientId: string;
+  targetType: DeletionTargetType;
+  targetId: string | null;
+  orderNo: string;
+  fileName: string;
+  orderStatus: string;
+  lineCount: number | null;
+  operatorName: string;
+  deletedAt: string;
 };
 
 export type ImportBatch = {
@@ -120,6 +138,7 @@ export type ImportBatch = {
   fileUrl?: string;
   importedAt: string;
   status: "saved" | "blocked";
+  operatorName?: string;
   errors: ImportError[];
 };
 

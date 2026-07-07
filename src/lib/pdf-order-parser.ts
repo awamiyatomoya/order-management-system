@@ -812,7 +812,7 @@ function buildDeliveryImportReview(params: {
 }) {
   if (params.deliveryDestination) {
     const seriousReasons = params.deliveryMatch.reviewReasons.filter((reason) =>
-      /複数見つかりました|本部共通コードのみ|特定できませんでした/.test(reason),
+      /複数見つかりました|本部共通コードのみ|特定できませんでした|住所が一致しません/.test(reason),
     );
 
     return {

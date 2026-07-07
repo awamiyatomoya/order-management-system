@@ -15,14 +15,23 @@ export type ParsedStoreIntroductionEntry = {
 export type ParsedStoreIntroduction = {
   formatKey: StoreIntroductionFormatKey;
   entries: ParsedStoreIntroductionEntry[];
+  sheetCount: number;
 };
 
 const janPattern = /\d{13}/;
+const addressBookSheetNamePattern = /販促物|送付先|店舗住所|店舗マスタ/;
 
 export function parseStoreIntroductionWorkbook(buffer: ArrayBuffer): ParsedStoreIntroduction {
   const workbook = XLSX.read(buffer, { type: "array", cellDates: true });
+  const allEntries: ParsedStoreIntroductionEntry[] = [];
+  let formatKey: StoreIntroductionFormatKey | null = null;
+  let parsedSheetCount = 0;
 
   for (const sheetName of workbook.SheetNames) {
+    if (addressBookSheetNamePattern.test(sheetName)) {
+      continue;
+    }
+
     const sheet = workbook.Sheets[sheetName];
     if (!sheet) {
       continue;
@@ -30,18 +39,31 @@ export function parseStoreIntroductionWorkbook(buffer: ArrayBuffer): ParsedStore
 
     const flagList = tryParseFlagListSheet(sheet, workbook);
     if (flagList.entries.length > 0) {
-      return flagList;
+      formatKey = formatKey ?? "flag-list";
+      allEntries.push(...flagList.entries);
+      parsedSheetCount += 1;
+      continue;
     }
 
     const rowList = tryParseRowListSheet(sheet);
     if (rowList.entries.length > 0) {
-      return rowList;
+      formatKey = formatKey ?? "row-list";
+      allEntries.push(...rowList.entries);
+      parsedSheetCount += 1;
     }
   }
 
-  throw new Error(
-    "導入店舗シートを読み取れませんでした。フェーズ1対応形式（店舗一覧表・0/1フラグ表）か確認してください。",
-  );
+  if (allEntries.length === 0) {
+    throw new Error(
+      "導入店舗シートを読み取れませんでした。フェーズ1対応形式（店舗一覧表・0/1フラグ表）か確認してください。",
+    );
+  }
+
+  return {
+    formatKey: formatKey ?? "row-list",
+    entries: dedupeEntries(allEntries),
+    sheetCount: parsedSheetCount,
+  };
 }
 
 function tryParseRowListSheet(sheet: XLSX.WorkSheet): ParsedStoreIntroduction {
@@ -52,7 +74,7 @@ function tryParseRowListSheet(sheet: XLSX.WorkSheet): ParsedStoreIntroduction {
   });
 
   if (headerIndex === -1) {
-    return { formatKey: "row-list", entries: [] };
+    return { formatKey: "row-list", entries: [], sheetCount: 0 };
   }
 
   const header = rows[headerIndex].map(normalizeHeaderCell);
@@ -87,14 +109,16 @@ function tryParseRowListSheet(sheet: XLSX.WorkSheet): ParsedStoreIntroduction {
   return {
     formatKey: "row-list",
     entries: dedupeEntries(entries),
+    sheetCount: 0,
   };
 }
 
 function tryParseFlagListSheet(sheet: XLSX.WorkSheet, workbook: XLSX.WorkBook): ParsedStoreIntroduction {
   const rows = sheetToRows(sheet);
+  const sheetProduct = findJanAndProductFromSheet(sheet);
   const workbookProduct = findWorkbookJanAndProduct(workbook);
-  const jan = workbookProduct.jan;
-  const productName = workbookProduct.productName;
+  const jan = sheetProduct.jan || workbookProduct.jan;
+  const productName = sheetProduct.productName || workbookProduct.productName;
   const addressBook = loadPromotionalAddressBook(workbook);
   const entries: ParsedStoreIntroductionEntry[] = [];
 
@@ -128,55 +152,60 @@ function tryParseFlagListSheet(sheet: XLSX.WorkSheet, workbook: XLSX.WorkBook): 
   }
 
   if (entries.length < 5) {
-    return { formatKey: "flag-list", entries: [] };
+    return { formatKey: "flag-list", entries: [], sheetCount: 0 };
   }
 
   if (!jan) {
-    throw new Error("0/1形式のシートからJANコードを特定できませんでした。");
+    return { formatKey: "flag-list", entries: [], sheetCount: 0 };
   }
 
   return {
     formatKey: "flag-list",
     entries: dedupeEntries(entries),
+    sheetCount: 0,
   };
 }
 
 type PromotionalAddressEntry = {
+  storeCode: string;
   storeName: string;
   postalCode: string;
   address: string;
   tel: string;
 };
 
-function loadPromotionalAddressBook(workbook: XLSX.WorkBook) {
-  const map = new Map<string, PromotionalAddressEntry>();
-  const sheet = workbook.Sheets["販促物送付先"];
+function looksLikeFlagListSheet(rows: unknown[][]) {
+  let flagRows = 0;
 
-  if (!sheet) {
-    return map;
-  }
-
-  for (const row of sheetToRows(sheet)) {
+  for (const row of rows) {
     const storeCode = stringCell(row[0]);
     const storeName = stringCell(row[1]);
+    const flagValue = row[2];
 
     if (!/^\d{2,4}$/.test(storeCode) || !storeName) {
       continue;
     }
 
-    map.set(storeCode, {
-      storeName,
-      postalCode: stringCell(row[2]),
-      address: stringCell(row[3]),
-      tel: stringCell(row[4]),
-    });
+    const normalizedFlag = String(flagValue).trim();
+    if (normalizedFlag === "0" || normalizedFlag === "1") {
+      flagRows += 1;
+    }
   }
 
-  return map;
+  return flagRows >= 5;
 }
 
-function findWorkbookJanAndProduct(workbook: XLSX.WorkBook) {
-  let best: { jan: string; productName: string; score: number } | null = null;
+function looksLikeStoreAddress(value: string) {
+  const trimmed = value.trim();
+  if (trimmed.length < 4) {
+    return false;
+  }
+
+  return !/^\d+$/.test(trimmed);
+}
+
+export function buildPromotionalAddressBook(workbook: XLSX.WorkBook) {
+  const map = new Map<string, PromotionalAddressEntry>();
 
   for (const sheetName of workbook.SheetNames) {
     const sheet = workbook.Sheets[sheetName];
@@ -185,35 +214,179 @@ function findWorkbookJanAndProduct(workbook: XLSX.WorkBook) {
     }
 
     const rows = sheetToRows(sheet);
-    const headerIndex = rows.findIndex((row) => {
-      const normalized = row.map(normalizeHeaderCell);
-      return normalized.some((cell) =>
-        ["メーカjanコード", "janコード", "単品コード", "単品名称"].includes(cell),
-      );
-    });
-
-    if (headerIndex === -1) {
+    if (looksLikeFlagListSheet(rows)) {
       continue;
     }
 
+    const namedSheet = addressBookSheetNamePattern.test(sheetName);
+    const parsedRows = parseAddressBookRows(rows);
+
+    if (parsedRows.length === 0) {
+      continue;
+    }
+
+    if (!namedSheet && parsedRows.length < 5) {
+      continue;
+    }
+
+    parsedRows.forEach((entry) => {
+      map.set(entry.storeCode, entry);
+    });
+  }
+
+  return map;
+}
+
+function loadPromotionalAddressBook(workbook: XLSX.WorkBook) {
+  const map = buildPromotionalAddressBook(workbook);
+  const entries = Array.from(map.values());
+
+  return new Map(
+    entries.map((entry) => [
+      entry.storeCode,
+      {
+        storeName: entry.storeName,
+        postalCode: entry.postalCode,
+        address: entry.address,
+        tel: entry.tel,
+      },
+    ]),
+  );
+}
+
+function parseAddressBookRows(rows: unknown[][]) {
+  const headerIndex = rows.findIndex((row) => {
+    const normalized = row.map(normalizeHeaderCell);
+    return (
+      normalized.some((cell) => ["店舗コード", "店コード", "回答店番", "店番"].includes(cell)) &&
+      normalized.some((cell) => ["店名", "店舗名"].includes(cell)) &&
+      normalized.some((cell) => ["住所", "住所1", "住所①"].includes(cell))
+    );
+  });
+
+  if (headerIndex >= 0) {
     const header = rows[headerIndex].map(normalizeHeaderCell);
-    const janIndex = findColumnIndex(header, ["メーカjanコード", "janコード"]);
-    const altJanIndex = findColumnIndex(header, ["単品コード"]);
-    const productNameIndex = findColumnIndex(header, ["単品名称", "商品名称", "商品名"]);
+    const storeCodeIndex = findColumnIndex(header, ["店舗コード", "店コード", "回答店番", "店番"]);
+    const storeNameIndex = findColumnIndex(header, ["店名", "店舗名"]);
+    const postalCodeIndex = findColumnIndex(header, ["郵便番号"]);
+    const addressIndex = findColumnIndex(header, ["住所", "住所1", "住所①"]);
+    const telIndex = findColumnIndex(header, ["tel", "電話", "電話番号"]);
 
-    for (const row of rows.slice(headerIndex + 1, headerIndex + 25)) {
-      const jan = extractJan(row[janIndex] ?? "") || extractJan(row[altJanIndex] ?? "");
-      const productName = stringCell(row[productNameIndex]);
+    return rows
+      .slice(headerIndex + 1)
+      .map((row) => {
+        const storeCode = stringCell(row[storeCodeIndex]);
+        const storeName = stringCell(row[storeNameIndex]);
 
-      if (!jan) {
-        continue;
-      }
+        if (!storeName) {
+          return null;
+        }
 
-      const score = scoreWorkbookProductRow(productName);
+        return {
+          storeCode,
+          storeName,
+          postalCode: stringCell(row[postalCodeIndex]),
+          address: stringCell(row[addressIndex]),
+          tel: stringCell(row[telIndex]),
+        };
+      })
+      .filter((entry): entry is PromotionalAddressEntry => Boolean(entry));
+  }
 
-      if (!best || score > best.score) {
-        best = { jan, productName, score };
-      }
+  const entries: PromotionalAddressEntry[] = [];
+
+  for (const row of rows) {
+    const storeCode = stringCell(row[0]);
+    const storeName = stringCell(row[1]);
+
+    if (!/^\d{2,4}$/.test(storeCode) || !storeName) {
+      continue;
+    }
+
+    const address = stringCell(row[3]);
+    if (!looksLikeStoreAddress(address)) {
+      continue;
+    }
+
+    entries.push({
+      storeCode,
+      storeName,
+      postalCode: stringCell(row[2]),
+      address,
+      tel: stringCell(row[4]),
+    });
+  }
+
+  return entries;
+}
+
+function findJanAndProductFromSheet(sheet: XLSX.WorkSheet) {
+  return findJanAndProductFromRows(sheetToRows(sheet));
+}
+
+function findJanAndProductFromRows(rows: unknown[][]) {
+  const headerIndex = rows.findIndex((row) => {
+    const normalized = row.map(normalizeHeaderCell);
+    return normalized.some((cell) =>
+      ["メーカjanコード", "janコード", "単品コード", "単品名称"].includes(cell),
+    );
+  });
+
+  if (headerIndex === -1) {
+    return { jan: "", productName: "" };
+  }
+
+  const header = rows[headerIndex].map(normalizeHeaderCell);
+  const janIndex = findColumnIndex(header, ["メーカjanコード", "janコード"]);
+  const altJanIndex = findColumnIndex(header, ["単品コード"]);
+  const productNameIndex = findColumnIndex(header, ["単品名称", "商品名称", "商品名"]);
+  let best: { jan: string; productName: string; score: number } | null = null;
+
+  for (const row of rows.slice(headerIndex + 1, headerIndex + 25)) {
+    const jan = extractJan(row[janIndex] ?? "") || extractJan(row[altJanIndex] ?? "");
+    const productName = stringCell(row[productNameIndex]);
+
+    if (!jan) {
+      continue;
+    }
+
+    const score = scoreWorkbookProductRow(productName);
+
+    if (!best || score > best.score) {
+      best = { jan, productName, score };
+    }
+  }
+
+  if (best) {
+    return { jan: best.jan, productName: best.productName };
+  }
+
+  return { jan: "", productName: "" };
+}
+
+function findWorkbookJanAndProduct(workbook: XLSX.WorkBook) {
+  let best: { jan: string; productName: string; score: number } | null = null;
+
+  for (const sheetName of workbook.SheetNames) {
+    if (addressBookSheetNamePattern.test(sheetName)) {
+      continue;
+    }
+
+    const sheet = workbook.Sheets[sheetName];
+    if (!sheet) {
+      continue;
+    }
+
+    const sheetProduct = findJanAndProductFromSheet(sheet);
+
+    if (!sheetProduct.jan) {
+      continue;
+    }
+
+    const score = scoreWorkbookProductRow(sheetProduct.productName);
+
+    if (!best || score > best.score) {
+      best = { jan: sheetProduct.jan, productName: sheetProduct.productName, score };
     }
   }
 

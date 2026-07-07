@@ -21,6 +21,67 @@ export function isArataPdfOrder(text: string, lines: string[]) {
   return /あらた送付先一覧/.test(text);
 }
 
+const arataPdfDateLinePattern =
+  /(?:\d{2}\.\d{2}\.\d{2}|\d{2,4}\s*[\/\-.年月]\s*\d{1,2}\s*[\/\-.月]?\s*\d{1,2}(?!\d)\s*日?)/;
+
+export function extractArataPdfOrderDate(lines: string[], orderNo = ""): string {
+  const resolvedOrderNo = orderNo || findArataPdfOrderNo(lines);
+
+  if (resolvedOrderNo) {
+    const orderIndex = lines.findIndex((line) => lineIncludesOrderNo(line, resolvedOrderNo));
+
+    if (orderIndex >= 0) {
+      for (const line of lines.slice(orderIndex + 1, orderIndex + 4)) {
+        const trimmed = line.trim();
+
+        if (/^(?:着荷指定|着荷指定日|FAX-NO)/.test(trimmed)) {
+          break;
+        }
+
+        const date = parseArataPdfDateLine(line);
+
+        if (date) {
+          return date;
+        }
+      }
+    }
+  }
+
+  const receivedAtDate = extractArataPdfReceivedAtDate(lines);
+
+  if (receivedAtDate) {
+    return receivedAtDate;
+  }
+
+  return extractArataPdfFaxHeaderDate(lines);
+}
+
+export function extractArataPdfArrivalDueDate(lines: string[], orderDate = ""): string {
+  for (const label of ["着荷指定日", "着荷指定", "若荷指定", "若狗指定"]) {
+    const index = lines.findIndex((line) => line.trim() === label || line.startsWith(`${label} `));
+
+    if (index === -1) {
+      continue;
+    }
+
+    const inlineDate = parseArataPdfDateLine(lines[index].replace(label, ""));
+
+    if (inlineDate && inlineDate !== orderDate) {
+      return inlineDate;
+    }
+
+    for (const line of lines.slice(index + 1, index + 4)) {
+      const date = parseArataPdfDateLine(line);
+
+      if (date) {
+        return date;
+      }
+    }
+  }
+
+  return "";
+}
+
 export function extractArataPdfDelivery(lines: string[]): ArataPdfDelivery {
   const shipToTel = extractArataPdfTel(lines);
   const postalIndex = lines.findIndex((line) => /^\d{3}-?\d{4}$/.test(cleanupArataValue(line)));
@@ -79,9 +140,7 @@ export function extractArataPdfLineItems(lines: string[]) {
         return;
       }
 
-      const qty =
-        extractArataQtyNearJan(lines, index) ??
-        extractQtyFromFollowingLines(lines, index + 1);
+      const qty = extractArataQtyNearJan(lines, index);
 
       if (qty !== null) {
         items.push({ jan, qty });
@@ -180,42 +239,111 @@ function extractArataPdfName(lines: string[], addressIndex: number) {
 }
 
 function extractArataQtyNearJan(lines: string[], janLineIndex: number) {
-  const baraIndex = lines.findIndex((line) => /有償バラ数|景品バラ数/.test(line));
+  const detailLines = lines.slice(janLineIndex + 1, janLineIndex + 14);
+  const qtyFromAmount = extractArataQtyFromAmount(detailLines);
 
-  if (baraIndex !== -1) {
-    for (const line of lines.slice(baraIndex + 1, baraIndex + 6)) {
-      const matched = line.trim().match(/^(\d{1,5})$/);
-
-      if (matched) {
-        const qty = Number(matched[1]);
-
-        if (Number.isInteger(qty) && qty > 0) {
-          return qty;
-        }
-      }
-    }
+  if (qtyFromAmount !== null) {
+    return qtyFromAmount;
   }
 
-  for (const line of lines.slice(Math.max(0, janLineIndex - 8), janLineIndex)) {
-    const matched = line.trim().match(/^(\d{1,5})$/);
+  const numericLines = collectArataNumericLinesAfterJan(detailLines);
 
-    if (!matched || isArataNoiseLine(line)) {
+  if (numericLines.length === 0) {
+    return null;
+  }
+
+  return numericLines[numericLines.length - 1];
+}
+
+function extractArataQtyFromAmount(lines: string[]) {
+  const unitPrice = extractArataUnitPrice(lines);
+  const amount = extractArataLineAmount(lines);
+
+  if (unitPrice === null || amount === null || unitPrice <= 0) {
+    return null;
+  }
+
+  const qty = Math.round(amount / unitPrice);
+
+  if (!Number.isInteger(qty) || qty <= 0) {
+    return null;
+  }
+
+  const recomputedAmount = unitPrice * qty;
+
+  if (Math.abs(recomputedAmount - amount) > 0.01) {
+    return null;
+  }
+
+  return qty;
+}
+
+function extractArataUnitPrice(lines: string[]) {
+  for (const line of lines) {
+    const matched = line
+      .replace(/,/g, "")
+      .trim()
+      .match(/(\d{1,6}\.\d{1,2})/);
+
+    if (!matched) {
       continue;
     }
 
-    const qty = Number(matched[1]);
+    const unitPrice = Number(matched[1]);
 
-    if (Number.isInteger(qty) && qty > 0) {
-      return qty;
+    if (Number.isFinite(unitPrice) && unitPrice > 0) {
+      return unitPrice;
     }
   }
 
   return null;
 }
 
-function extractQtyFromFollowingLines(lines: string[], startIndex: number) {
-  for (const line of lines.slice(startIndex, startIndex + 8)) {
-    const matched = line.trim().match(/^(\d{1,5})$/);
+function extractArataLineAmount(lines: string[]) {
+  for (const line of lines) {
+    const normalized = line.replace(/,/g, "").trim();
+
+    if (!/^\d[\d.]*\|?$/.test(normalized)) {
+      continue;
+    }
+
+    const matched = normalized.match(/^(\d{1,8}(?:\.\d{1,2})?)/);
+
+    if (!matched) {
+      continue;
+    }
+
+    const amount = Number(matched[1]);
+
+    if (!Number.isFinite(amount) || amount <= 0) {
+      continue;
+    }
+
+    if (amount < 1000) {
+      continue;
+    }
+
+    return amount;
+  }
+
+  return null;
+}
+
+function collectArataNumericLinesAfterJan(lines: string[]) {
+  const numbers: number[] = [];
+
+  for (const line of lines) {
+    const trimmed = cleanupArataValue(line);
+
+    if (!trimmed || trimmed === "J" || /^[A-Za-z]$/.test(trimmed)) {
+      continue;
+    }
+
+    if (isArataProductNameLine(trimmed) || isArataPriceLine(trimmed)) {
+      break;
+    }
+
+    const matched = trimmed.match(/^(\d{1,5})$/);
 
     if (!matched) {
       continue;
@@ -224,11 +352,19 @@ function extractQtyFromFollowingLines(lines: string[], startIndex: number) {
     const qty = Number(matched[1]);
 
     if (Number.isInteger(qty) && qty > 0) {
-      return qty;
+      numbers.push(qty);
     }
   }
 
-  return null;
+  return numbers;
+}
+
+function isArataProductNameLine(line: string) {
+  return /[^\d\s.,|￥¥\\\-/]/.test(line) && !/^\d{2}\.\d{2}\.\d{2}$/.test(line);
+}
+
+function isArataPriceLine(line: string) {
+  return /\d+\.\d{2}\|?$/.test(line.replace(/,/g, ""));
 }
 
 function isArataStoreCodeLine(line: string) {
@@ -277,3 +413,95 @@ export function isArataStoreDestinationCode(line: string) {
 export function buildArataPdfShipToAddress(delivery: ArataPdfDelivery) {
   return [delivery.shipToPostalCode, delivery.shipToAddress].filter(Boolean).join("\n");
 }
+
+function findArataPdfOrderNo(lines: string[]) {
+  const headerIndex = lines.findIndex((line) => /発注番号/.test(line));
+
+  if (headerIndex === -1) {
+    return "";
+  }
+
+  for (const line of lines.slice(headerIndex, headerIndex + 12)) {
+    const orderNo = extractArataPdfOrderNoCandidate(line);
+
+    if (orderNo) {
+      return orderNo;
+    }
+  }
+
+  return "";
+}
+
+function lineIncludesOrderNo(line: string, orderNo: string) {
+  const normalizedLine = line.replace(/\D/g, "");
+
+  return line.includes(orderNo) || normalizedLine === orderNo;
+}
+
+function extractArataPdfOrderNoCandidate(line: string) {
+  const withoutDates = line.replace(arataPdfDateLinePattern, " ").trim();
+  const match = withoutDates.match(/\b\d{5,10}\b/);
+
+  return match?.[0] ?? "";
+}
+
+function extractArataPdfReceivedAtDate(lines: string[]) {
+  const match = lines.join("\n").match(/受付日時\s*(\d{2}\.\d{2}\.\d{2})/);
+
+  return match ? normalizeArataPdfDate(match[1]) : "";
+}
+
+function extractArataPdfFaxHeaderDate(lines: string[]) {
+  const headerLines = lines.slice(0, 8);
+  let year = "";
+
+  for (const line of headerLines) {
+    const yearMatch = line.trim().match(/^(\d{4})年$/);
+
+    if (yearMatch) {
+      year = yearMatch[1];
+    }
+
+    const monthDayMatch = line.match(/(\d{1,2})月(\d{1,2})日/);
+
+    if (year && monthDayMatch) {
+      return `${year}-${monthDayMatch[1].padStart(2, "0")}-${monthDayMatch[2].padStart(2, "0")}`;
+    }
+  }
+
+  return "";
+}
+
+function parseArataPdfDateLine(line: string) {
+  const trimmed = cleanupArataValue(line);
+  const dotted = trimmed.match(/^(\d{2})\.(\d{2})\.(\d{2})$/);
+
+  if (dotted) {
+    return normalizeArataPdfDate(`${dotted[1]}.${dotted[2]}.${dotted[3]}`);
+  }
+
+  const match = trimmed.match(arataPdfDateLinePattern);
+
+  return match ? normalizeArataPdfDate(match[0]) : "";
+}
+
+function normalizeArataPdfDate(value: string) {
+  const dotted = value.trim().match(/^(\d{2})\.(\d{2})\.(\d{2})$/);
+
+  if (dotted) {
+    return `20${dotted[1]}-${dotted[2]}-${dotted[3]}`;
+  }
+
+  const parts = value.match(/\d{1,4}/g);
+
+  if (!parts || parts.length < 3) {
+    return "";
+  }
+
+  const [year, month, day] = parts;
+  const normalizedYear = year.length === 2 ? `20${year}` : year;
+
+  return `${normalizedYear}-${month.padStart(2, "0")}-${day.padStart(2, "0")}`;
+}
+
+

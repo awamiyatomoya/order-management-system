@@ -1,9 +1,12 @@
 import {
   deliveryDestinations as staticDeliveryDestinations,
+  mergeDeliveryDestinations,
   type DeliveryDestination,
 } from "@/lib/delivery-destination-master";
+import { mapDeletionLog, type DeletionLogRow } from "@/lib/deletion-log";
 import type {
   Client,
+  DeletionLog,
   ImportBatch,
   ImportError,
   Order,
@@ -15,7 +18,10 @@ import type {
   StoreIntroductionImport,
   Supplier,
 } from "@/lib/types";
+import type { StoreLocationRecord } from "@/lib/store-location-groups";
+import { calculatePayoutRateFromPrices } from "@/lib/payout-rate";
 import { productMasterExtraFields } from "@/lib/product-master-fields";
+import { readStoreLocationRecords } from "@/lib/supabase/store-location-actions";
 import { createServerSupabaseClient, hasSupabaseServerEnv } from "./server";
 
 export const productSelectColumns = [
@@ -54,8 +60,10 @@ export type OrderWorkbenchInitialData = {
   importBatches: ImportBatch[];
   deliveryDestinations: DeliveryDestination[];
   stores: Store[];
+  storeLocations: StoreLocationRecord[];
   storeIntroductionImports: StoreIntroductionImport[];
   storeIntroductionEntries: StoreIntroductionEntry[];
+  deletionLogs: DeletionLog[];
   source: "supabase" | "error";
   message: string;
 };
@@ -120,6 +128,8 @@ type OrderRow = {
   store_name?: string | null;
   needs_review?: boolean | null;
   review_reasons?: string | null;
+  checked_by_name?: string | null;
+  shipped_by_name?: string | null;
   imported_at: string;
   order_lines: OrderLineRow[] | null;
 };
@@ -137,14 +147,14 @@ type ImportBatchRow = {
   file_name: string;
   file_storage_path?: string | null;
   status: "saved" | "blocked";
+  operator_name?: string | null;
   imported_at: string;
   import_errors: ImportErrorRow[] | null;
 };
 
 type DeliveryDestinationRow = {
-  client_id: string;
   code: string;
-  wholesaler_name?: string | null;
+  wholesaler_name: string;
   name: string;
   postal_code: string;
   address1: string;
@@ -180,6 +190,8 @@ export async function getOrderWorkbenchInitialData(
       importBatchesResult,
       deliveryDestinations,
       stores,
+      storeLocations,
+      deletionLogsResult,
     ] = await Promise.all([
       requirements.clients ? readClients(supabase) : null,
       requirements.suppliers ? readSuppliers(supabase) : null,
@@ -188,6 +200,8 @@ export async function getOrderWorkbenchInitialData(
       requirements.importBatches ? readImportBatches(supabase) : null,
       requirements.deliveryDestinations ? readDeliveryDestinations(supabase) : [],
       requirements.stores ? readStores(supabase) : [],
+      requirements.storeLocations ? readStoreLocationRecords() : [],
+      requirements.deletionLogs ? readDeletionLogs(supabase) : null,
     ]);
 
     const firstError = [
@@ -196,6 +210,7 @@ export async function getOrderWorkbenchInitialData(
       productsResult?.error,
       ordersResult?.error,
       importBatchesResult?.error,
+      deletionLogsResult?.error,
     ].find(Boolean);
 
     if (firstError) {
@@ -211,6 +226,7 @@ export async function getOrderWorkbenchInitialData(
     const productTotalCount = productsResult?.count ?? products.length;
     const orders = ((ordersResult?.data ?? []) as OrderRow[]).map(mapOrder);
     const importBatches = ((importBatchesResult?.data ?? []) as ImportBatchRow[]).map(mapImportBatch);
+    const deletionLogs = ((deletionLogsResult?.data ?? []) as DeletionLogRow[]).map(mapDeletionLog);
 
     return {
       clients,
@@ -221,8 +237,10 @@ export async function getOrderWorkbenchInitialData(
       importBatches,
       deliveryDestinations,
       stores,
+      storeLocations,
       storeIntroductionImports: [],
       storeIntroductionEntries: [],
+      deletionLogs,
       source: "supabase",
       message: "Supabaseから読み取ったデータを表示しています。保存処理はまだ仮実装です。",
     };
@@ -249,6 +267,8 @@ function getDataRequirements(scope: OrderWorkbenchDataScope) {
     importBatches: scope === "orderFiles" || scope === "history",
     deliveryDestinations: scope === "orders" || scope === "deliveryDestinations",
     stores: scope === "orders" || scope === "sellIn" || scope === "stores" || scope === "storeIntroductions",
+    storeLocations: scope === "stores" || scope === "storeIntroductions",
+    deletionLogs: scope === "history",
   };
 }
 
@@ -262,8 +282,10 @@ function getEmptyInitialData(message: string): OrderWorkbenchInitialData {
     importBatches: [],
     deliveryDestinations: [],
     stores: [],
+    storeLocations: [],
     storeIntroductionImports: [],
     storeIntroductionEntries: [],
+    deletionLogs: [],
     source: "error",
     message,
   };
@@ -313,6 +335,8 @@ function readOrders(supabase: ReturnType<typeof createServerSupabaseClient>) {
       store_name,
       needs_review,
       review_reasons,
+      checked_by_name,
+      shipped_by_name,
       imported_at,
       order_lines (
         id,
@@ -333,6 +357,15 @@ function readOrders(supabase: ReturnType<typeof createServerSupabaseClient>) {
     .order("imported_at", { ascending: false });
 }
 
+function readDeletionLogs(supabase: ReturnType<typeof createServerSupabaseClient>) {
+  return supabase
+    .from("deletion_logs")
+    .select(
+      "id, client_id, target_type, target_id, order_no, file_name, order_status, line_count, operator_name, deleted_at",
+    )
+    .order("deleted_at", { ascending: false });
+}
+
 function readImportBatches(supabase: ReturnType<typeof createServerSupabaseClient>) {
   return supabase
     .from("import_batches")
@@ -344,6 +377,7 @@ function readImportBatches(supabase: ReturnType<typeof createServerSupabaseClien
       file_name,
       file_storage_path,
       status,
+      operator_name,
       imported_at,
       import_errors (
         row_number,
@@ -352,8 +386,7 @@ function readImportBatches(supabase: ReturnType<typeof createServerSupabaseClien
       )
     `,
     )
-    .order("imported_at", { ascending: false })
-    .limit(20);
+    .order("imported_at", { ascending: false });
 }
 
 async function readStores(
@@ -374,20 +407,45 @@ async function readStores(
 async function readDeliveryDestinations(
   supabase: ReturnType<typeof createServerSupabaseClient>,
 ) {
+  await ensureBaselineDeliveryDestinations(supabase);
+
   const { data, error } = await supabase
     .from("delivery_destinations")
-    .select("client_id, code, wholesaler_name, name, postal_code, address1, address2, address3, tel, aliases")
+    .select("code, wholesaler_name, name, postal_code, address1, address2, address3, tel, aliases")
     .order("code");
 
   if (error) {
     return staticDeliveryDestinations;
   }
 
-  const destinations = [
+  return mergeDeliveryDestinations([
     ...staticDeliveryDestinations,
     ...((data ?? []) as DeliveryDestinationRow[]).map(mapDeliveryDestination),
-  ];
-  return destinations;
+  ]);
+}
+
+async function ensureBaselineDeliveryDestinations(
+  supabase: ReturnType<typeof createServerSupabaseClient>,
+) {
+  if (staticDeliveryDestinations.length === 0) {
+    return;
+  }
+
+  const rows = staticDeliveryDestinations.map((destination) => ({
+    wholesaler_name: destination.wholesalerName ?? "大山",
+    code: destination.code,
+    name: destination.name,
+    postal_code: destination.postalCode,
+    address1: destination.address1,
+    address2: destination.address2,
+    address3: destination.address3,
+    tel: destination.tel,
+    aliases: destination.aliases,
+  }));
+
+  await supabase.from("delivery_destinations").upsert(rows, {
+    onConflict: "wholesaler_name,code",
+  });
 }
 
 function mapClient(row: ClientRow): Client {
@@ -457,7 +515,10 @@ export function mapProduct(row: ProductRow): Product {
     wholesalePrice: Number(row.wholesale_price),
     taxRate: Number(row.tax_rate),
     retailPrice: row.retail_price == null ? null : Number(row.retail_price),
-    payoutRate: row.payout_rate == null ? null : Number(row.payout_rate),
+    payoutRate: calculatePayoutRateFromPrices(
+      Number(row.wholesale_price),
+      row.retail_price == null ? null : Number(row.retail_price),
+    ),
     memo: typeof row.flags?.memo === "string" ? row.flags.memo : "",
     productImagePath:
       typeof row.product_image_path === "string" ? row.product_image_path : undefined,
@@ -495,6 +556,8 @@ function mapOrder(row: OrderRow): Order {
     storeName: row.store_name ?? "",
     needsReview: row.needs_review ?? false,
     reviewReasons: parseStoredReviewReasons(row.review_reasons),
+    checkedByName: row.checked_by_name ?? undefined,
+    shippedByName: row.shipped_by_name ?? undefined,
     importedAt: row.imported_at,
     lines: (row.order_lines ?? []).map(mapOrderLine),
   };
@@ -541,15 +604,15 @@ function mapImportBatch(row: ImportBatchRow): ImportBatch {
     fileStoragePath: row.file_storage_path ?? undefined,
     importedAt: row.imported_at,
     status: row.status,
+    operatorName: row.operator_name ?? undefined,
     errors: (row.import_errors ?? []).map(mapImportError),
   };
 }
 
 function mapDeliveryDestination(row: DeliveryDestinationRow): DeliveryDestination {
   return {
-    clientId: row.client_id,
     code: row.code,
-    wholesalerName: row.wholesaler_name ?? undefined,
+    wholesalerName: row.wholesaler_name,
     name: row.name,
     postalCode: row.postal_code,
     address1: row.address1,

@@ -28,14 +28,80 @@ export const defaultStoreChains: Store[] = [
   },
 ];
 
+/** 受注に店舗を紐づけないことを明示したときの store_name 保存値 */
+export const ORDER_STORE_NONE = "（店舗なし）";
+
+export const STORE_MASTER_MISSING_REASON = "店舗マスタ未登録";
+export const STORE_SKIP_CONFIRMATION_MESSAGE = "店舗登録は無しでよろしいですか？";
+
+export function getStoreMemoCandidates(order: Order) {
+  return order.lines
+    .map((line) => line.memo)
+    .filter((value) => normalizeStoreName(value) && !isLikelyTableHeaderMemo(value));
+}
+
+export function getSuggestedStoreNameFromMemo(order: Order) {
+  const candidates = getStoreMemoCandidates(order);
+  return candidates[0] ?? candidates.join(" ");
+}
+
+export function isPersistedStoreName(value: string | undefined | null) {
+  const trimmed = value?.trim() ?? "";
+
+  return trimmed.length > 0 && trimmed !== "店舗不明";
+}
+
+export function hasManualStoreAssignment(order: Order) {
+  return isPersistedStoreName(order.storeName);
+}
+
+export function needsStoreConfirmation(order: Order, stores: Store[]) {
+  if (hasManualStoreAssignment(order)) {
+    return false;
+  }
+
+  return resolveStoreNameForOrder(order, stores) === "店舗不明";
+}
+
+/** @deprecated needsStoreConfirmation を使用してください。 */
+export function hasUnresolvedStoreMemo(order: Order, stores: Store[]) {
+  return needsStoreConfirmation(order, stores) && getStoreMemoCandidates(order).length > 0;
+}
+
+/** @deprecated needsStoreConfirmation を使用してください。 */
+export function isStoreNotApplicable(order: Order, stores: Store[]) {
+  return needsStoreConfirmation(order, stores);
+}
+
+export function getOrderDisplayReviewReasons(order: Order, _stores: Store[]) {
+  return Array.from(
+    new Set(
+      (order.reviewReasons ?? []).filter((reason) => reason !== STORE_MASTER_MISSING_REASON),
+    ),
+  );
+}
+
+export function shouldShowOrderNeedsReviewBadge(order: Order, stores: Store[]) {
+  return getOrderDisplayReviewReasons(order, stores).length > 0;
+}
+
+export function formatOrderStoreDisplayName(storeName: string) {
+  if (!storeName || storeName === "店舗不明" || storeName === ORDER_STORE_NONE) {
+    return "-";
+  }
+
+  return storeName;
+}
+
 export function applyStoreNamesToOrders(orders: Order[], stores: Store[]) {
   return orders.map((order) => {
-    const storeName = resolveStoreNameForOrder(order, stores);
-    const reviewReasons = Array.from(new Set(order.reviewReasons ?? []));
-
-    if (storeName === "店舗不明") {
-      reviewReasons.push("店舗マスタ未登録");
-    }
+    const resolvedStoreName = resolveStoreNameForOrder(order, stores);
+    const storeName = isPersistedStoreName(order.storeName)
+      ? order.storeName.trim()
+      : resolvedStoreName !== "店舗不明"
+        ? resolvedStoreName
+        : "";
+    const reviewReasons = getOrderDisplayReviewReasons(order, stores);
 
     return {
       ...order,
@@ -47,17 +113,36 @@ export function applyStoreNamesToOrders(orders: Order[], stores: Store[]) {
 }
 
 export function resolveStoreNameForOrder(order: Order, stores: Store[]) {
-  const memo =
-    order.lines
-      .map((line) => line.memo)
-      .find((value) => normalizeStoreName(value) && !isLikelyTableHeaderMemo(value)) ?? "";
+  const memoCandidates = order.lines
+    .map((line) => line.memo)
+    .filter((value) => normalizeStoreName(value) && !isLikelyTableHeaderMemo(value));
 
-  return getStoreNameFromMemo(memo, stores);
+  for (const memo of memoCandidates) {
+    const storeName = getStoreNameFromMemo(memo, stores);
+
+    if (storeName !== "店舗不明") {
+      return storeName;
+    }
+  }
+
+  if (memoCandidates.length > 0) {
+    const combinedStoreName = getStoreNameFromMemo(memoCandidates.join(" "), stores);
+
+    if (combinedStoreName !== "店舗不明") {
+      return combinedStoreName;
+    }
+  }
+
+  return "店舗不明";
 }
 
 export function getOrderStoreName(order: Order, stores: Store[]) {
-  if (order.storeName && !isLikelyTableHeaderMemo(order.storeName)) {
-    return order.storeName;
+  if (order.storeName === ORDER_STORE_NONE) {
+    return "店舗不明";
+  }
+
+  if (isPersistedStoreName(order.storeName)) {
+    return order.storeName.trim();
   }
 
   return resolveStoreNameForOrder(order, stores);
@@ -172,6 +257,10 @@ function getDefaultStoreNameFromMemo(memoStoreName: string) {
 
   if (memo.includes("イナイミモザ") || memo.includes("ミモザ")) {
     return "ミモザ";
+  }
+
+  if (memo.includes("ドンキ") || memo.includes("donki")) {
+    return "ドン・キホーテ";
   }
 
   return null;

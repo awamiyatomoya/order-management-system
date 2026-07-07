@@ -1,11 +1,23 @@
 "use server";
 
+import * as XLSX from "xlsx";
 import { revalidatePath } from "next/cache";
 import {
+  buildPromotionalAddressBook,
   parseStoreIntroductionWorkbook,
   resolveIntroductionProduct,
   summarizeStoreIntroduction,
 } from "@/lib/store-introduction-parsers";
+import { detectIntroductionChainName } from "@/lib/store-introduction-kpi";
+import {
+  fetchLoftStoreLocationsFromOfficialSite,
+  mergeLoftLocationsWithExisting,
+} from "@/lib/loft-store-locations";
+import {
+  buildStoreLocationLookup,
+  resolveStoreLocationAddress,
+  type StoreLocation,
+} from "@/lib/store-location-matching";
 import {
   getMatchedStoreNameForIntroduction,
   isLoftSeriesIntroductionSheet,
@@ -62,6 +74,7 @@ export async function importStoreIntroductionWorkbook(
   try {
     const fileBuffer = await file.arrayBuffer();
     parsed = parseStoreIntroductionWorkbook(fileBuffer);
+    await upsertStoreLocationsFromWorkbook(fileBuffer);
   } catch (error) {
     return {
       ok: false,
@@ -78,10 +91,17 @@ export async function importStoreIntroductionWorkbook(
 
   const summary = summarizeStoreIntroduction(parsed.entries);
   const isLoftSeriesSheet = isLoftSeriesIntroductionSheet(parsed.formatKey, parsed.entries);
+
+  if (isLoftSeriesSheet) {
+    await syncLoftStoreLocationsFromOfficialSite();
+  }
+
+  const storeLocationLookup = buildStoreLocationLookup(await readStoreLocations());
   const importId = createId();
   const importedAt = new Date().toISOString();
   const entries: StoreIntroductionEntry[] = parsed.entries.map((entry) => {
     const resolvedProduct = resolveIntroductionProduct(entry.jan, entry.productName, clientId, products);
+    const enrichedAddress = resolveStoreLocationAddress(entry, storeLocationLookup);
 
     return {
       id: createId(),
@@ -91,7 +111,7 @@ export async function importStoreIntroductionWorkbook(
       productName: resolvedProduct.productName,
       storeName: entry.storeName,
       storeCode: entry.storeCode,
-      address: entry.address,
+      address: enrichedAddress || entry.address,
       postalCode: entry.postalCode,
       isIntroduced: entry.isIntroduced,
       matchedStoreName: getMatchedStoreNameForIntroduction(
@@ -103,6 +123,8 @@ export async function importStoreIntroductionWorkbook(
     };
   });
 
+  const chainName = detectIntroductionChainName(entries, isLoftSeriesSheet);
+
   const importBatch: StoreIntroductionImport = {
     id: importId,
     clientId,
@@ -111,6 +133,7 @@ export async function importStoreIntroductionWorkbook(
     importedAt,
     totalStoreCount: summary.totalStoreCount,
     introducedStoreCount: summary.introducedStoreCount,
+    chainName,
   };
 
   if (!hasSupabaseServerEnv()) {
@@ -132,6 +155,7 @@ export async function importStoreIntroductionWorkbook(
     imported_at: importBatch.importedAt,
     total_store_count: importBatch.totalStoreCount,
     introduced_store_count: importBatch.introducedStoreCount,
+    chain_name: importBatch.chainName,
   });
 
   if (importError) {
@@ -165,17 +189,21 @@ export async function importStoreIntroductionWorkbook(
     };
   }
 
+  await upsertStoreLocationsFromEntries(parsed.entries);
+
   revalidatePath("/store-introductions");
   revalidatePath("/stores");
 
   const formatLabel = parsed.formatKey === "row-list" ? "店舗一覧表" : "0/1フラグ表";
+  const chainLabel = chainName ? `${chainName} / ` : "";
+  const sheetLabel = parsed.sheetCount > 1 ? `${parsed.sheetCount}シート / ` : "";
 
   return {
     ok: true,
     savedToSupabase: true,
     importBatch,
     entries,
-    message: `${formatLabel}として取り込みました。導入 ${summary.introducedStoreCount}店舗 / 全${summary.totalStoreCount}店舗（JAN ${summary.jans.length}件）。`,
+    message: `${formatLabel}として取り込みました。${chainLabel}${sheetLabel}導入 ${summary.introducedStoreCount}店舗 / 全${summary.totalStoreCount}店舗（JAN ${summary.jans.length}件）。`,
   };
 }
 
@@ -190,7 +218,7 @@ export async function readStoreIntroductionData(clientId: string) {
   const supabase = createServerSupabaseClient();
   const { data: imports, error: importsError } = await supabase
     .from("store_introduction_imports")
-    .select("id, client_id, file_name, format_key, imported_at, total_store_count, introduced_store_count")
+    .select("id, client_id, file_name, format_key, imported_at, total_store_count, introduced_store_count, chain_name")
     .eq("client_id", clientId)
     .order("imported_at", { ascending: false })
     .limit(20);
@@ -221,8 +249,172 @@ export async function readStoreIntroductionData(clientId: string) {
 
   return {
     imports: imports.map(mapStoreIntroductionImport),
-    entries: (entries ?? []).map(mapStoreIntroductionEntry),
+    entries: await enrichStoreIntroductionEntriesWithLocations(
+      (entries ?? []).map(mapStoreIntroductionEntry),
+    ),
   };
+}
+
+export async function syncLoftStoreLocationsFromOfficialSite(): Promise<{
+  ok: boolean;
+  message: string;
+  count: number;
+}> {
+  if (!hasSupabaseServerEnv()) {
+    return {
+      ok: false,
+      message: "Supabase未設定のため、ロフト店舗住所を保存できません。",
+      count: 0,
+    };
+  }
+
+  try {
+    const loftLocations = await fetchLoftStoreLocationsFromOfficialSite();
+    const existingLocations = await readStoreLocations();
+    const mergedLocations = mergeLoftLocationsWithExisting(loftLocations, existingLocations);
+
+    await upsertStoreLocations(
+      mergedLocations.map((location) => ({
+        ...location,
+        chainName: "ロフト",
+      })),
+    );
+
+    revalidatePath("/store-introductions");
+    revalidatePath("/stores");
+
+    return {
+      ok: true,
+      message: `ロフト公式サイトから ${mergedLocations.length}店舗の住所を取得しました。`,
+      count: mergedLocations.length,
+    };
+  } catch (error) {
+    return {
+      ok: false,
+      message: error instanceof Error ? error.message : "ロフト店舗住所の取得に失敗しました。",
+      count: 0,
+    };
+  }
+}
+
+async function readStoreLocations(): Promise<StoreLocation[]> {
+  if (!hasSupabaseServerEnv()) {
+    return [];
+  }
+
+  const supabase = createServerSupabaseClient();
+  const { data, error } = await supabase
+    .from("store_locations")
+    .select("store_code, store_name, postal_code, address, tel")
+    .order("store_name");
+
+  if (error) {
+    return [];
+  }
+
+  return (data ?? []).map((row) => ({
+    storeCode: row.store_code,
+    storeName: row.store_name,
+    postalCode: row.postal_code,
+    address: row.address,
+    tel: row.tel,
+  }));
+}
+
+async function enrichStoreIntroductionEntriesWithLocations(
+  entries: StoreIntroductionEntry[],
+): Promise<StoreIntroductionEntry[]> {
+  const lookup = buildStoreLocationLookup(await readStoreLocations());
+
+  return entries.map((entry) => {
+    const address = resolveStoreLocationAddress(entry, lookup);
+
+    if (!address || address === entry.address) {
+      return entry;
+    }
+
+    return {
+      ...entry,
+      address,
+    };
+  });
+}
+
+async function upsertStoreLocationsFromWorkbook(fileBuffer: ArrayBuffer) {
+  if (!hasSupabaseServerEnv()) {
+    return;
+  }
+
+  const workbook = XLSX.read(fileBuffer, { type: "array", cellDates: true });
+  const addressBook = buildPromotionalAddressBook(workbook);
+  const locations = Array.from(addressBook.values()).filter(
+    (entry) => entry.storeCode && entry.address.trim(),
+  );
+
+  if (locations.length === 0) {
+    return;
+  }
+
+  await upsertStoreLocations(locations);
+}
+
+async function upsertStoreLocationsFromEntries(
+  entries: { storeCode: string; storeName: string; postalCode: string; address: string }[],
+) {
+  const locations = entries.filter((entry) => entry.address.trim());
+  if (locations.length === 0) {
+    return;
+  }
+
+  await upsertStoreLocations(
+    locations.map((entry) => ({
+      storeCode: entry.storeCode,
+      storeName: entry.storeName,
+      postalCode: entry.postalCode,
+      address: entry.address,
+      tel: "",
+    })),
+  );
+}
+
+async function upsertStoreLocations(
+  locations: (Pick<StoreLocation, "storeCode" | "storeName" | "postalCode" | "address" | "tel"> & {
+    chainName?: string;
+  })[],
+) {
+  if (!hasSupabaseServerEnv() || locations.length === 0) {
+    return;
+  }
+
+  const supabase = createServerSupabaseClient();
+  const rows = locations
+    .filter((location) => location.storeCode)
+    .map((location) => {
+      const row: Record<string, string> = {
+        store_code: location.storeCode,
+        store_name: location.storeName,
+        postal_code: location.postalCode,
+        address: location.address,
+        tel: location.tel,
+      };
+
+      if (location.chainName) {
+        row.chain_name = location.chainName;
+      }
+
+      return row;
+    });
+
+  const upsertResult = await supabase.from("store_locations").upsert(rows, {
+    onConflict: "store_code",
+  });
+
+  if (upsertResult.error?.message?.includes("chain_name")) {
+    await supabase.from("store_locations").upsert(
+      rows.map(({ chain_name: _chainName, ...row }) => row),
+      { onConflict: "store_code" },
+    );
+  }
 }
 
 function mapStoreIntroductionImport(row: {
@@ -233,6 +425,7 @@ function mapStoreIntroductionImport(row: {
   imported_at: string;
   total_store_count: number;
   introduced_store_count: number;
+  chain_name?: string;
 }): StoreIntroductionImport {
   return {
     id: row.id,
@@ -242,6 +435,7 @@ function mapStoreIntroductionImport(row: {
     importedAt: row.imported_at,
     totalStoreCount: row.total_store_count,
     introducedStoreCount: row.introduced_store_count,
+    chainName: row.chain_name ?? "",
   };
 }
 

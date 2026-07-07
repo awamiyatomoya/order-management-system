@@ -6,10 +6,17 @@ export const dynamic = "force-dynamic";
 export default async function StoresPage({
   searchParams,
 }: {
-  searchParams: Promise<{ clientId?: string }>;
+  searchParams: Promise<{ clientId?: string; chain?: string }>;
 }) {
-  const { clientId } = await searchParams;
+  const { clientId, chain } = await searchParams;
   const initialData = await getOrderWorkbenchInitialData("stores");
 
-  return <OrderWorkbench initialData={initialData} view="stores" initialClientId={clientId} />;
+  return (
+    <OrderWorkbench
+      initialData={initialData}
+      view="stores"
+      initialClientId={clientId}
+      initialStoreChain={chain}
+    />
+  );
 }

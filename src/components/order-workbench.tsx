@@ -1,7 +1,8 @@
 "use client";
 
 import Link from "next/link";
-import { Check, ChevronDown, ChevronLeft, ChevronRight, Copy, ListFilter, LoaderCircle, Search, Trash2 } from "lucide-react";
+import { usePathname, useRouter } from "next/navigation";
+import { Check, ChevronDown, ChevronLeft, ChevronRight, Copy, ListFilter, LoaderCircle, Search, Trash2, TriangleAlert } from "lucide-react";
 import Papa from "papaparse";
 import { useEffect, useId, useMemo, useRef, useState } from "react";
 import * as XLSX from "xlsx";
@@ -43,6 +44,10 @@ import {
 import { parseDeliveryDestinationSpreadsheet } from "@/lib/delivery-destination-import";
 import type { DeliveryDestination } from "@/lib/delivery-destination-master";
 import {
+  getDeliveryDestinationStorageKey,
+  mergeDeliveryDestinations,
+} from "@/lib/delivery-destination-master";
+import {
   calculateLineAmount,
   buildImportDraft,
   confirmOrderWithPayoutFee,
@@ -51,8 +56,15 @@ import { parsePdfOrderText } from "@/lib/pdf-order-parser";
 import {
   applyStoreNamesToOrders,
   extractUnknownStoreCandidates,
+  formatOrderStoreDisplayName,
+  getOrderDisplayReviewReasons,
   getOrderStoreName,
+  getSuggestedStoreNameFromMemo,
+  needsStoreConfirmation,
   normalizeStoreMatchText,
+  ORDER_STORE_NONE,
+  shouldShowOrderNeedsReviewBadge,
+  STORE_SKIP_CONFIRMATION_MESSAGE,
 } from "@/lib/store-matching";
 import { supplierMappings } from "@/lib/supplier-mappings";
 import { StoreIntroductionPanel } from "@/components/store-introduction-panel";
@@ -74,9 +86,17 @@ import {
   markOrderShippedInSupabase,
   undoOrderConfirmationInSupabase,
   updateOrderArrivalDueDateInSupabase,
+  updateOrderStoreNameInSupabase,
 } from "@/lib/supabase/order-actions";
 import { saveDeliveryDestination } from "@/lib/supabase/delivery-destination-actions";
+import {
+  filterStoreLocations,
+  groupStoreLocationsByChain,
+  type StoreLocationRecord,
+} from "@/lib/store-location-groups";
 import type { OrderWorkbenchInitialData } from "@/lib/supabase/read-order-data";
+import { readStoreLocationRecords } from "@/lib/supabase/store-location-actions";
+import { syncLoftStoreLocationsFromOfficialSite } from "@/lib/supabase/store-introduction-actions";
 import {
   deleteProduct,
   fetchProductMasterProducts,
@@ -85,9 +105,24 @@ import {
   uploadProductImage,
 } from "@/lib/supabase/product-actions";
 import { saveStore } from "@/lib/supabase/store-actions";
-import type { Client, ImportBatch, ImportError, Order, Product, Store, Supplier } from "@/lib/types";
-import { createId } from "@/lib/uuid";
+import type {
+  Client,
+  DeletionLog,
+  ImportBatch,
+  ImportError,
+  Order,
+  Product,
+  Store,
+  Supplier,
+} from "@/lib/types";
+import { resolveProductPayoutRate, calculatePayoutRateFromPrices, isValidPayoutRate } from "@/lib/payout-rate";
 import { filterImportBatchesForOrderFiles } from "@/lib/import-batch-display";
+import { createId } from "@/lib/uuid";
+import {
+  readSelectedClientId,
+  resolveSelectedClientId,
+  writeSelectedClientId,
+} from "@/lib/selected-client-storage";
 
 type ProductForm = {
   jan: string;
@@ -128,7 +163,7 @@ type DeliveryDestinationForm = {
 
 type DeliveryDestinationMasterDraft = DeliveryDestinationForm & {
   originalCode: string;
-  originalClientId?: string;
+  originalWholesalerName: string;
 };
 
 type StoreForm = {
@@ -154,7 +189,10 @@ type UploadedOrderFile = {
 };
 
 type ParsedProductMasterExcel = {
-  products: Product[];
+  products: Array<{
+    product: Product;
+    previousJan?: string;
+  }>;
   errors: string[];
 };
 
@@ -186,6 +224,7 @@ type SellInRow = {
   storeName: string;
   jan: string;
   productName: string;
+  orderCount: number;
   qty: number;
   wholesaleAmount: number | null;
   retailAmount: number | null;
@@ -213,17 +252,15 @@ type FileReadResult =
     };
 
 function getInitialSelection(initialData: OrderWorkbenchInitialData, preferredClientId?: string) {
-  const preferredClient = initialData.clients.find((client) => client.id === preferredClientId);
-  const firstSupplier = preferredClient
-    ? initialData.suppliers.find((supplier) => supplier.clientId === preferredClient.id)
-    : initialData.suppliers[0];
-  const clientId = preferredClient?.id ?? firstSupplier?.clientId ?? initialData.clients[0]?.id ?? "";
-  const supplierId =
-    firstSupplier?.id ??
-    initialData.suppliers.find((supplier) => supplier.clientId === clientId)?.id ??
-    "";
+  const clientId = resolveSelectedClientId(initialData.clients, {
+    urlClientId: preferredClientId,
+  });
+  const firstSupplier = initialData.suppliers.find((supplier) => supplier.clientId === clientId);
 
-  return { clientId, supplierId };
+  return {
+    clientId,
+    supplierId: firstSupplier?.id ?? "",
+  };
 }
 
 const emptyProductForm: ProductForm = {
@@ -271,7 +308,7 @@ type ProductFormField = {
   label: string;
   description?: string;
   required?: boolean;
-  input?: "text" | "textarea" | "taxRate" | "image" | "volumeUnit";
+  input?: "text" | "textarea" | "taxRate" | "image" | "volumeUnit" | "computed";
 };
 
 const unitVolumeUnitOptions = [
@@ -292,6 +329,11 @@ const productFormSections: ProductFormSection[] = [
     fields: [
       { key: "formalProductName", label: "正式商品名", description: "正式な商品名です。" },
       { key: "name", label: "商品名：漢字", required: true, description: "漢字表記の商品名" },
+      {
+        key: "csvExportProductName",
+        label: "CSV出力用商品名",
+        description: "メーカー向けCSVの「商品名」に出力する名称です。未設定の場合は「商品名：漢字」を使います。",
+      },
       { key: "productNameKana", label: "商品名：カタカナ", description: "カタカナ表記の商品名" },
       { key: "manufacturerCode", label: "製造メーカーコード", description: "GS1事業者コード" },
       { key: "manufacturerName", label: "製造メーカー名" },
@@ -305,7 +347,12 @@ const productFormSections: ProductFormSection[] = [
       { key: "wholesalePrice", label: "仕切価格", required: true, description: "販売先（問屋）への商品の仕入れ代金" },
       { key: "referenceRetailPrice", label: "参考売価", description: "定価と同じ" },
       { key: "retailPrice", label: "定価", required: true, description: "メーカーがあらかじめ販売価格として指定した価格" },
-      { key: "payoutRate", label: "掛け率", required: true, description: "50%の場合は 50 と入力してください。振込金額計算に使います。" },
+      {
+        key: "payoutRate",
+        label: "掛け率",
+        description: "仕切価格 ÷ 定価 で自動算出されます。",
+        input: "computed",
+      },
     ],
   },
   {
@@ -350,6 +397,12 @@ const productFormSections: ProductFormSection[] = [
       },
       { key: "productCatchcopy", label: "商品キャッチ", description: "30文字以内" },
       { key: "usageInstructions", label: "使い方", description: "4000文字以内", input: "textarea" },
+      {
+        key: "usagePrecautions",
+        label: "使用上の注意",
+        description: "4000文字以内",
+        input: "textarea",
+      },
       { key: "ingredients", label: "全成分", description: "4000文字以内", input: "textarea" },
       { key: "countryOfOrigin", label: "原産国", description: "国名を日本語で入力" },
       {
@@ -426,6 +479,7 @@ const productMasterExcelKeyByHeader: Record<string, keyof ProductForm> = {
   "商品名:漢字": "name",
   "商品名：カタカナ": "productNameKana",
   "商品名:カタカナ": "productNameKana",
+  CSV出力用商品名: "csvExportProductName",
   製造メーカーコード: "manufacturerCode",
   製造メーカー名: "manufacturerName",
   JANコード: "jan",
@@ -453,6 +507,7 @@ const productMasterExcelKeyByHeader: Record<string, keyof ProductForm> = {
   商品特徴: "productFeatures",
   商品キャッチ: "productCatchcopy",
   使い方: "usageInstructions",
+  使用上の注意: "usagePrecautions",
   全成分: "ingredients",
   原産国: "countryOfOrigin",
   "使用期限日数(消費期限日数)": "shelfLifeDays",
@@ -493,7 +548,7 @@ async function parseProductMasterExcel(
   const rows = XLSX.utils.sheet_to_json<unknown[]>(sheet, {
     header: 1,
     defval: "",
-    raw: false,
+    raw: true,
   });
   const headerRowIndex = rows.findIndex((row) =>
     row.some((cell) => normalizeProductMasterHeader(cell) === "JANコード"),
@@ -509,7 +564,7 @@ async function parseProductMasterExcel(
       key: productMasterExcelKeyByHeader[normalizeProductMasterHeader(cell)],
     }))
     .filter((entry): entry is { index: number; key: keyof ProductForm } => Boolean(entry.key));
-  const products: Product[] = [];
+  const products: ParsedProductMasterExcel["products"] = [];
   const errors: string[] = [];
   const dataStartIndex = getProductMasterDataStartIndex(rows, headerRowIndex);
 
@@ -579,7 +634,16 @@ async function parseProductMasterExcel(
         field.type === "number" ? parseProductMasterNumber(value) : value;
     }
 
-    products.push(nextProduct);
+    nextProduct.payoutRate = calculatePayoutRateFromPrices(
+      nextProduct.wholesalePrice,
+      nextProduct.retailPrice,
+    );
+
+    products.push({
+      product: nextProduct,
+      previousJan:
+        existingProduct && existingProduct.jan !== jan ? existingProduct.jan : undefined,
+    });
   });
 
   return { products, errors };
@@ -675,7 +739,7 @@ function normalizeProductMasterExcelCell(value: unknown, key: keyof ProductForm)
     return "";
   }
 
-  if (key === "jan") {
+  if (key === "jan" || key === "caseGtin") {
     return normalizeJanCell(value);
   }
 
@@ -694,17 +758,17 @@ function normalizeProductMasterExcelCell(value: unknown, key: keyof ProductForm)
 }
 
 function normalizeJanCell(value: unknown) {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return String(Math.round(value));
+  }
+
   const normalizedValue = String(value ?? "")
     .trim()
     .replace(/\s/g, "")
     .replace(/\.0$/, "");
 
-  if (/^\d+(?:\.\d+)?e\+?\d+$/i.test(normalizedValue)) {
-    const numericValue = Number(normalizedValue);
-
-    if (Number.isFinite(numericValue)) {
-      return numericValue.toFixed(0);
-    }
+  if (/^\d+$/.test(normalizedValue)) {
+    return normalizedValue;
   }
 
   return normalizedValue;
@@ -743,11 +807,21 @@ export function OrderWorkbench({
   initialData,
   view = "orders",
   initialClientId,
+  initialStoreChain,
+  initialStoreIntroductionClientId,
+  basePath = "",
+  isDemoMode = false,
 }: {
   initialData: OrderWorkbenchInitialData;
   view?: WorkbenchView;
   initialClientId?: string;
+  initialStoreChain?: string;
+  initialStoreIntroductionClientId?: string;
+  basePath?: string;
+  isDemoMode?: boolean;
 }) {
+  const router = useRouter();
+  const pathname = usePathname();
   const initialSelection = getInitialSelection(initialData, initialClientId);
   const [clients, setClients] = useState<Client[]>(initialData.clients);
   const [suppliers, setSuppliers] = useState<Supplier[]>(initialData.suppliers);
@@ -757,10 +831,17 @@ export function OrderWorkbench({
   const [productTotalCount, setProductTotalCount] = useState(initialData.productTotalCount);
   const [orders, setOrders] = useState<Order[]>(dedupeOrdersByKey(initialData.orders));
   const [importBatches, setImportBatches] = useState<ImportBatch[]>(initialData.importBatches);
+  const [deletionLogs, setDeletionLogs] = useState<DeletionLog[]>(initialData.deletionLogs);
   const [deliveryDestinations, setDeliveryDestinations] = useState<DeliveryDestination[]>(
     initialData.deliveryDestinations,
   );
   const [stores, setStores] = useState<Store[]>(initialData.stores);
+  const [storeLocations, setStoreLocations] = useState<StoreLocationRecord[]>(
+    initialData.storeLocations ?? [],
+  );
+  const [selectedStoreChain, setSelectedStoreChain] = useState(initialStoreChain ?? "");
+  const [storeLocationSearch, setStoreLocationSearch] = useState("");
+  const [isSyncingStoreLocations, setIsSyncingStoreLocations] = useState(false);
   const [pendingImport, setPendingImport] = useState<PendingImport | null>(null);
   const [productForm, setProductForm] = useState<ProductForm>(emptyProductForm);
   const [deliveryDestinationForm, setDeliveryDestinationForm] =
@@ -848,7 +929,7 @@ export function OrderWorkbench({
     [orders],
   );
   const selectedDeliveryDestinations = useMemo(
-    () => dedupeDeliveryDestinations(deliveryDestinations),
+    () => mergeDeliveryDestinations(deliveryDestinations),
     [deliveryDestinations],
   );
   const selectedImportBatches = useMemo(
@@ -887,10 +968,14 @@ export function OrderWorkbench({
     () => filterImportBatchesForOrderFiles(selectedImportBatches),
     [selectedImportBatches],
   );
+  const dedupedImportBatches = useMemo(
+    () => dedupeImportBatchesForDisplay(savedImportBatches, selectedOrders),
+    [savedImportBatches, selectedOrders],
+  );
   const filteredOrderFiles = useMemo(() => {
     const normalizedSearch = orderFileSearch.trim().toLowerCase();
 
-    return savedImportBatches.filter((batch) => {
+    return dedupedImportBatches.filter((batch) => {
       if (!normalizedSearch) {
         return true;
       }
@@ -901,7 +986,7 @@ export function OrderWorkbench({
         .toLowerCase()
         .includes(normalizedSearch);
     });
-  }, [orderFileSearch, savedImportBatches, selectedOrders]);
+  }, [dedupedImportBatches, orderFileSearch, selectedOrders]);
 
   const totalAmount = useMemo(
     () =>
@@ -1022,6 +1107,10 @@ export function OrderWorkbench({
     () => selectedOrders.filter((order) => order.status === "shipped"),
     [selectedOrders],
   );
+  const selectedDeletionLogs = useMemo(
+    () => deletionLogs.filter((log) => log.clientId === selectedClientId),
+    [deletionLogs, selectedClientId],
+  );
   const filteredProducts = useMemo(() => {
     if (view === "products") {
       return products;
@@ -1112,6 +1201,20 @@ export function OrderWorkbench({
       (destination) => getDeliveryWholesalerName(destination) === deliveryWholesalerFilter,
     );
   }, [deliveryWholesalerFilter, selectedDeliveryDestinations]);
+  const storeLocationsByChain = useMemo(
+    () => groupStoreLocationsByChain(storeLocations),
+    [storeLocations],
+  );
+  const selectedChainStoreLocations = useMemo(() => {
+    if (!selectedStoreChain) {
+      return [];
+    }
+
+    return filterStoreLocations(
+      storeLocationsByChain.get(selectedStoreChain) ?? [],
+      storeLocationSearch,
+    );
+  }, [selectedStoreChain, storeLocationSearch, storeLocationsByChain]);
   const pagedDeliveryDestinations = useMemo(
     () =>
       paginateItems(filteredDeliveryDestinations, deliveryDestinationPage).items,
@@ -1121,6 +1224,55 @@ export function OrderWorkbench({
     filteredDeliveryDestinations,
     deliveryDestinationPage,
   ).page;
+
+  useEffect(() => {
+    const persistedClientId = readSelectedClientId();
+    const resolvedClientId = resolveSelectedClientId(clients, {
+      urlClientId: initialClientId,
+      persistedClientId,
+    });
+
+    if (!resolvedClientId) {
+      return;
+    }
+
+    if (!persistedClientId) {
+      writeSelectedClientId(resolvedClientId);
+    }
+
+    const firstSupplier = suppliers.find((supplier) => supplier.clientId === resolvedClientId);
+    setSelectedClientId(resolvedClientId);
+    setSelectedSupplierId(firstSupplier?.id ?? "");
+    setProductRegistrationClientId(resolvedClientId);
+
+    if (resolvedClientId !== initialClientId) {
+      const params = new URLSearchParams(window.location.search);
+      params.set("clientId", resolvedClientId);
+      const query = params.toString();
+      router.replace(query ? `${pathname}?${query}` : pathname, { scroll: false });
+    }
+    // Restore persisted client once per page mount.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  useEffect(() => {
+    if (view !== "stores" || selectedStoreChain) {
+      return;
+    }
+
+    const preferredChain =
+      (initialStoreChain && stores.some((store) => store.name === initialStoreChain)
+        ? initialStoreChain
+        : undefined) ??
+      (stores.some((store) => store.name === "ロフト") &&
+      (storeLocationsByChain.get("ロフト")?.length ?? 0) > 0
+        ? "ロフト"
+        : "");
+
+    if (preferredChain) {
+      setSelectedStoreChain(preferredChain);
+    }
+  }, [initialStoreChain, selectedStoreChain, storeLocationsByChain, stores, view]);
 
   useEffect(() => {
     if (view !== "products") {
@@ -1176,6 +1328,12 @@ export function OrderWorkbench({
       return;
     }
 
+    if (!isPdfFile(file)) {
+      setNotice("発注ファイルはPDFのみアップロードできます。");
+      setFileInputKey((current) => current + 1);
+      return;
+    }
+
     setIsProcessingFile(true);
     setNotice(`${file.name} を読み取っています...`);
     readFileForImport(file)
@@ -1188,7 +1346,7 @@ export function OrderWorkbench({
           return;
         }
 
-        await applyImport(result.rows, file.name, uploadedFile);
+        throw new Error("発注ファイルはPDFのみアップロードできます。");
       })
       .catch((error: unknown) => {
         const message = getErrorMessage(error);
@@ -1254,10 +1412,6 @@ export function OrderWorkbench({
     });
 
     if (parseResult.errors.length > 0) {
-      setImportBatches((current) => [
-        buildImportBatch(fileName, "blocked", parseResult.errors, uploadedFile?.path, uploadedFile?.url),
-        ...current,
-      ]);
       setIsSavingImport(true);
       const saveResult = await saveBlockedImport({
         clientId: selectedClientId,
@@ -1267,6 +1421,19 @@ export function OrderWorkbench({
         errors: parseResult.errors,
       });
       setIsSavingImport(false);
+      if (saveResult.ok) {
+        setImportBatches((current) => [
+          buildImportBatch(
+            fileName,
+            "blocked",
+            parseResult.errors,
+            uploadedFile?.path,
+            uploadedFile?.url,
+            saveResult.operatorName,
+          ),
+          ...current,
+        ]);
+      }
       const message = saveResult.ok
         ? `PDFは読み取れましたが、受注に変換できない項目があります。${saveResult.message}`
         : saveResult.message;
@@ -1297,6 +1464,7 @@ export function OrderWorkbench({
       supplier: selectedSupplier,
       mapping,
       products,
+      clients,
       existingOrders: orders,
       sourceFile: fileName,
     });
@@ -1309,10 +1477,6 @@ export function OrderWorkbench({
         fileStorageUrl: uploadedFile?.url,
         missingJans: draft.missingJans,
       });
-      setImportBatches((current) => [
-        buildImportBatch(fileName, "blocked", draft.errors, uploadedFile?.path, uploadedFile?.url),
-        ...current,
-      ]);
       setIsSavingImport(true);
       const saveResult = await saveBlockedImport({
         clientId: selectedClientId,
@@ -1322,10 +1486,25 @@ export function OrderWorkbench({
         errors: draft.errors,
       });
       setIsSavingImport(false);
+      if (saveResult.ok) {
+        setImportBatches((current) => [
+          buildImportBatch(
+            fileName,
+            "blocked",
+            draft.errors,
+            uploadedFile?.path,
+            uploadedFile?.url,
+            saveResult.operatorName,
+          ),
+          ...current,
+        ]);
+      }
       const message = saveResult.ok
         ? `怪しい点があるため受注は保存していません。${saveResult.message}`
         : saveResult.message;
-      showImportErrorPopup(draft.errors, message);
+      showImportErrorPopup(draft.errors, message, {
+        selectedClientName: getClientName(selectedClientId, clients),
+      });
       setNotice(message);
       return;
     }
@@ -1363,7 +1542,7 @@ export function OrderWorkbench({
       );
       setPendingImport(null);
       setImportBatches((current) => [
-        buildImportBatch(fileName, "saved", [], uploadedFile?.path, uploadedFile?.url),
+        buildImportBatch(fileName, "saved", [], uploadedFile?.path, uploadedFile?.url, saveResult.operatorName),
         ...current,
       ]);
       setNotice(saveResult.message);
@@ -1379,7 +1558,7 @@ export function OrderWorkbench({
     await promptToRegisterUnknownStores(savedOrders);
     setPendingImport(null);
     setImportBatches((current) => [
-      buildImportBatch(fileName, "saved", [], uploadedFile?.path, uploadedFile?.url),
+      buildImportBatch(fileName, "saved", [], uploadedFile?.path, uploadedFile?.url, saveResult.operatorName),
       ...current,
     ]);
     setNotice(`${ordersToSave.length}件の受注を imported として保存しました。${saveResult.message}`);
@@ -1465,24 +1644,22 @@ export function OrderWorkbench({
       wholesalePrice: productForm.wholesalePrice.trim(),
       taxRate: productForm.taxRate.trim(),
       retailPrice: productForm.retailPrice.trim(),
-      payoutRate: productForm.payoutRate.trim(),
       memo: productForm.memo.trim(),
     };
     const wholesalePrice = Number(normalizedForm.wholesalePrice);
     const taxRate = Number(normalizedForm.taxRate);
     const retailPrice = Number(normalizedForm.retailPrice);
-    const payoutRate = parseRatePercent(normalizedForm.payoutRate);
+    const payoutRate = calculatePayoutRateFromPrices(wholesalePrice, retailPrice);
     const normalizedExtraFields = normalizeProductMasterExtraForm(productForm);
 
     if (
       !normalizedForm.jan ||
       !normalizedForm.name ||
       !normalizedForm.wholesalePrice ||
-      !normalizedForm.retailPrice ||
-      !normalizedForm.payoutRate
+      !normalizedForm.retailPrice
     ) {
-      setNotice("JAN、商品名、下代（税抜）、上代（税抜）、掛け率は必須です。COOOLa商品コードは任意です。");
-      setProductNotice("JAN、商品名、下代（税抜）、上代（税抜）、掛け率は必須です。COOOLa商品コードは任意です。");
+      setNotice("JAN、商品名、仕切価格、定価は必須です。COOOLa商品コードは任意です。");
+      setProductNotice("JAN、商品名、仕切価格、定価は必須です。COOOLa商品コードは任意です。");
       return;
     }
 
@@ -1513,8 +1690,8 @@ export function OrderWorkbench({
       return;
     }
 
-    if (payoutRate === null || payoutRate <= registrationClientFbpFeeRate) {
-      const message = `掛け率は登録先クライアントのFBP手数料率（${formatNullableRate(registrationClientFbpFeeRate)}）より大きい数字で入力してください。`;
+    if (!isValidPayoutRate(payoutRate, registrationClientFbpFeeRate)) {
+      const message = `仕切価格と定価から算出した掛け率が、FBP手数料率（${formatNullableRate(registrationClientFbpFeeRate)}）以下です。価格を確認してください。`;
       setNotice(message);
       setProductNotice(message);
       return;
@@ -1607,8 +1784,8 @@ export function OrderWorkbench({
       const savedProducts: Product[] = [];
       const saveMessages = new Set<string>();
 
-      for (const product of parsed.products) {
-        const saveResult = await saveProduct(product);
+      for (const { product, previousJan } of parsed.products) {
+        const saveResult = await saveProduct(product, { previousJan });
 
         if (!saveResult.ok) {
           setProductNotice(saveResult.message);
@@ -1624,9 +1801,18 @@ export function OrderWorkbench({
         const importedKeys = new Set(
           savedProducts.map((product) => buildProductKey(product.clientId, product.jan)),
         );
+        const replacedKeys = new Set(
+          parsed.products.flatMap(({ product, previousJan }) =>
+            previousJan ? [buildProductKey(product.clientId, previousJan)] : [],
+          ),
+        );
 
         return [
-          ...current.filter((product) => !importedKeys.has(buildProductKey(product.clientId, product.jan))),
+          ...current.filter(
+            (product) =>
+              !importedKeys.has(buildProductKey(product.clientId, product.jan)) &&
+              !replacedKeys.has(buildProductKey(product.clientId, product.jan)),
+          ),
           ...savedProducts,
         ];
       });
@@ -1705,7 +1891,7 @@ export function OrderWorkbench({
     };
 
     setIsSavingDeliveryDestination(true);
-    const saveResult = await saveDeliveryDestinationForAllClients(nextDestination);
+    const saveResult = await saveDeliveryDestination(nextDestination);
     setIsSavingDeliveryDestination(false);
 
     if (!saveResult.ok) {
@@ -1715,7 +1901,11 @@ export function OrderWorkbench({
     }
 
     setDeliveryDestinations((current) => [
-      ...current.filter((destination) => destination.code !== nextDestination.code),
+      ...current.filter(
+        (destination) =>
+          getDeliveryDestinationStorageKey(destination) !==
+          getDeliveryDestinationStorageKey(nextDestination),
+      ),
       nextDestination,
     ]);
     setDeliveryDestinationForm(emptyDeliveryDestinationForm);
@@ -1851,7 +2041,7 @@ export function OrderWorkbench({
       }
 
       for (const destination of destinations) {
-        const saveResult = await saveDeliveryDestinationForAllClients(destination);
+        const saveResult = await saveDeliveryDestination(destination);
 
         if (!saveResult.ok) {
           setDeliveryDestinationNotice(saveResult.message);
@@ -1869,7 +2059,11 @@ export function OrderWorkbench({
       setDeliveryDestinations((current) => [
         ...current.filter(
           (destination) =>
-            !destinations.some((nextDestination) => nextDestination.code === destination.code),
+            !destinations.some(
+              (nextDestination) =>
+                getDeliveryDestinationStorageKey(destination) ===
+                getDeliveryDestinationStorageKey(nextDestination),
+            ),
         ),
         ...destinations,
       ]);
@@ -2020,14 +2214,17 @@ export function OrderWorkbench({
       }
 
       if (
-        draft.payoutRate.trim() &&
-        (
-          normalizedProduct.product.payoutRate === null ||
-          normalizedProduct.product.payoutRate <= draftClientFbpFeeRate
+        draft.retailPrice.trim() &&
+        !isValidPayoutRate(
+          calculatePayoutRateFromPrices(
+            normalizedProduct.product.wholesalePrice,
+            normalizedProduct.product.retailPrice,
+          ),
+          draftClientFbpFeeRate,
         )
       ) {
         setProductNotice(
-          `${getClientName(draft.originalClientId, clients)} / ${normalizedProduct.product.jan} の掛け率はFBP手数料率（${formatNullableRate(draftClientFbpFeeRate)}）より大きい数字で入力してください。`,
+          `${getClientName(draft.originalClientId, clients)} / ${normalizedProduct.product.jan} の仕切価格と定価から算出した掛け率が、FBP手数料率（${formatNullableRate(draftClientFbpFeeRate)}）以下です。`,
         );
         return;
       }
@@ -2186,7 +2383,9 @@ export function OrderWorkbench({
       }
 
       const currentDestination = selectedDeliveryDestinations.find(
-        (destination) => destination.code === draft.originalCode,
+        (destination) =>
+          destination.code === draft.originalCode &&
+          getDeliveryWholesalerName(destination) === draft.originalWholesalerName,
       );
 
       if (!currentDestination || hasDeliveryDestinationChanged(currentDestination, nextDestination)) {
@@ -2203,7 +2402,7 @@ export function OrderWorkbench({
     setIsSavingDeliveryDestination(true);
 
     for (const destination of nextDestinations) {
-      const saveResult = await saveDeliveryDestinationForAllClients(destination);
+      const saveResult = await saveDeliveryDestination(destination);
 
       if (!saveResult.ok) {
         setIsSavingDeliveryDestination(false);
@@ -2218,7 +2417,9 @@ export function OrderWorkbench({
       ...current.filter(
         (destination) =>
           !nextDestinations.some(
-            (nextDestination) => destination.code === nextDestination.code,
+            (nextDestination) =>
+              getDeliveryDestinationStorageKey(destination) ===
+              getDeliveryDestinationStorageKey(nextDestination),
           ),
       ),
       ...nextDestinations,
@@ -2246,13 +2447,16 @@ export function OrderWorkbench({
       supplier: selectedSupplier,
       mapping: getSupplierMapping(selectedSupplier.mappingKey),
       products: nextProducts,
+      clients,
       existingOrders: orders,
       sourceFile: fileName,
     });
 
     if (draft.errors.length > 0) {
       const message = "商品登録後もエラーが残っています。";
-      showImportErrorPopup(draft.errors, message);
+      showImportErrorPopup(draft.errors, message, {
+        selectedClientName: getClientName(selectedClientId, clients),
+      });
       setNotice(message);
       return;
     }
@@ -2290,7 +2494,7 @@ export function OrderWorkbench({
       );
       setPendingImport(null);
       setImportBatches((current) => [
-        buildImportBatch(fileName, "saved", [], fileStoragePath, fileStorageUrl),
+        buildImportBatch(fileName, "saved", [], fileStoragePath, fileStorageUrl, saveResult.operatorName),
         ...current,
       ]);
       setNotice(saveResult.message);
@@ -2305,7 +2509,7 @@ export function OrderWorkbench({
     setOrders((current) => mergeImportedOrders(current, savedOrders));
     setPendingImport(null);
     setImportBatches((current) => [
-      buildImportBatch(fileName, "saved", [], fileStoragePath, fileStorageUrl),
+      buildImportBatch(fileName, "saved", [], fileStoragePath, fileStorageUrl, saveResult.operatorName),
       ...current,
     ]);
     setNotice(`商品登録後に再チェックし、受注を自動保存しました。${saveResult.message}`);
@@ -2363,19 +2567,25 @@ export function OrderWorkbench({
         }
 
         if (action === "confirm") {
-          return confirmOrderWithPayoutFee(order, products, selectedClient?.fbpFeeRate ?? 0.08);
+          return {
+            ...confirmOrderWithPayoutFee(order, products, selectedClient?.fbpFeeRate ?? 0.08),
+            checkedByName: saveResult.checkedByName ?? order.checkedByName,
+          };
         }
 
         if (action === "ship") {
+          const isUndoShip = order.status === "shipped";
           return {
             ...order,
-            status: order.status === "shipped" ? "confirmed" : "shipped",
+            status: isUndoShip ? "confirmed" : "shipped",
+            shippedByName: isUndoShip ? undefined : saveResult.shippedByName ?? order.shippedByName,
           };
         }
 
         return {
           ...order,
           status: "imported",
+          checkedByName: undefined,
           lines: order.lines.map((line) => ({
             ...line,
             unitPriceSnapshot: null,
@@ -2430,6 +2640,41 @@ export function OrderWorkbench({
       ),
     );
     setNotice(saveResult.message);
+  }
+
+  async function updateOrderStoreName(orderId: string, storeName: string) {
+    const targetOrder = orders.find((order) => order.id === orderId);
+
+    if (!targetOrder) {
+      setNotice("対象の受注が見つかりません。");
+      return false;
+    }
+
+    setSavingOrderId(orderId);
+    const saveResult = await updateOrderStoreNameInSupabase({
+      clientId: targetOrder.clientId,
+      orderId: targetOrder.id,
+      storeName,
+    });
+    setSavingOrderId(null);
+
+    if (!saveResult.ok) {
+      setNotice(saveResult.message);
+      return false;
+    }
+
+    setOrders((current) =>
+      current.map((order) =>
+        order.id === orderId
+          ? {
+              ...order,
+              storeName,
+            }
+          : order,
+      ),
+    );
+    setNotice(saveResult.message);
+    return true;
   }
 
   async function saveOrderStatusAction(
@@ -2494,6 +2739,9 @@ export function OrderWorkbench({
 
     const orderKey = buildOrderMergeKey(targetOrder);
     setOrders((current) => current.filter((order) => buildOrderMergeKey(order) !== orderKey));
+    if (saveResult.deletionLog) {
+      setDeletionLogs((current) => [saveResult.deletionLog!, ...current]);
+    }
     setNotice(saveResult.message);
   }
 
@@ -2512,7 +2760,7 @@ export function OrderWorkbench({
 
     downloadTextFile({
       fileName: buildCooolaExportFileName(targetOrder),
-      text: buildCooolaCsv(targetOrder, products),
+      text: buildCooolaCsv(targetOrder, products, selectedDeliveryDestinations),
       type: "text/csv;charset=utf-8",
     });
     setCsvExportedOrderIds((current) =>
@@ -2591,7 +2839,49 @@ export function OrderWorkbench({
     setIsProductExportPanelOpen(false);
   }
 
+  function handleStoreChainSelect(chainName: string) {
+    setSelectedStoreChain(chainName);
+    setStoreLocationSearch("");
+
+    const params = new URLSearchParams(window.location.search);
+    if (chainName) {
+      params.set("chain", chainName);
+    } else {
+      params.delete("chain");
+    }
+
+    const query = params.toString();
+    router.replace(query ? `${pathname}?${query}` : pathname, { scroll: false });
+  }
+
+  async function handleSyncLoftStoreLocations() {
+    setIsSyncingStoreLocations(true);
+    setStoreNotice("");
+
+    try {
+      const result = await syncLoftStoreLocationsFromOfficialSite();
+      setStoreNotice(result.message);
+
+      if (result.ok) {
+        const locations = await readStoreLocationRecords();
+        setStoreLocations(locations);
+        handleStoreChainSelect("ロフト");
+      }
+    } catch (error) {
+      setStoreNotice(error instanceof Error ? error.message : "ロフト店舗住所の更新に失敗しました。");
+    } finally {
+      setIsSyncingStoreLocations(false);
+    }
+  }
+
   function handleClientChange(clientId: string) {
+    writeSelectedClientId(clientId);
+
+    const params = new URLSearchParams(window.location.search);
+    params.set("clientId", clientId);
+    const query = params.toString();
+    router.replace(query ? `${pathname}?${query}` : pathname, { scroll: false });
+
     const firstSupplier = suppliers.find((supplier) => supplier.clientId === clientId);
     setSelectedClientId(clientId);
     setSelectedSupplierId(firstSupplier?.id ?? "");
@@ -2621,29 +2911,6 @@ export function OrderWorkbench({
     setCustomWholesalerOptions((current) =>
       current.includes(normalizedName) ? current : [...current, normalizedName],
     );
-  }
-
-  async function saveDeliveryDestinationForAllClients(destination: DeliveryDestination) {
-    if (clients.length === 0) {
-      return saveDeliveryDestination({ ...destination, clientId: selectedClientId });
-    }
-
-    for (const client of clients) {
-      const saveResult = await saveDeliveryDestination({
-        ...destination,
-        clientId: client.id,
-      });
-
-      if (!saveResult.ok) {
-        return saveResult;
-      }
-    }
-
-    return {
-      ok: true as const,
-      savedToSupabase: true,
-      message: "全クライアント共通の配送先マスタに登録しました。",
-    };
   }
 
   async function registerClient(event: React.FormEvent<HTMLFormElement>) {
@@ -2780,6 +3047,12 @@ export function OrderWorkbench({
           </div>
         ) : null}
 
+        {isDemoMode ? (
+          <div className="rounded-lg border border-amber-300/60 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+            {initialData.message}
+          </div>
+        ) : null}
+
         {view === "orders" ? (
           <ClientSelectorBar
             clients={clients}
@@ -2796,11 +3069,15 @@ export function OrderWorkbench({
         <section className="grid gap-4 md:grid-cols-3">
           <SummaryCard label="受注件数" value={`${selectedOrders.length}件`} />
           <SummaryCard label="発送件数" value={`${shippedOrderCount}件`} />
-          <SummaryCard label="表示中の仮合計" value={`${totalAmount.toLocaleString()}円`} />
+          <SummaryCard label="発注書金額合計" value={`${totalAmount.toLocaleString()}円`} />
         </section>
         ) : null}
 
-        <MasterSidebar currentView={view} selectedClientId={selectedClientId} />
+        <MasterSidebar
+          currentView={view}
+          selectedClientId={selectedClientId}
+          basePath={basePath}
+        />
 
         {view === "orders" ? (
         <section className="grid gap-4">
@@ -2891,7 +3168,7 @@ export function OrderWorkbench({
 
               {selectedOrders.length === 0 ? (
                 <p className="text-sm text-muted-foreground">
-                  まだ受注がありません。`samples/sample-order.csv` を取り込むと動きを確認できます。
+                  まだ受注がありません。PDF発注書をアップロードしてください。
                 </p>
               ) : filteredOrders.length === 0 ? (
                 <p className="text-sm text-muted-foreground">
@@ -2904,6 +3181,7 @@ export function OrderWorkbench({
                       key={order.id}
                       order={order}
                       storeName={getOrderStoreName(order, stores)}
+                      stores={stores}
                       products={products}
                       isSaving={savingOrderId === order.id}
                       hasExportedCsv={csvExportedOrderIds.includes(order.id)}
@@ -2915,6 +3193,7 @@ export function OrderWorkbench({
                       onUpdateArrivalDueDate={(arrivalDueDate) =>
                         updateOrderArrivalDueDate(order.id, arrivalDueDate)
                       }
+                      onUpdateStoreName={(storeName) => updateOrderStoreName(order.id, storeName)}
                     />
                   ))}
                 </div>
@@ -3379,7 +3658,12 @@ export function OrderWorkbench({
                               value={
                                 field.key === "productImagePath"
                                   ? draft.productImagePath
-                                  : draft[field.key]
+                                  : field.key === "payoutRate"
+                                    ? formatComputedPayoutRateInput(
+                                        Number(draft.wholesalePrice),
+                                        draft.retailPrice.trim() ? Number(draft.retailPrice) : null,
+                                      )
+                                    : draft[field.key]
                               }
                               imageUrl={draft.productImageUrl}
                               unitValue={field.key === "unitVolumeL" ? draft.unitVolumeUnit : undefined}
@@ -3523,7 +3807,7 @@ export function OrderWorkbench({
               </p>
               {payoutIssueCount > 0 ? (
                 <p className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
-                  上代（税抜）・掛け率が商品マスタにも未設定の明細があります。商品マスタを確認してください。
+                  上代（税抜）・仕切価格が商品マスタに未設定の明細があります。商品マスタを確認してください。
                 </p>
               ) : null}
               <div className="overflow-x-auto">
@@ -3676,7 +3960,7 @@ export function OrderWorkbench({
               />
               {sellInTotals.issueCount > 0 ? (
                 <p className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
-                  店舗不明、商品未登録、または価格未設定の行があります。備考欄と商品マスタを確認してください。
+                  商品未登録、または価格未設定の行があります。商品マスタを確認してください。
                 </p>
               ) : null}
               <div className="overflow-x-auto">
@@ -3687,6 +3971,7 @@ export function OrderWorkbench({
                       <TableHead>店舗</TableHead>
                       <TableHead>JAN</TableHead>
                       <TableHead>商品名</TableHead>
+                      <TableHead>発注件数</TableHead>
                       <TableHead>数量</TableHead>
                       <TableHead>下代</TableHead>
                       <TableHead>上代</TableHead>
@@ -3696,7 +3981,7 @@ export function OrderWorkbench({
                   <TableBody>
                     {sellInRows.length === 0 ? (
                       <TableRow>
-                        <TableCell colSpan={8} className="text-muted-foreground">
+                        <TableCell colSpan={9} className="text-muted-foreground">
                           対象期間のセルインデータはありません。
                         </TableCell>
                       </TableRow>
@@ -3707,6 +3992,7 @@ export function OrderWorkbench({
                           <TableCell>{row.storeName}</TableCell>
                           <TableCell className="font-mono text-xs">{row.jan}</TableCell>
                           <TableCell>{row.productName}</TableCell>
+                          <TableCell>{row.orderCount.toLocaleString()}</TableCell>
                           <TableCell>{row.qty.toLocaleString()}</TableCell>
                           <TableCell>{formatNullableCurrency(row.wholesaleAmount)}</TableCell>
                           <TableCell>{formatNullableCurrency(row.retailAmount)}</TableCell>
@@ -3784,57 +4070,165 @@ export function OrderWorkbench({
                     disabled={stores.length === 0}
                     onClick={startStoreMasterEdit}
                   >
-                    編集
+                    チェーン編集
                   </Button>
                 )
               }
             >
               {isEditingStoreMaster ? (
-                <p className="text-sm text-muted-foreground">
-                  正式店舗名と、備考欄/OCRで拾った別名候補をまとめて編集できます。
+                <p className="mb-4 text-sm text-muted-foreground">
+                  チェーン名と、備考欄/OCRで拾った別名候補をまとめて編集できます。
                 </p>
-              ) : null}
-              {stores.length === 0 ? (
-                <p className="text-sm text-muted-foreground">店舗マスタはまだありません。</p>
               ) : (
-                <div className="overflow-x-auto">
-                  <Table className="min-w-[760px]">
-                    <TableHeader>
-                      <TableRow>
-                        <TableHead className="w-[240px]">店舗名</TableHead>
-                        <TableHead>別名・OCR候補</TableHead>
-                      </TableRow>
-                    </TableHeader>
-                    <TableBody>
-                      {isEditingStoreMaster
-                        ? storeMasterDrafts.map((draft, index) => (
-                            <TableRow key={draft.id}>
-                              <TableCell>
-                                <Input
-                                  value={draft.name}
-                                  onChange={(event) =>
-                                    updateStoreMasterDraft(index, { name: event.target.value })
-                                  }
-                                />
-                              </TableCell>
-                              <TableCell>
-                                <Input
-                                  value={draft.aliases}
-                                  onChange={(event) =>
-                                    updateStoreMasterDraft(index, { aliases: event.target.value })
-                                  }
-                                />
-                              </TableCell>
-                            </TableRow>
-                          ))
-                        : stores.map((store) => (
-                            <TableRow key={store.id}>
-                              <TableCell>{store.name}</TableCell>
-                              <TableCell>{store.aliases.join(" / ") || "-"}</TableCell>
-                            </TableRow>
-                          ))}
-                    </TableBody>
-                  </Table>
+                <p className="mb-4 text-sm text-muted-foreground">
+                  左のチェーンを選ぶと、個別店舗の一覧と住所が表示されます。
+                </p>
+              )}
+
+              {isEditingStoreMaster ? (
+                stores.length === 0 ? (
+                  <p className="text-sm text-muted-foreground">店舗マスタはまだありません。</p>
+                ) : (
+                  <div className="overflow-x-auto">
+                    <Table className="min-w-[760px]">
+                      <TableHeader>
+                        <TableRow>
+                          <TableHead className="w-[240px]">チェーン名</TableHead>
+                          <TableHead>別名・OCR候補</TableHead>
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {storeMasterDrafts.map((draft, index) => (
+                          <TableRow key={draft.id}>
+                            <TableCell>
+                              <Input
+                                value={draft.name}
+                                onChange={(event) =>
+                                  updateStoreMasterDraft(index, { name: event.target.value })
+                                }
+                              />
+                            </TableCell>
+                            <TableCell>
+                              <Input
+                                value={draft.aliases}
+                                onChange={(event) =>
+                                  updateStoreMasterDraft(index, { aliases: event.target.value })
+                                }
+                              />
+                            </TableCell>
+                          </TableRow>
+                        ))}
+                      </TableBody>
+                    </Table>
+                  </div>
+                )
+              ) : (
+                <div className="grid gap-4 xl:grid-cols-[240px_minmax(0,1fr)]">
+                  <div className="overflow-hidden rounded-lg border">
+                    <div className="border-b bg-muted/40 px-3 py-2 text-sm font-medium">チェーン</div>
+                    <div className="max-h-[560px] overflow-y-auto">
+                      {stores.length === 0 ? (
+                        <p className="px-3 py-4 text-sm text-muted-foreground">チェーンがありません。</p>
+                      ) : (
+                        stores.map((store) => {
+                          const locationCount = storeLocationsByChain.get(store.name)?.length ?? 0;
+                          const isSelected = selectedStoreChain === store.name;
+
+                          return (
+                            <button
+                              key={store.id}
+                              type="button"
+                              onClick={() => handleStoreChainSelect(store.name)}
+                              className={`flex w-full items-center justify-between gap-2 border-b px-3 py-3 text-left text-sm transition-colors last:border-b-0 ${
+                                isSelected
+                                  ? "bg-primary/10 font-medium text-primary"
+                                  : "hover:bg-muted/50"
+                              }`}
+                            >
+                              <span>{store.name}</span>
+                              <Badge variant={locationCount > 0 ? "secondary" : "outline"}>
+                                {locationCount > 0 ? `${locationCount}店` : "未連携"}
+                              </Badge>
+                            </button>
+                          );
+                        })
+                      )}
+                    </div>
+                  </div>
+
+                  <div className="grid gap-3">
+                    <div className="flex flex-wrap items-center justify-between gap-3">
+                      <div>
+                        <h3 className="text-base font-semibold">
+                          {selectedStoreChain ? `${selectedStoreChain} 店舗一覧` : "店舗一覧"}
+                        </h3>
+                        <p className="text-sm text-muted-foreground">
+                          {selectedStoreChain
+                            ? `${selectedChainStoreLocations.length.toLocaleString()}店を表示`
+                            : "チェーンを選択してください"}
+                        </p>
+                      </div>
+                      {selectedStoreChain === "ロフト" ? (
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          disabled={isSyncingStoreLocations}
+                          onClick={() => void handleSyncLoftStoreLocations()}
+                        >
+                          {isSyncingStoreLocations ? "取得中..." : "公式サイトから更新"}
+                        </Button>
+                      ) : null}
+                    </div>
+
+                    {selectedStoreChain ? (
+                      <>
+                        <Input
+                          value={storeLocationSearch}
+                          placeholder="店舗名・店舗コード・住所で検索"
+                          onChange={(event) => setStoreLocationSearch(event.target.value)}
+                        />
+                        {selectedChainStoreLocations.length === 0 ? (
+                          <p className="rounded-lg border px-4 py-8 text-center text-sm text-muted-foreground">
+                            {storeLocationSearch.trim()
+                              ? "条件に一致する店舗がありません。"
+                              : selectedStoreChain === "ロフト"
+                                ? "ロフト店舗が未登録です。「公式サイトから更新」を押してください。"
+                                : "このチェーンの個別店舗データはまだありません。"}
+                          </p>
+                        ) : (
+                          <div className="overflow-x-auto rounded-lg border">
+                            <Table className="min-w-[920px]">
+                              <TableHeader>
+                                <TableRow>
+                                  <TableHead>店舗コード</TableHead>
+                                  <TableHead>店舗名</TableHead>
+                                  <TableHead>郵便番号</TableHead>
+                                  <TableHead>住所</TableHead>
+                                  <TableHead>電話</TableHead>
+                                </TableRow>
+                              </TableHeader>
+                              <TableBody>
+                                {selectedChainStoreLocations.map((location) => (
+                                  <TableRow key={location.storeCode}>
+                                    <TableCell className="font-mono text-xs">{location.storeCode}</TableCell>
+                                    <TableCell className="font-medium">{location.storeName}</TableCell>
+                                    <TableCell>{location.postalCode || "-"}</TableCell>
+                                    <TableCell>{location.address || "-"}</TableCell>
+                                    <TableCell>{location.tel || "-"}</TableCell>
+                                  </TableRow>
+                                ))}
+                              </TableBody>
+                            </Table>
+                          </div>
+                        )}
+                      </>
+                    ) : (
+                      <p className="rounded-lg border px-4 py-8 text-center text-sm text-muted-foreground">
+                        左のチェーン一覧から店舗を表示したいチェーンを選んでください。
+                      </p>
+                    )}
+                  </div>
                 </div>
               )}
             </Panel>
@@ -3844,10 +4238,12 @@ export function OrderWorkbench({
         {view === "storeIntroductions" ? (
           <StoreIntroductionPanel
             clientId={selectedClientId}
+            initialDataClientId={initialStoreIntroductionClientId}
             clients={clients}
             onClientChange={handleClientChange}
             products={products}
             stores={stores}
+            storeLocations={storeLocations}
             initialImports={initialData.storeIntroductionImports}
             initialEntries={initialData.storeIntroductionEntries}
           />
@@ -4081,20 +4477,30 @@ export function OrderWorkbench({
           <Panel
             title="発注書一覧"
             action={
-              <Field>
-                <FieldLabel>受注番号検索</FieldLabel>
-                <Input
-                  value={orderFileSearch}
-                  className="w-[260px]"
-                  placeholder="受注番号・ファイル名を入力"
-                  onChange={(event) => setOrderFileSearch(event.target.value)}
+              <div className="grid gap-3 md:grid-cols-[minmax(220px,280px)_minmax(220px,320px)]">
+                <ClientSelectField
+                  clients={clients}
+                  selectedClientId={selectedClientId}
+                  onClientChange={handleClientChange}
                 />
-              </Field>
+                <Field>
+                  <FieldLabel>受注番号検索</FieldLabel>
+                  <Input
+                    value={orderFileSearch}
+                    className="w-full"
+                    placeholder="受注番号・ファイル名"
+                    onChange={(event) => setOrderFileSearch(event.target.value)}
+                  />
+                </Field>
+              </div>
             }
           >
+            <p className="text-sm text-muted-foreground">
+              {getClientName(selectedClientId, clients)} の取込成功した発注書のみ表示しています。取込に失敗したファイルは「取込履歴」で確認できます。同じファイルを複数回取り込んだ場合は、最新の1件だけを表示します。
+            </p>
             {savedImportBatches.length === 0 ? (
               <p className="text-sm text-muted-foreground">
-                このクライアントで取込に成功した発注書はまだありません。取込に失敗したファイルは「取込履歴」で確認できます。
+                このクライアントのアップロード済み発注書はまだありません。
               </p>
             ) : filteredOrderFiles.length === 0 ? (
               <p className="text-sm text-muted-foreground">
@@ -4168,7 +4574,7 @@ export function OrderWorkbench({
         ) : null}
 
         {view === "history" ? (
-        <section className="grid gap-4 xl:grid-cols-3">
+        <section className="grid gap-4 xl:grid-cols-2">
           <Panel title="取込履歴">
             {selectedImportBatches.length === 0 ? (
               <p className="text-sm text-muted-foreground">取込履歴はまだありません。</p>
@@ -4197,6 +4603,9 @@ export function OrderWorkbench({
                           {new Date(batch.importedAt).toLocaleString("ja-JP")} / エラー{" "}
                           {batch.errors.length}件
                         </p>
+                        <p className="text-sm text-muted-foreground">
+                          {formatOperatorLabel(batch.operatorName)}
+                        </p>
                       </div>
                     </CardContent>
                   </Card>
@@ -4221,6 +4630,9 @@ export function OrderWorkbench({
                           {new Date(order.importedAt).toLocaleString("ja-JP")}
                           {order.sourceFile ? ` / ${order.sourceFile}` : ""}
                         </p>
+                        <p className="text-sm text-muted-foreground">
+                          {formatOperatorLabel(order.checkedByName)}
+                        </p>
                       </div>
                     </CardContent>
                   </Card>
@@ -4244,6 +4656,39 @@ export function OrderWorkbench({
                         <p className="text-muted-foreground">
                           {new Date(order.importedAt).toLocaleString("ja-JP")}
                           {order.sourceFile ? ` / ${order.sourceFile}` : ""}
+                        </p>
+                        <p className="text-sm text-muted-foreground">
+                          {formatOperatorLabel(order.shippedByName)}
+                        </p>
+                      </div>
+                    </CardContent>
+                  </Card>
+                ))}
+              </div>
+            )}
+          </Panel>
+          <Panel title="削除履歴">
+            {selectedDeletionLogs.length === 0 ? (
+              <p className="text-sm text-muted-foreground">削除履歴はまだありません。</p>
+            ) : (
+              <div className="flex flex-col gap-2">
+                {selectedDeletionLogs.map((log) => (
+                  <Card size="sm" key={log.id}>
+                    <CardContent>
+                      <div className="flex flex-col gap-2">
+                        <div className="flex flex-wrap items-center justify-between gap-2">
+                          <span className="font-medium">
+                            {log.orderNo ? `発注番号 ${log.orderNo}` : getDeletionTargetLabel(log.targetType)}
+                          </span>
+                          {log.orderStatus ? <StatusBadge status={log.orderStatus} /> : null}
+                        </div>
+                        <p className="text-muted-foreground">
+                          {new Date(log.deletedAt).toLocaleString("ja-JP")}
+                          {log.fileName ? ` / ${log.fileName}` : ""}
+                        </p>
+                        <p className="text-sm text-muted-foreground">
+                          {formatOperatorLabel(log.operatorName)}
+                          {log.lineCount != null ? ` / 明細 ${log.lineCount}件` : ""}
                         </p>
                       </div>
                     </CardContent>
@@ -4474,11 +4919,11 @@ function getWorkbenchPageDescription(view: WorkbenchView) {
   }
 
   if (view === "sellIn") {
-    return "発送済み受注を発注日、店舗、商品ごとに集計し、セルインデータとして確認・出力できます。";
+    return "受注を発注日、店舗、商品ごとに集計し、セルインデータとして確認・出力できます。";
   }
 
   if (view === "history") {
-    return "取込・チェック・送信の各処理履歴とエラーを確認します。";
+    return "取込・チェック・送信・削除の各処理履歴とエラーを確認します。";
   }
 
   if (view === "storeIntroductions") {
@@ -4494,23 +4939,37 @@ const sidebarGroupViews: Record<string, WorkbenchView[]> = {
   orders: ["orderFiles", "history"],
 };
 
+function withBasePath(basePath: string, href: string) {
+  if (!basePath) {
+    return href;
+  }
+
+  if (href === "/") {
+    return basePath;
+  }
+
+  return `${basePath}${href}`;
+}
+
 function MasterSidebar({
   currentView,
   selectedClientId,
+  basePath = "",
 }: {
   currentView: WorkbenchView;
   selectedClientId: string;
+  basePath?: string;
 }) {
   const navigation = [
     {
       type: "link" as const,
-      href: "/",
+      href: withBasePath(basePath, "/"),
       label: "メイン画面",
       view: "orders" as const,
     },
     {
       type: "link" as const,
-      href: "/payouts",
+      href: withBasePath(basePath, "/payouts"),
       label: "振り込み管理",
       view: "payouts" as const,
     },
@@ -4519,10 +4978,14 @@ function MasterSidebar({
       id: "master",
       title: "マスタ",
       links: [
-        { href: "/clients", label: "クライアント", view: "clients" as const },
-        { href: "/products", label: "商品", view: "products" as const },
-        { href: "/delivery-destinations", label: "配送先", view: "deliveryDestinations" as const },
-        { href: "/stores", label: "店舗", view: "stores" as const },
+        { href: withBasePath(basePath, "/clients"), label: "クライアント", view: "clients" as const },
+        { href: withBasePath(basePath, "/products"), label: "商品", view: "products" as const },
+        {
+          href: withBasePath(basePath, "/delivery-destinations"),
+          label: "配送先",
+          view: "deliveryDestinations" as const,
+        },
+        { href: withBasePath(basePath, "/stores"), label: "店舗", view: "stores" as const },
       ],
     },
     {
@@ -4530,8 +4993,12 @@ function MasterSidebar({
       id: "retail",
       title: "小売情報",
       links: [
-        { href: "/store-introductions", label: "導入店舗", view: "storeIntroductions" as const },
-        { href: "/sell-in", label: "セルイン", view: "sellIn" as const },
+        {
+          href: withBasePath(basePath, "/store-introductions"),
+          label: "導入店舗",
+          view: "storeIntroductions" as const,
+        },
+        { href: withBasePath(basePath, "/sell-in"), label: "セルイン", view: "sellIn" as const },
       ],
     },
     {
@@ -4539,8 +5006,8 @@ function MasterSidebar({
       id: "orders",
       title: "発注管理",
       links: [
-        { href: "/order-files", label: "発注書一覧", view: "orderFiles" as const },
-        { href: "/history", label: "処理履歴", view: "history" as const },
+        { href: withBasePath(basePath, "/order-files"), label: "発注書一覧", view: "orderFiles" as const },
+        { href: withBasePath(basePath, "/history"), label: "処理履歴", view: "history" as const },
       ],
     },
   ];
@@ -4575,7 +5042,11 @@ function MasterSidebar({
   }
 
   return (
-    <aside className="fixed inset-y-0 left-0 z-50 w-36 border-r border-sidebar-border bg-sidebar px-3 py-5 text-sidebar-foreground">
+    <aside
+      className={`fixed left-0 z-50 w-36 border-r border-sidebar-border bg-sidebar px-3 py-5 text-sidebar-foreground ${
+        basePath ? "top-10 bottom-0" : "inset-y-0"
+      }`}
+    >
       <nav className="flex flex-col gap-2 text-sm font-medium">
         {navigation.map((item) => {
           if (item.type === "link") {
@@ -4752,7 +5223,8 @@ function ClientSelectorBar({
             <FieldLabel>発注ファイル</FieldLabel>
             <FileUploadButton
               key={fileInputKey}
-              accept=".csv,.xlsx,.xls,.pdf,application/pdf"
+              accept=".pdf,application/pdf"
+              description="PDFファイルのみ選択できます。"
               disabled={isSavingImport}
               fullWidth
               onFileChange={onFileChange}
@@ -4835,6 +5307,34 @@ function getOrdersForImportBatch(batch: ImportBatch, orders: Order[]) {
 
     return Boolean(batch.fileName && order.sourceFile === batch.fileName);
   });
+}
+
+function dedupeImportBatchesForDisplay(batches: ImportBatch[], orders: Order[]) {
+  const map = new Map<string, ImportBatch>();
+
+  [...batches]
+    .sort((left, right) => right.importedAt.localeCompare(left.importedAt))
+    .forEach((batch) => {
+      const key = getImportBatchDedupeKey(batch, orders);
+
+      if (!map.has(key)) {
+        map.set(key, batch);
+      }
+    });
+
+  return Array.from(map.values()).sort((left, right) =>
+    right.importedAt.localeCompare(left.importedAt),
+  );
+}
+
+function getImportBatchDedupeKey(batch: ImportBatch, _orders: Order[]) {
+  const fileName = batch.fileName.trim().toLowerCase();
+
+  if (fileName) {
+    return `file:${fileName}`;
+  }
+
+  return `batch:${batch.id}`;
 }
 
 function Panel({
@@ -4941,7 +5441,14 @@ function ProductRegistrationForm({
                 <ProductFormFieldRow
                   key={String(field.key)}
                   field={field}
-                  value={form[field.key]}
+                  value={
+                    field.key === "payoutRate"
+                      ? formatComputedPayoutRateInput(
+                          Number(form.wholesalePrice),
+                          form.retailPrice.trim() ? Number(form.retailPrice) : null,
+                        )
+                      : form[field.key]
+                  }
                   unitValue={field.input === "volumeUnit" ? form.unitVolumeUnit : undefined}
                   onChange={(value) => onChange({ ...form, [field.key]: value })}
                   onUnitChange={
@@ -4976,6 +5483,20 @@ function ProductFormFieldRow({
   onChange: (value: string) => void;
   onUnitChange?: (value: string) => void;
 }) {
+  if (field.input === "computed" || field.key === "payoutRate") {
+    return (
+      <div className="grid min-w-0 gap-2 rounded-md bg-background p-3">
+        <FieldLabel>{field.label}</FieldLabel>
+        <p className="rounded-md bg-muted/40 px-3 py-2 text-xs leading-relaxed text-muted-foreground">
+          {field.description || "説明なし"}
+        </p>
+        <p className="rounded-md border border-input bg-muted/20 px-3 py-2 text-sm text-muted-foreground">
+          {value ? `${value}%` : "仕切価格と定価を入力すると自動算出されます"}
+        </p>
+      </div>
+    );
+  }
+
   return (
     <div className="grid min-w-0 gap-2 rounded-md bg-background p-3">
       <FieldLabel>
@@ -5106,6 +5627,14 @@ function ProductMasterTableCell({
               : () => onImageChange?.("", "")
           }
         />
+      </TableCell>
+    );
+  }
+
+  if (field.key === "payoutRate") {
+    return (
+      <TableCell className="text-muted-foreground">
+        {value ? `${value}%` : "-"}
       </TableCell>
     );
   }
@@ -5717,7 +6246,7 @@ function createProductMasterDraft(product: Product): ProductMasterDraft {
     wholesalePrice: String(product.wholesalePrice),
     taxRate: String(product.taxRate),
     retailPrice: product.retailPrice === null ? "" : String(product.retailPrice),
-    payoutRate: product.payoutRate === null ? "" : formatRatePercentInput(product.payoutRate),
+    payoutRate: formatComputedPayoutRateInput(product.wholesalePrice, product.retailPrice),
     memo: product.memo,
     productImagePath: product.productImagePath ?? "",
     productImageUrl: product.productImageUrl ?? "",
@@ -5748,7 +6277,7 @@ function getProductMasterDisplayValue(product: Product, key: ProductFormFieldKey
   }
 
   if (key === "payoutRate") {
-    return formatNullableRate(product.payoutRate);
+    return formatNullableRate(resolveProductPayoutRate(product));
   }
 
   const value = product[key];
@@ -5899,7 +6428,7 @@ function getProductMasterExportValue(product: Product, key: ProductFormFieldKey)
   }
 
   if (key === "payoutRate") {
-    return product.payoutRate === null ? "" : formatRatePercentInput(product.payoutRate);
+    return formatComputedPayoutRateInput(product.wholesalePrice, product.retailPrice);
   }
 
   const value = product[key];
@@ -5947,7 +6476,10 @@ function normalizeProductDraft(draft: ProductMasterDraft, clientId: string) {
       wholesalePrice: Number(draft.wholesalePrice.trim()),
       taxRate: Number(draft.taxRate.trim()),
       retailPrice: draft.retailPrice.trim() ? Number(draft.retailPrice.trim()) : null,
-      payoutRate: parseRatePercent(draft.payoutRate.trim()),
+      payoutRate: calculatePayoutRateFromPrices(
+        Number(draft.wholesalePrice.trim()),
+        draft.retailPrice.trim() ? Number(draft.retailPrice.trim()) : null,
+      ),
       memo: draft.memo.trim(),
       productImagePath: draft.productImagePath.trim() || undefined,
       productImageUrl: draft.productImageUrl.trim() || undefined,
@@ -5985,7 +6517,7 @@ function createDeliveryDestinationMasterDraft(
 ): DeliveryDestinationMasterDraft {
   return {
     originalCode: destination.code,
-    originalClientId: destination.clientId,
+    originalWholesalerName: getDeliveryWholesalerName(destination),
     code: destination.code,
     wholesalerName: getDeliveryWholesalerName(destination),
     name: destination.name,
@@ -6052,10 +6584,10 @@ function getDeliveryDestinationRowKey(
   destination: DeliveryDestination | DeliveryDestinationMasterDraft,
 ) {
   if (isDeliveryDestinationMasterDraft(destination)) {
-    return `${destination.originalClientId ?? "base"}-${destination.originalCode}`;
+    return `${destination.originalWholesalerName}-${destination.originalCode}`;
   }
 
-  return `${destination.clientId ?? "base"}-${destination.code}`;
+  return getDeliveryDestinationStorageKey(destination);
 }
 
 function getDeliveryDestinationWholesalerValue(
@@ -6078,20 +6610,6 @@ function getDeliveryDestinationAliasesValue(
   return destination.aliases.slice(0, 2).join(" / ");
 }
 
-function dedupeDeliveryDestinations(destinations: DeliveryDestination[]) {
-  const destinationsByCode = new Map<string, DeliveryDestination>();
-
-  destinations.forEach((destination) => {
-    const current = destinationsByCode.get(destination.code);
-
-    if (!current || (!current.clientId && destination.clientId)) {
-      destinationsByCode.set(destination.code, destination);
-    }
-  });
-
-  return Array.from(destinationsByCode.values()).sort((a, b) => a.code.localeCompare(b.code, "ja"));
-}
-
 function getSupplierMapping(mappingKey: string) {
   const baseMappingKey = mappingKey.split(":")[0];
 
@@ -6103,6 +6621,12 @@ function getSupplierMapping(mappingKey: string) {
 }
 
 function compareOrdersForWorkbench(a: Order, b: Order) {
+  const colorRankCompare = getOrderColorSortRank(a) - getOrderColorSortRank(b);
+
+  if (colorRankCompare !== 0) {
+    return colorRankCompare;
+  }
+
   const dateCompare = getSortableDateValue(b.arrivalDueDate).localeCompare(
     getSortableDateValue(a.arrivalDueDate),
   );
@@ -6114,20 +6638,16 @@ function compareOrdersForWorkbench(a: Order, b: Order) {
   return b.orderNo.localeCompare(a.orderNo, "ja");
 }
 
-function getOrderStatusSortRank(status: Order["status"]) {
-  if (status === "imported") {
+function getOrderColorSortRank(order: Order) {
+  if (order.status === "imported") {
     return 0;
   }
 
-  if (status === "confirmed") {
+  if (order.status === "confirmed") {
     return 1;
   }
 
-  if (status === "shipped") {
-    return 2;
-  }
-
-  return 3;
+  return 2;
 }
 
 function getSortableDateValue(value: string) {
@@ -6196,13 +6716,14 @@ function buildSellInRows({
         const date = normalizeDateValue(order.orderDate);
         const product = productsByKey.get(`${order.clientId}:${line.jan}`);
         const storeName = getOrderStoreName(order, stores);
-        const hasIssue = storeName === "店舗不明" || !product || product.retailPrice === null;
+        const hasIssue = !product || product.retailPrice === null;
         const wholesaleAmount = product ? Math.floor(product.wholesalePrice * line.qty) : null;
         const retailAmount = product?.retailPrice === null || !product
           ? null
           : Math.floor(product.retailPrice * line.qty);
 
         return {
+          orderId: order.id,
           date,
           storeName,
           jan: line.jan,
@@ -6218,26 +6739,41 @@ function buildSellInRows({
     .filter((row) => !shouldGroupByStore || row.storeName === storeFilter)
     .map((row) => (shouldGroupByStore ? row : { ...row, storeName: "全店舗" }));
 
-  const actualRowsByKey = new Map<string, SellInRow>();
+  const actualRowsByKey = new Map<string, { row: SellInRow; orderIds: Set<string> }>();
   actualRows.forEach((row) => {
-    const key = buildSellInKey(row.date, row.storeName, row.jan);
+    const { orderId, ...rest } = row;
+    const key = buildSellInKey(rest.date, rest.storeName, rest.jan);
     const current = actualRowsByKey.get(key);
 
     if (!current) {
-      actualRowsByKey.set(key, row);
+      actualRowsByKey.set(key, {
+        row: {
+          ...rest,
+          orderCount: 1,
+        },
+        orderIds: new Set([orderId]),
+      });
       return;
     }
 
+    current.orderIds.add(orderId);
     actualRowsByKey.set(key, {
-      ...current,
-      qty: current.qty + row.qty,
-      wholesaleAmount: addNullableAmounts(current.wholesaleAmount, row.wholesaleAmount),
-      retailAmount: addNullableAmounts(current.retailAmount, row.retailAmount),
-      hasIssue: current.hasIssue || row.hasIssue,
+      row: {
+        ...current.row,
+        qty: current.row.qty + rest.qty,
+        wholesaleAmount: addNullableAmounts(current.row.wholesaleAmount, rest.wholesaleAmount),
+        retailAmount: addNullableAmounts(current.row.retailAmount, rest.retailAmount),
+        hasIssue: current.row.hasIssue || rest.hasIssue,
+        orderCount: current.orderIds.size,
+      },
+      orderIds: current.orderIds,
     });
   });
 
-  const activeCombos = new Map<string, Omit<SellInRow, "date" | "qty" | "wholesaleAmount" | "retailAmount">>();
+  const activeCombos = new Map<
+    string,
+    Omit<SellInRow, "date" | "qty" | "wholesaleAmount" | "retailAmount" | "orderCount">
+  >();
   actualRows.forEach((row) => {
     activeCombos.set(buildSellInComboKey(row.storeName, row.jan), {
       storeName: row.storeName,
@@ -6253,7 +6789,10 @@ function buildSellInRows({
         const actual = actualRowsByKey.get(buildSellInKey(date, combo.storeName, combo.jan));
 
         if (actual) {
-          return actual;
+          return {
+            ...actual.row,
+            orderCount: actual.orderIds.size,
+          };
         }
 
         const product = products.find((candidate) => candidate.jan === combo.jan);
@@ -6262,6 +6801,7 @@ function buildSellInRows({
           storeName: combo.storeName,
           jan: combo.jan,
           productName: combo.productName,
+          orderCount: 0,
           qty: 0,
           wholesaleAmount: product ? 0 : null,
           retailAmount: product?.retailPrice === null || !product ? null : 0,
@@ -6564,6 +7104,7 @@ function buildSellInExportRows(rows: SellInRow[]) {
     店舗: row.storeName,
     JAN: row.jan,
     商品名: row.productName,
+    発注件数: row.orderCount,
     数量: row.qty,
     下代: row.wholesaleAmount ?? "未計算",
     上代: row.retailAmount ?? "未計算",
@@ -6597,6 +7138,7 @@ function normalizeMonthValue(value: string) {
 function OrderCard({
   order,
   storeName,
+  stores,
   products,
   isSaving,
   hasExportedCsv,
@@ -6606,9 +7148,11 @@ function OrderCard({
   onDelete,
   onExportCooola,
   onUpdateArrivalDueDate,
+  onUpdateStoreName,
 }: {
   order: Order;
   storeName: string;
+  stores: Store[];
   products: Product[];
   isSaving: boolean;
   hasExportedCsv: boolean;
@@ -6618,15 +7162,46 @@ function OrderCard({
   onDelete: () => void;
   onExportCooola: () => void;
   onUpdateArrivalDueDate: (arrivalDueDate: string) => void;
+  onUpdateStoreName: (storeName: string) => Promise<boolean>;
 }) {
   const amount = order.lines.reduce(
     (sum, line) => sum + calculateLineAmount(order, line, products),
     0,
   );
-  const reviewReasons = order.reviewReasons ?? [];
+  const reviewReasons = getOrderDisplayReviewReasons(order, stores);
+  const showStoreConfirmation = needsStoreConfirmation(order, stores);
+  const showNeedsReviewBadge = shouldShowOrderNeedsReviewBadge(order, stores);
+  const [isStoreDialogOpen, setIsStoreDialogOpen] = useState(showStoreConfirmation);
+  const displayStoreName = formatOrderStoreDisplayName(storeName);
+
+  useEffect(() => {
+    if (showStoreConfirmation && order.status === "imported") {
+      setIsStoreDialogOpen(true);
+    }
+  }, [order.id, order.status, showStoreConfirmation]);
 
   return (
-    <Card size="sm" className={getOrderCardClassName(order)}>
+    <>
+      {isStoreDialogOpen && showStoreConfirmation ? (
+        <StoreConfirmationDialog
+          order={order}
+          isSaving={isSaving}
+          onClose={() => setIsStoreDialogOpen(false)}
+          onConfirmNoStore={async () => {
+            const saved = await onUpdateStoreName(ORDER_STORE_NONE);
+            if (saved) {
+              setIsStoreDialogOpen(false);
+            }
+          }}
+          onConfirmSpecificStore={async (nextStoreName) => {
+            const saved = await onUpdateStoreName(nextStoreName);
+            if (saved) {
+              setIsStoreDialogOpen(false);
+            }
+          }}
+        />
+      ) : null}
+    <Card size="sm" className={getOrderCardClassName(order, showNeedsReviewBadge)}>
       <CardHeader>
         <div className="flex flex-col gap-1">
           <div className="flex flex-wrap items-center gap-2">
@@ -6635,7 +7210,7 @@ function OrderCard({
                 発注番号 {order.orderNo}
               </span>
             </CardTitle>
-            {order.needsReview ? (
+            {showNeedsReviewBadge ? (
               <Badge variant="secondary" className="border border-amber-200 bg-amber-100 text-amber-900">
                 要確認
               </Badge>
@@ -6712,17 +7287,42 @@ function OrderCard({
       </CardHeader>
 
       <CardContent className="flex flex-col gap-3">
-        {order.needsReview && reviewReasons.length > 0 ? (
+        {reviewReasons.length > 0 ? (
           <p className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
             {reviewReasons.join(" / ")}
           </p>
+        ) : null}
+        {showStoreConfirmation ? (
+          <div className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
+            <p className="flex items-start gap-2">
+              <TriangleAlert className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
+              <span>{STORE_SKIP_CONFIRMATION_MESSAGE}</span>
+            </p>
+            <Button type="button" variant="outline" size="sm" disabled={isSaving} onClick={() => setIsStoreDialogOpen(true)}>
+              確認する
+            </Button>
+          </div>
         ) : null}
         <Table>
           <TableHeader>
             <TableRow>
               <TableHead>JAN</TableHead>
               <TableHead>商品名</TableHead>
-              <TableHead>店舗</TableHead>
+              <TableHead>
+                <span className="inline-flex items-center gap-1">
+                  店舗
+                  {showStoreConfirmation ? (
+                    <button
+                      type="button"
+                      className="inline-flex"
+                      aria-label={STORE_SKIP_CONFIRMATION_MESSAGE}
+                      onClick={() => setIsStoreDialogOpen(true)}
+                    >
+                      <TriangleAlert className="h-3.5 w-3.5 text-amber-600" />
+                    </button>
+                  ) : null}
+                </span>
+              </TableHead>
               <TableHead>COOOLaコード</TableHead>
               <TableHead>数量</TableHead>
               <TableHead>単価</TableHead>
@@ -6745,7 +7345,7 @@ function OrderCard({
                     {line.jan}
                   </TableCell>
                   <TableCell>{product?.name ?? "未登録"}</TableCell>
-                  <TableCell>{storeName === "店舗不明" ? "-" : storeName}</TableCell>
+                  <TableCell>{displayStoreName}</TableCell>
                   <TableCell>{product?.cooolaCode ?? "-"}</TableCell>
                   <TableCell>{line.qty}</TableCell>
                   <TableCell>
@@ -6796,6 +7396,99 @@ function OrderCard({
       <p className="text-right text-sm font-semibold">合計 {amount.toLocaleString()}円</p>
       </CardContent>
     </Card>
+    </>
+  );
+}
+
+function StoreConfirmationDialog({
+  order,
+  isSaving,
+  onClose,
+  onConfirmNoStore,
+  onConfirmSpecificStore,
+}: {
+  order: Order;
+  isSaving: boolean;
+  onClose: () => void;
+  onConfirmNoStore: () => Promise<void>;
+  onConfirmSpecificStore: (storeName: string) => Promise<void>;
+}) {
+  const suggestedStoreName = getSuggestedStoreNameFromMemo(order);
+  const [mode, setMode] = useState<"choice" | "specific">("choice");
+  const [storeNameInput, setStoreNameInput] = useState(suggestedStoreName);
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="store-confirmation-title"
+        className="w-full max-w-md rounded-xl border bg-background p-6 shadow-xl"
+      >
+        <div className="flex items-start gap-3">
+          <TriangleAlert className="mt-0.5 h-5 w-5 shrink-0 text-amber-600" aria-hidden="true" />
+          <div className="flex flex-col gap-4">
+            <div className="flex flex-col gap-2">
+              <h2 id="store-confirmation-title" className="text-lg font-semibold">
+                {STORE_SKIP_CONFIRMATION_MESSAGE}
+              </h2>
+              {suggestedStoreName ? (
+                <p className="text-sm text-muted-foreground">
+                  備考欄: {suggestedStoreName}
+                </p>
+              ) : null}
+            </div>
+
+            {mode === "choice" ? (
+              <div className="flex flex-col gap-2">
+                <Button type="button" disabled={isSaving} onClick={() => void onConfirmNoStore()}>
+                  店舗なしで進める
+                </Button>
+                <Button
+                  type="button"
+                  variant="outline"
+                  disabled={isSaving}
+                  onClick={() => {
+                    setStoreNameInput(suggestedStoreName);
+                    setMode("specific");
+                  }}
+                >
+                  特定店舗からの発注です
+                </Button>
+              </div>
+            ) : (
+              <div className="flex flex-col gap-3">
+                <Field>
+                  <FieldLabel>店舗名</FieldLabel>
+                  <Input
+                    value={storeNameInput}
+                    placeholder="店舗名を入力"
+                    disabled={isSaving}
+                    onChange={(event) => setStoreNameInput(event.target.value)}
+                  />
+                </Field>
+                <div className="flex flex-wrap gap-2">
+                  <Button
+                    type="button"
+                    disabled={isSaving || !storeNameInput.trim()}
+                    onClick={() => void onConfirmSpecificStore(storeNameInput.trim())}
+                  >
+                    店舗名を保存
+                  </Button>
+                  <Button type="button" variant="outline" disabled={isSaving} onClick={() => setMode("choice")}>
+                    戻る
+                  </Button>
+                </div>
+              </div>
+            )}
+
+            <Button type="button" variant="ghost" disabled={isSaving} onClick={onClose}>
+              あとで確認
+            </Button>
+          </div>
+        </div>
+      </div>
+    </div>
   );
 }
 
@@ -6895,8 +7588,8 @@ function StatusBadge({ status }: { status: string }) {
   );
 }
 
-function getOrderCardClassName(order: Order) {
-  if (order.needsReview && order.status === "imported") {
+function getOrderCardClassName(order: Order, showNeedsReviewBadge = order.needsReview) {
+  if (showNeedsReviewBadge && order.status === "imported") {
     return "border border-amber-300 bg-amber-50/80 ring-amber-200";
   }
 
@@ -6935,6 +7628,18 @@ function getStatusBadgeClassName(status: string) {
   return undefined;
 }
 
+function formatOperatorLabel(operatorName?: string) {
+  return operatorName ? `担当者: ${operatorName}` : "担当者: 未記録";
+}
+
+function getDeletionTargetLabel(targetType: DeletionLog["targetType"]) {
+  if (targetType === "import_batch") {
+    return "発注書";
+  }
+
+  return "受注";
+}
+
 function getStatusLabel(status: string) {
   const labels: Record<string, string> = {
     imported: "取込済み",
@@ -6954,6 +7659,7 @@ function buildImportBatch(
   errors: ImportError[],
   fileStoragePath?: string,
   fileUrl?: string,
+  operatorName?: string,
 ): ImportBatch {
   return {
     id: createId(),
@@ -6964,6 +7670,7 @@ function buildImportBatch(
     fileUrl,
     importedAt: new Date().toISOString(),
     status,
+    operatorName,
     errors,
   };
 }
@@ -7054,7 +7761,7 @@ async function readParsePdfResponse(response: Response): Promise<{
     };
   } catch {
     throw new Error(
-      `PDF読み取りAPIの応答を解釈できませんでした（${response.status}）。Excel/CSVでのアップロードもお試しください。`,
+      `PDF読み取りAPIの応答を解釈できませんでした（${response.status}）。`,
     );
   }
 }
@@ -7062,61 +7769,33 @@ async function readParsePdfResponse(response: Response): Promise<{
 async function readFileForImport(file: File): Promise<FileReadResult> {
   const fileName = file.name.toLowerCase();
 
-  if (file.type === "application/pdf" || fileName.endsWith(".pdf")) {
-    const formData = new FormData();
-    formData.append("file", file);
-
-    const response = await fetchWithTimeout(
-      "/api/parse-pdf",
-      {
-        method: "POST",
-        body: formData,
-      },
-      55_000,
-    );
-    const result = await readParsePdfResponse(response);
-
-    if (!response.ok || !result.text) {
-      throw new Error(result.error ?? `PDFを読めませんでした（${response.status}）。`);
-    }
-
-    return {
-      type: "pdf",
-      extractionMethod: result.extractionMethod ?? "pdf-text",
-      confidence: result.confidence,
-      pages: result.pages ?? 0,
-      text: result.text,
-    };
+  if (file.type !== "application/pdf" && !fileName.endsWith(".pdf")) {
+    throw new Error("発注ファイルはPDFのみアップロードできます。");
   }
 
-  if (fileName.endsWith(".xlsx") || fileName.endsWith(".xls")) {
-    const buffer = await file.arrayBuffer();
-    const workbook = XLSX.read(buffer);
-    const sheet = workbook.Sheets[workbook.SheetNames[0]];
-    return {
-      type: "rows",
-      rows: XLSX.utils.sheet_to_json<Record<string, unknown>>(sheet, { defval: "" }),
-    };
+  const formData = new FormData();
+  formData.append("file", file);
+
+  const response = await fetchWithTimeout(
+    "/api/parse-pdf",
+    {
+      method: "POST",
+      body: formData,
+    },
+    55_000,
+  );
+  const result = await readParsePdfResponse(response);
+
+  if (!response.ok || !result.text) {
+    throw new Error(result.error ?? `PDFを読めませんでした（${response.status}）。`);
   }
-
-  if (!fileName.endsWith(".csv")) {
-    throw new Error("PDF、Excel、CSVファイルをアップロードしてください。");
-  }
-
-  const text = await readCsvText(file);
-
-  const rows = await new Promise<Record<string, unknown>[]>((resolve, reject) => {
-    Papa.parse<Record<string, unknown>>(text, {
-      header: true,
-      skipEmptyLines: true,
-      complete: (result) => resolve(result.data),
-      error: reject,
-    });
-  });
 
   return {
-    type: "rows",
-    rows,
+    type: "pdf",
+    extractionMethod: result.extractionMethod ?? "pdf-text",
+    confidence: result.confidence,
+    pages: result.pages ?? 0,
+    text: result.text,
   };
 }
 
@@ -7163,7 +7842,7 @@ function getErrorMessage(error: unknown) {
     const message = error.message;
 
     if (message.includes("is not valid JSON") || message.includes("Unexpected token")) {
-      return "サーバーとの通信に失敗しました。処理がタイムアウトした可能性があります。Excel/CSVでのアップロードもお試しください。";
+      return "サーバーとの通信に失敗しました。処理がタイムアウトした可能性があります。";
     }
 
     return message;
@@ -7172,11 +7851,19 @@ function getErrorMessage(error: unknown) {
   return "不明なエラーです";
 }
 
-function showImportErrorPopup(errors: ImportError[], heading = "発注ファイルの取り込みでエラーが発生しました。") {
-  window.alert(formatImportErrorMessage(errors, heading));
+function showImportErrorPopup(
+  errors: ImportError[],
+  heading = "発注ファイルの取り込みでエラーが発生しました。",
+  options?: { selectedClientName?: string },
+) {
+  window.alert(formatImportErrorMessage(errors, heading, options));
 }
 
-function formatImportErrorMessage(errors: ImportError[], heading: string) {
+function formatImportErrorMessage(
+  errors: ImportError[],
+  heading: string,
+  options?: { selectedClientName?: string },
+) {
   const visibleErrors = errors.slice(0, 10);
   const errorLines = visibleErrors.map((error) => {
     const location = error.row > 0 ? `${error.row}行目` : "ファイル全体";
@@ -7188,7 +7875,19 @@ function formatImportErrorMessage(errors: ImportError[], heading: string) {
     errorLines.push(`・ほか${remainingCount}件のエラーがあります。`);
   }
 
-  return [heading, "", "エラー理由:", ...errorLines].join("\n");
+  const hasJanErrors = errors.some((error) => error.field === "jan");
+  const clientGuidance = hasJanErrors
+    ? [
+        "",
+        "クライアントが一致していますか？？",
+        "商品マスタのJANはクライアントごとに管理されています。",
+        options?.selectedClientName
+          ? `現在選択中のクライアント: ${options.selectedClientName}`
+          : "画面上部のクライアント選択を確認してください。",
+      ]
+    : [];
+
+  return [heading, ...clientGuidance, "", "エラー理由:", ...errorLines].join("\n");
 }
 
 function formatTaxRate(taxRate: number) {
@@ -7199,6 +7898,14 @@ function formatTaxRate(taxRate: number) {
   }
 
   return `${Math.round(taxRate * 1000) / 10}%`;
+}
+
+function formatComputedPayoutRateInput(
+  wholesalePrice: number,
+  retailPrice: number | null,
+) {
+  const payoutRate = calculatePayoutRateFromPrices(wholesalePrice, retailPrice);
+  return payoutRate === null ? "" : formatRatePercentInput(payoutRate);
 }
 
 function parseRatePercent(value: string) {

@@ -1,10 +1,11 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { FileUploadButton, UploadStatus } from "@/components/file-upload-button";
 import { Field, FieldLabel } from "@/components/ui/field";
+import { Input } from "@/components/ui/input";
 import {
   Select,
   SelectContent,
@@ -29,6 +30,12 @@ import {
   isLoftSeriesIntroductionSheet,
 } from "@/lib/store-matching";
 import { summarizeIntroducedStoresByChannel } from "@/lib/store-channel";
+import { summarizeProductChainKpis } from "@/lib/store-introduction-kpi";
+import {
+  buildStoreIntroductionMatrix,
+  type IntroductionMatrixProduct,
+} from "@/lib/store-introduction-matrix";
+import type { StoreLocationRecord } from "@/lib/store-location-groups";
 import {
   importStoreIntroductionWorkbook,
   readStoreIntroductionData,
@@ -43,43 +50,65 @@ import type {
 
 export function StoreIntroductionPanel({
   clientId,
+  initialDataClientId,
   clients,
   onClientChange,
   products,
   stores,
+  storeLocations,
   initialImports,
   initialEntries,
 }: {
   clientId: string;
+  initialDataClientId?: string;
   clients: Client[];
   onClientChange: (clientId: string) => void;
   products: Product[];
   stores: Store[];
+  storeLocations: StoreLocationRecord[];
   initialImports: StoreIntroductionImport[];
   initialEntries: StoreIntroductionEntry[];
 }) {
   const [imports, setImports] = useState(initialImports);
   const [entries, setEntries] = useState(initialEntries);
-  const [selectedImportId, setSelectedImportId] = useState(initialImports[0]?.id ?? "");
-  const [selectedJan, setSelectedJan] = useState("all");
-  const [showIntroducedOnly, setShowIntroducedOnly] = useState(true);
+  const [selectedProductKey, setSelectedProductKey] = useState("all");
+  const [selectedRetailChainFilter, setSelectedRetailChainFilter] = useState("all");
+  const [productSearchQuery, setProductSearchQuery] = useState("");
+  const [showIntroducedOnly, setShowIntroducedOnly] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [notice, setNotice] = useState("");
   const [fileInputKey, setFileInputKey] = useState(0);
+  const skipInitialServerLoadRef = useRef(true);
 
   useEffect(() => {
     if (!clientId) {
       setImports([]);
       setEntries([]);
-      setSelectedImportId("");
+      setSelectedRetailChainFilter("all");
+      setIsLoading(false);
       return;
     }
+
+    if (
+      skipInitialServerLoadRef.current &&
+      clientId === initialDataClientId &&
+      initialDataClientId
+    ) {
+      skipInitialServerLoadRef.current = false;
+      setImports(initialImports);
+      setEntries(initialEntries);
+      setIsLoading(false);
+      return;
+    }
+
+    skipInitialServerLoadRef.current = false;
 
     let cancelled = false;
 
     async function loadIntroductionData() {
       setIsLoading(true);
+      setNotice("");
 
       try {
         const data = await readStoreIntroductionData(clientId);
@@ -90,8 +119,17 @@ export function StoreIntroductionPanel({
 
         setImports(data.imports);
         setEntries(data.entries);
-        setSelectedImportId(data.imports[0]?.id ?? "");
-        setSelectedJan("all");
+        setSelectedProductKey("all");
+        setSelectedRetailChainFilter("all");
+        setProductSearchQuery("");
+      } catch (error) {
+        if (!cancelled) {
+          setNotice(
+            error instanceof Error
+              ? `導入店舗データの読み込みに失敗しました: ${error.message}`
+              : "導入店舗データの読み込みに失敗しました。",
+          );
+        }
       } finally {
         if (!cancelled) {
           setIsLoading(false);
@@ -103,8 +141,9 @@ export function StoreIntroductionPanel({
 
     return () => {
       cancelled = true;
+      setIsLoading(false);
     };
-  }, [clientId]);
+  }, [clientId, initialDataClientId]);
 
   function getResolvedProduct(entry: StoreIntroductionEntry) {
     return resolveIntroductionProduct(entry.jan, entry.productName, clientId, products);
@@ -118,7 +157,13 @@ export function StoreIntroductionPanel({
     return getResolvedProduct(entry).jan;
   }
 
-  const activeImport = imports.find((item) => item.id === selectedImportId) ?? imports[0];
+  const activeImport = useMemo(
+    () =>
+      imports
+        .slice()
+        .sort((left, right) => right.importedAt.localeCompare(left.importedAt))[0],
+    [imports],
+  );
   const isLoftSeriesSheet = useMemo(() => {
     if (!activeImport) {
       return false;
@@ -142,42 +187,219 @@ export function StoreIntroductionPanel({
     );
   }
 
-  const showAddressColumn = useMemo(() => {
-    const importEntries = entries.filter((entry) => entry.importId === activeImport?.id);
-    return importEntries.some((entry) => entry.address.trim());
-  }, [activeImport?.id, entries]);
-  const visibleEntries = useMemo(() => {
-    const importEntries = entries.filter((entry) => entry.importId === activeImport?.id);
-
-    return importEntries.filter((entry) => {
-      if (selectedJan !== "all" && getEntryJan(entry) !== selectedJan) {
-        return false;
-      }
-
-      if (showIntroducedOnly && !entry.isIntroduced) {
-        return false;
-      }
-
+  function matchesProductSearch(entry: StoreIntroductionEntry) {
+    const normalizedQuery = productSearchQuery.trim().toLowerCase();
+    if (!normalizedQuery) {
       return true;
-    });
-  }, [activeImport?.id, clientId, entries, products, selectedJan, showIntroducedOnly]);
+    }
 
-  const janOptions = useMemo(() => {
-    const jans = Array.from(
-      new Set(
-        entries
-          .filter((entry) => entry.importId === activeImport?.id)
-          .map((entry) => getEntryJan(entry)),
-      ),
+    const jan = getEntryJan(entry).toLowerCase();
+    const productName = getEntryProductName(entry).toLowerCase();
+    const storedProductName = entry.productName.trim().toLowerCase();
+
+    return [jan, productName, storedProductName].some((value) => value.includes(normalizedQuery));
+  }
+
+  function matchesRetailChainFilter(entry: StoreIntroductionEntry) {
+    if (selectedRetailChainFilter === "all") {
+      return true;
+    }
+
+    return getEntryMatchedStoreName(entry) === selectedRetailChainFilter;
+  }
+
+  const retailChainOptions = useMemo(() => {
+    if (!activeImport) {
+      return [] as string[];
+    }
+
+    const importEntries = entries.filter((entry) => entry.importId === activeImport.id);
+    const chains = new Set<string>();
+
+    importEntries.forEach((entry) => {
+      const matchedName = getMatchedStoreNameForIntroduction(
+        entry,
+        activeImport.formatKey,
+        stores,
+        isLoftSeriesSheet,
+      );
+
+      if (matchedName && matchedName !== "店舗不明") {
+        chains.add(matchedName);
+      }
+    });
+
+    if (activeImport.chainName) {
+      chains.add(activeImport.chainName);
+    }
+
+    return Array.from(chains).sort((left, right) => left.localeCompare(right, "ja"));
+  }, [activeImport, entries, isLoftSeriesSheet, stores]);
+
+  const effectiveRetailChainFilter = useMemo(() => {
+    if (selectedRetailChainFilter !== "all") {
+      return selectedRetailChainFilter;
+    }
+
+    if (isLoftSeriesSheet) {
+      return "ロフト";
+    }
+
+    if (activeImport?.chainName) {
+      return activeImport.chainName;
+    }
+
+    if (retailChainOptions.length === 1) {
+      return retailChainOptions[0] ?? "all";
+    }
+
+    return "all";
+  }, [activeImport?.chainName, isLoftSeriesSheet, retailChainOptions, selectedRetailChainFilter]);
+
+  const productOptions = useMemo(() => {
+    const optionMap = new Map<string, { key: string; jan: string; productName: string }>();
+
+    entries
+      .filter((entry) => entry.importId === activeImport?.id)
+      .forEach((entry) => {
+        const jan = getEntryJan(entry);
+        const productName = getEntryProductName(entry);
+        const key = `${jan}::${productName}`;
+
+        if (!optionMap.has(key)) {
+          optionMap.set(key, { key, jan, productName });
+        }
+      });
+
+    return Array.from(optionMap.values()).sort((left, right) =>
+      left.productName.localeCompare(right.productName, "ja"),
+    );
+  }, [activeImport?.id, clientId, entries, products]);
+
+  const matrixProducts = useMemo(() => {
+    let options = productOptions;
+
+    if (selectedProductKey !== "all") {
+      options = options.filter((option) => option.key === selectedProductKey);
+    }
+
+    if (productSearchQuery.trim()) {
+      const normalizedQuery = productSearchQuery.trim().toLowerCase();
+      options = options.filter(
+        (option) =>
+          option.jan.toLowerCase().includes(normalizedQuery) ||
+          option.productName.toLowerCase().includes(normalizedQuery),
+      );
+    }
+
+    return options.map(
+      (option): IntroductionMatrixProduct => ({
+        key: option.key,
+        jan: option.jan,
+        productName: option.productName,
+      }),
+    );
+  }, [productOptions, productSearchQuery, selectedProductKey]);
+
+  const introductionMatrix = useMemo(() => {
+    if (!activeImport) {
+      return { rows: [], products: [] as IntroductionMatrixProduct[] };
+    }
+
+    const importEntries = entries
+      .filter((entry) => entry.importId === activeImport.id)
+      .filter((entry) => matchesRetailChainFilter(entry))
+      .map((entry) => ({
+        storeCode: entry.storeCode,
+        storeName: entry.storeName,
+        address: entry.address,
+        postalCode: entry.postalCode,
+        jan: getEntryJan(entry),
+        productName: getEntryProductName(entry),
+        isIntroduced: entry.isIntroduced,
+        chainName: getEntryMatchedStoreName(entry),
+      }));
+
+    return buildStoreIntroductionMatrix({
+      chainFilter: effectiveRetailChainFilter,
+      storeLocations,
+      entries: importEntries,
+      products: matrixProducts,
+      showIntroducedOnly,
+    });
+  }, [
+    activeImport,
+    clientId,
+    effectiveRetailChainFilter,
+    entries,
+    isLoftSeriesSheet,
+    matrixProducts,
+    productSearchQuery,
+    products,
+    showIntroducedOnly,
+    storeLocations,
+    stores,
+  ]);
+
+  const productChainKpis = useMemo(() => {
+    if (!activeImport) {
+      return [];
+    }
+
+    const importEntries = entries
+      .filter((entry) => entry.importId === activeImport.id)
+      .filter((entry) => matchesRetailChainFilter(entry))
+      .map((entry) => ({
+        jan: getEntryJan(entry),
+        productName: getEntryProductName(entry),
+        chainName: getEntryMatchedStoreName(entry),
+        isIntroduced: entry.isIntroduced,
+      }));
+
+    return summarizeProductChainKpis(importEntries, activeImport.formatKey);
+  }, [
+    activeImport,
+    clientId,
+    entries,
+    isLoftSeriesSheet,
+    products,
+    selectedRetailChainFilter,
+    stores,
+  ]);
+
+  const selectedProductKpi = useMemo(() => {
+    if (selectedProductKey === "all") {
+      return null;
+    }
+
+    const matches = productChainKpis.filter(
+      (kpi) => `${kpi.jan}::${kpi.productName}` === selectedProductKey,
     );
 
-    return jans.sort();
-  }, [activeImport?.id, clientId, entries, products]);
+    if (selectedRetailChainFilter !== "all") {
+      return matches.find((kpi) => kpi.chainName === selectedRetailChainFilter) ?? matches[0] ?? null;
+    }
+
+    return matches[0] ?? null;
+  }, [productChainKpis, selectedProductKey, selectedRetailChainFilter]);
 
   const summary = useMemo(() => {
     const importEntries = entries.filter((entry) => entry.importId === activeImport?.id);
-    const filtered =
-      selectedJan === "all" ? importEntries : importEntries.filter((entry) => getEntryJan(entry) === selectedJan);
+    const filtered = importEntries.filter((entry) => {
+      if (selectedProductKey !== "all") {
+        const jan = getEntryJan(entry);
+        const productName = getEntryProductName(entry);
+        if (`${jan}::${productName}` !== selectedProductKey) {
+          return false;
+        }
+      }
+
+      if (!matchesRetailChainFilter(entry)) {
+        return false;
+      }
+
+      return matchesProductSearch(entry);
+    });
 
     return summarizeIntroducedStoresByChannel(
       filtered.map((entry) => ({
@@ -192,7 +414,9 @@ export function StoreIntroductionPanel({
     entries,
     isLoftSeriesSheet,
     products,
-    selectedJan,
+    productSearchQuery,
+    selectedProductKey,
+    selectedRetailChainFilter,
     stores,
   ]);
 
@@ -223,8 +447,12 @@ export function StoreIntroductionPanel({
         ...result.entries,
         ...current.filter((entry) => entry.importId !== result.importBatch.id),
       ]);
-      setSelectedImportId(result.importBatch.id);
-      setSelectedJan(result.entries[0]?.jan ?? "all");
+      const firstEntry = result.entries[0];
+      setSelectedProductKey(
+        firstEntry ? `${firstEntry.jan}::${firstEntry.productName}` : "all",
+      );
+      setSelectedRetailChainFilter("all");
+      setProductSearchQuery("");
       setNotice(result.message);
     } catch (error) {
       setNotice(error instanceof Error ? error.message : "導入店舗ファイルの取込に失敗しました。");
@@ -234,14 +462,12 @@ export function StoreIntroductionPanel({
     }
   }
 
-  function getJanFilterLabel(jan: string) {
-    const entry = entries.find((item) => item.importId === activeImport?.id && getEntryJan(item) === jan);
-    if (!entry) {
-      return jan;
+  function getProductFilterLabel(option: { jan: string; productName: string }) {
+    if (!option.productName || option.productName === option.jan) {
+      return option.jan;
     }
 
-    const productName = getEntryProductName(entry);
-    return productName === jan ? jan : `${productName} (${jan})`;
+    return `${option.productName} (${option.jan})`;
   }
 
   return (
@@ -295,51 +521,129 @@ export function StoreIntroductionPanel({
           </p>
         ) : (
           <div className="grid gap-6 border-t pt-6">
-            <div className="grid grid-cols-2 gap-2.5">
-              <FeaturedSummaryCard label="全店舗" value={summary.introduced} unit="店舗" />
+            <div className="grid gap-3">
+              <h3 className="text-base font-semibold">企業詳細</h3>
+              <div className="grid grid-cols-2 gap-2.5">
+              <FeaturedSummaryCard
+                label={selectedProductKpi ? "導入店舗" : "導入店舗合計"}
+                value={selectedProductKpi?.introducedCount ?? summary.introduced}
+                unit="店舗"
+              />
               <div className="grid grid-cols-2 gap-1">
-                <SummaryCard label="バラエティ" value={summary.variety} />
-                <SummaryCard label="ドラッグストア" value={summary.drugstore} />
-                <SummaryCard label="ディスカウント" value={summary.discount} />
-                <SummaryCard label="GMS" value={summary.gms} />
-                <SummaryCard label="CVS" value={summary.cvs} className="col-span-2" />
+                {selectedProductKpi?.hasFullStoreList ? (
+                  <>
+                    <SummaryCard label="全店舗" value={selectedProductKpi.totalStoreCount} />
+                    <SummaryCard
+                      label="導入率"
+                      value={selectedProductKpi.penetrationRate ?? 0}
+                      suffix="%"
+                    />
+                  </>
+                ) : (
+                  <>
+                    <SummaryCard label="バラエティ" value={summary.variety} />
+                    <SummaryCard label="ドラッグストア" value={summary.drugstore} />
+                    <SummaryCard label="ディスカウント" value={summary.discount} />
+                    <SummaryCard label="GMS" value={summary.gms} />
+                    <SummaryCard label="CVS" value={summary.cvs} className="col-span-2" />
+                  </>
+                )}
+              </div>
               </div>
             </div>
 
-            <div className="grid gap-3 md:grid-cols-[minmax(220px,1fr)_minmax(180px,1fr)_auto]">
+            {productChainKpis.length > 0 ? (
+              <div className="grid gap-3">
+                <h3 className="text-base font-semibold">チェーン別KPI</h3>
+                <div className="overflow-x-auto rounded-lg border">
+                  <Table className="min-w-[820px]">
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead>小売企業</TableHead>
+                        <TableHead>商品名</TableHead>
+                        <TableHead>JAN</TableHead>
+                        <TableHead>導入店舗</TableHead>
+                        <TableHead>全店舗</TableHead>
+                        <TableHead>導入率</TableHead>
+                        <TableHead>拡大余地</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {productChainKpis.map((kpi) => (
+                        <TableRow key={`${kpi.chainName}-${kpi.jan}-${kpi.productName}`}>
+                          <TableCell className="font-medium">{kpi.chainName}</TableCell>
+                          <TableCell>{kpi.productName}</TableCell>
+                          <TableCell className="font-mono text-xs">{kpi.jan}</TableCell>
+                          <TableCell>{kpi.introducedCount.toLocaleString()}店</TableCell>
+                          <TableCell>
+                            {kpi.hasFullStoreList
+                              ? `${kpi.totalStoreCount.toLocaleString()}店`
+                              : "不明"}
+                          </TableCell>
+                          <TableCell>
+                            {kpi.penetrationRate === null ? "-" : `${kpi.penetrationRate}%`}
+                          </TableCell>
+                          <TableCell>
+                            {kpi.hasFullStoreList
+                              ? `${Math.max(kpi.totalStoreCount - kpi.introducedCount, 0).toLocaleString()}店`
+                              : "-"}
+                          </TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                </div>
+              </div>
+            ) : null}
+
+            <div className="grid gap-3">
+              <h3 className="text-base font-semibold">店舗詳細</h3>
+              <div className="grid gap-3 md:grid-cols-[minmax(220px,1fr)_minmax(220px,1fr)_minmax(220px,1fr)_auto]">
               <Field>
-                <FieldLabel>取込履歴</FieldLabel>
+                <FieldLabel>小売企業</FieldLabel>
                 <Select
-                  value={selectedImportId}
-                  onValueChange={(value) => setSelectedImportId(value ?? "")}
+                  value={selectedRetailChainFilter}
+                  onValueChange={(value) => setSelectedRetailChainFilter(value ?? "all")}
                 >
                   <SelectTrigger className="w-full">
-                    <SelectValue placeholder="取込履歴" />
+                    <SelectValue placeholder="小売企業" />
                   </SelectTrigger>
                   <SelectContent>
-                    {imports.map((item) => (
-                      <SelectItem key={item.id} value={item.id}>
-                        {item.fileName}
+                    <SelectItem value="all">すべての小売企業</SelectItem>
+                    {retailChainOptions.map((chainName) => (
+                      <SelectItem key={chainName} value={chainName}>
+                        {chainName}
                       </SelectItem>
                     ))}
                   </SelectContent>
                 </Select>
               </Field>
               <Field>
-                <FieldLabel>JAN</FieldLabel>
-                <Select value={selectedJan} onValueChange={(value) => setSelectedJan(value ?? "all")}>
+                <FieldLabel>商品</FieldLabel>
+                <Select
+                  value={selectedProductKey}
+                  onValueChange={(value) => setSelectedProductKey(value ?? "all")}
+                >
                   <SelectTrigger className="w-full">
-                    <SelectValue placeholder="JAN" />
+                    <SelectValue placeholder="商品" />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="all">すべてのJAN</SelectItem>
-                    {janOptions.map((jan) => (
-                      <SelectItem key={jan} value={jan}>
-                        {getJanFilterLabel(jan)}
+                    <SelectItem value="all">すべての商品</SelectItem>
+                    {productOptions.map((option) => (
+                      <SelectItem key={option.key} value={option.key}>
+                        {getProductFilterLabel(option)}
                       </SelectItem>
                     ))}
                   </SelectContent>
                 </Select>
+              </Field>
+              <Field>
+                <FieldLabel>商品名 / JAN 検索</FieldLabel>
+                <Input
+                  value={productSearchQuery}
+                  placeholder="商品名またはJANで絞り込み"
+                  onChange={(event) => setProductSearchQuery(event.target.value)}
+                />
               </Field>
               <div className="flex items-end">
                 <Button
@@ -353,53 +657,51 @@ export function StoreIntroductionPanel({
               </div>
             </div>
 
-            <p className="text-sm text-muted-foreground">
-              ファイル: {activeImport.fileName} / 取込日時:{" "}
-              {new Date(activeImport.importedAt).toLocaleString("ja-JP")}
-            </p>
-
             <div className="overflow-x-auto rounded-lg border">
               <Table className="min-w-[720px]">
                 <TableHeader>
                   <TableRow>
-                    <TableHead className="text-sm">JAN</TableHead>
-                    <TableHead className="text-sm">商品名</TableHead>
-                    <TableHead className="text-base">店舗名</TableHead>
-                    <TableHead className="text-sm">マスタ照合</TableHead>
-                    {showAddressColumn ? <TableHead className="text-sm">住所</TableHead> : null}
+                    <TableHead className="sticky left-0 z-10 bg-background">店舗名</TableHead>
+                    <TableHead className="min-w-[240px]">住所</TableHead>
+                    {introductionMatrix.products.map((product) => (
+                      <TableHead
+                        key={product.key}
+                        className="min-w-[120px]"
+                        title={`${product.productName} (${product.jan})`}
+                      >
+                        {product.productName}
+                      </TableHead>
+                    ))}
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {visibleEntries.length === 0 ? (
+                  {introductionMatrix.rows.length === 0 ? (
                     <TableRow>
                       <TableCell
-                        colSpan={showAddressColumn ? 5 : 4}
+                        colSpan={2 + introductionMatrix.products.length}
                         className="py-8 text-center text-base text-muted-foreground"
                       >
                         表示対象の店舗がありません。
                       </TableCell>
                     </TableRow>
                   ) : (
-                    visibleEntries.map((entry) => {
-                      const matchedStoreName = getEntryMatchedStoreName(entry);
-
-                      return (
-                        <TableRow key={entry.id}>
-                          <TableCell className="font-mono text-sm">{getEntryJan(entry)}</TableCell>
-                          <TableCell className="text-sm">{getEntryProductName(entry)}</TableCell>
-                          <TableCell className="text-base font-medium">{entry.storeName}</TableCell>
-                          <TableCell className="text-sm">
-                            {matchedStoreName === "店舗不明" ? "-" : matchedStoreName}
+                    introductionMatrix.rows.map((row) => (
+                      <TableRow key={row.rowKey}>
+                        <TableCell className="sticky left-0 z-10 bg-background font-medium">
+                          {row.storeName}
+                        </TableCell>
+                        <TableCell>{row.address || "-"}</TableCell>
+                        {introductionMatrix.products.map((product) => (
+                          <TableCell key={product.key}>
+                            {row.introducedByProduct[product.key] ? "◯" : "-"}
                           </TableCell>
-                          {showAddressColumn ? (
-                            <TableCell className="text-sm">{entry.address}</TableCell>
-                          ) : null}
-                        </TableRow>
-                      );
-                    })
+                        ))}
+                      </TableRow>
+                    ))
                   )}
                 </TableBody>
               </Table>
+            </div>
             </div>
           </div>
         )}
@@ -432,15 +734,20 @@ function SummaryCard({
   label,
   value,
   className,
+  suffix = "店舗",
 }: {
   label: string;
   value: number;
   className?: string;
+  suffix?: string;
 }) {
   return (
     <div className={`rounded-lg border bg-muted/30 px-3 py-2 ${className ?? ""}`}>
       <p className="text-xs text-muted-foreground">{label}</p>
-      <p className="text-xl font-semibold leading-tight">{value.toLocaleString()}店舗</p>
+      <p className="text-xl font-semibold leading-tight">
+        {value.toLocaleString()}
+        {suffix}
+      </p>
     </div>
   );
 }
