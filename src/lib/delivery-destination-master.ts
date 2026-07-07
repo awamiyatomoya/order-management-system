@@ -54,10 +54,7 @@ export const deliveryDestinations: DeliveryDestination[] = [
     "address3": "",
     "tel": "048-989-4311",
     "aliases": [
-      "㈱フィットエクスプレス埼玉センター",
-      "K.K オオヤマ サイタマ リュウツウ センター",
-      "K.K オオヤマ サイタマリュウツウセンター",
-      "オオヤマ サイタマ"
+      "㈱フィットエクスプレス埼玉センター"
     ]
   },
   {
@@ -84,8 +81,13 @@ export const deliveryDestinations: DeliveryDestination[] = [
     "tel": "048-989-4311",
     "aliases": [
       "株式会社大山埼玉流通センターM倉庫",
+      "株式会社大山埼玉流通センター",
+      "大山埼玉流通センター",
       "K.K オオヤマ サイタマ リュウツウ センター",
-      "K.K オオヤマ サイタマリュウツウセンター"
+      "K.K オオヤマ サイタマリュウツウセンター",
+      "カ) オオヤマ サイタマ リュウツウ センター",
+      "オオヤマ サイタマ リュウツウ センター",
+      "オオヤマ サイタマ"
     ]
   },
   {
@@ -529,6 +531,36 @@ export function resolveDeliveryDestination(params: {
     reviewReasons.push(`センターコードが複数見つかりました（${codesFromText.join(" / ")}）`);
   }
 
+  const centerNameMatch = matchDestinationByCenterName(params.centerName ?? "", destinations);
+
+  if (centerNameMatch.destination) {
+    const codeFromText = codesFromText[0] ?? params.code ?? "";
+    const codeDestination = codeFromText
+      ? findDestinationByCode(codeFromText, destinations)
+      : null;
+    const reasons = [...reviewReasons];
+
+    if (
+      codeDestination &&
+      codeDestination.code !== centerNameMatch.destination.code
+    ) {
+      reasons.push(
+        `発注書のセンター名から ${centerNameMatch.destination.code}（${centerNameMatch.destination.name}）を採用しました（コード ${codeFromText} とは別センター）`,
+      );
+    }
+
+    return {
+      destination: centerNameMatch.destination,
+      method: "centerName",
+      needsReview: reasons.length > 0,
+      reviewReasons: reasons,
+    };
+  }
+
+  if (centerNameMatch.ambiguous) {
+    reviewReasons.push("センター名が複数候補と一致しました");
+  }
+
   for (const code of codesFromText) {
     const destination = findDestinationByCode(code, destinations);
 
@@ -569,21 +601,6 @@ export function resolveDeliveryDestination(params: {
         reviewReasons: reasons,
       };
     }
-  }
-
-  const centerNameMatch = matchDestinationByCenterName(params.centerName ?? "", destinations);
-
-  if (centerNameMatch.destination) {
-    return {
-      destination: centerNameMatch.destination,
-      method: "centerName",
-      needsReview: reviewReasons.length > 0,
-      reviewReasons,
-    };
-  }
-
-  if (centerNameMatch.ambiguous) {
-    reviewReasons.push("センター名が複数候補と一致しました");
   }
 
   const postalCode = extractPostalCode(searchText);
@@ -803,7 +820,25 @@ function scoreCenterNameMatch(normalizedCenterName: string, destination: Deliver
     }
   }
 
-  return bestScore;
+  const normalizedDestinationName = normalizeCenterNameText(destination.name);
+
+  if (/オオヤマ|大山/.test(normalizedCenterName)) {
+    if (/大山|オオヤマ/.test(normalizedDestinationName)) {
+      bestScore += 20;
+    }
+
+    if (/フィットエクスプレス/.test(normalizedDestinationName)) {
+      bestScore -= 40;
+    }
+  }
+
+  if (/フィットエクスプレス|fitexpress/i.test(normalizedCenterName)) {
+    if (/フィットエクスプレス/.test(normalizedDestinationName)) {
+      bestScore += 20;
+    }
+  }
+
+  return Math.max(0, bestScore);
 }
 
 function normalizeCenterNameText(value: string) {
