@@ -42,6 +42,20 @@ export function groupStoreLocationsByChain(
   return grouped;
 }
 
+export function countHandsStoreLocations(locations: StoreLocationRecord[]) {
+  return countChainStoreLocations(locations, "ハンズ");
+}
+
+export function countChainStoreLocations(locations: StoreLocationRecord[], chainName: string) {
+  return groupStoreLocationsByChain(locations).get(chainName)?.length ?? 0;
+}
+
+export const officialChainStoreMasters = new Set(["ハンズ", "ロフト"]);
+
+export function hasOfficialChainStoreMaster(chainName: string) {
+  return officialChainStoreMasters.has(chainName.trim());
+}
+
 export function filterStoreLocations(
   locations: StoreLocationRecord[],
   search: string,

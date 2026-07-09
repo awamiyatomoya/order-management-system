@@ -23,7 +23,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import {
-  resolveIntroductionProduct,
+  resolveIntroductionDisplayProduct,
 } from "@/lib/store-introduction-parsers";
 import {
   getMatchedStoreNameForIntroduction,
@@ -31,7 +31,7 @@ import {
   isLoftSeriesIntroductionSheet,
 } from "@/lib/store-matching";
 import { summarizeIntroducedStoresByChannel } from "@/lib/store-channel";
-import { summarizeProductChainKpis } from "@/lib/store-introduction-kpi";
+import { summarizeProductChainKpis, enrichProductChainKpisWithStoreMaster } from "@/lib/store-introduction-kpi";
 import {
   buildStoreIntroductionMatrix,
   type IntroductionMatrixProduct,
@@ -59,6 +59,7 @@ export function StoreIntroductionPanel({
   storeLocations,
   initialImports,
   initialEntries,
+  onStoreLocationsRefresh,
 }: {
   clientId: string;
   initialDataClientId?: string;
@@ -69,6 +70,7 @@ export function StoreIntroductionPanel({
   storeLocations: StoreLocationRecord[];
   initialImports: StoreIntroductionImport[];
   initialEntries: StoreIntroductionEntry[];
+  onStoreLocationsRefresh?: () => Promise<void>;
 }) {
   const [imports, setImports] = useState(initialImports);
   const [entries, setEntries] = useState(initialEntries);
@@ -146,16 +148,20 @@ export function StoreIntroductionPanel({
     };
   }, [clientId, initialDataClientId]);
 
-  function getResolvedProduct(entry: StoreIntroductionEntry) {
-    return resolveIntroductionProduct(entry.jan, entry.productName, clientId, products);
+  function getEntryDisplayProduct(entry: StoreIntroductionEntry) {
+    return resolveIntroductionDisplayProduct(entry.jan, entry.productName, clientId, products);
   }
 
   function getEntryProductName(entry: StoreIntroductionEntry) {
-    return getResolvedProduct(entry).productName;
+    return getEntryDisplayProduct(entry).productName;
   }
 
   function getEntryJan(entry: StoreIntroductionEntry) {
-    return getResolvedProduct(entry).jan;
+    return getEntryDisplayProduct(entry).jan;
+  }
+
+  function getEntryProductKey(entry: StoreIntroductionEntry) {
+    return getEntryDisplayProduct(entry).productKey;
   }
 
   const activeImport = useMemo(
@@ -165,36 +171,70 @@ export function StoreIntroductionPanel({
         .sort((left, right) => right.importedAt.localeCompare(left.importedAt))[0],
     [imports],
   );
-  const isLoftSeriesSheet = useMemo(() => {
-    if (!activeImport) {
-      return false;
+
+  const latestImportIdByChain = useMemo(() => {
+    const map = new Map<string, string>();
+
+    imports
+      .slice()
+      .sort((left, right) => right.importedAt.localeCompare(left.importedAt))
+      .forEach((importBatch) => {
+        const chainName = importBatch.chainName.trim();
+        if (chainName && !map.has(chainName)) {
+          map.set(chainName, importBatch.id);
+        }
+      });
+
+    return map;
+  }, [imports]);
+
+  const latestEntriesPerChain = useMemo(() => {
+    return entries.filter((entry) => {
+      const importBatch = imports.find((item) => item.id === entry.importId);
+      if (!importBatch) {
+        return false;
+      }
+
+      const flags = getImportSheetFlags(importBatch);
+      const chainName = getMatchedStoreNameForIntroduction(
+        entry,
+        importBatch.formatKey,
+        stores,
+        flags.isLoftSeriesSheet,
+        flags.isHandsSeriesSheet,
+      );
+      const latestImportId = latestImportIdByChain.get(chainName);
+      return latestImportId ? entry.importId === latestImportId : false;
+    });
+  }, [entries, imports, latestImportIdByChain, stores]);
+
+  function getImportSheetFlags(importBatch: StoreIntroductionImport | undefined) {
+    if (!importBatch) {
+      return { isLoftSeriesSheet: false, isHandsSeriesSheet: false };
     }
 
-    const importEntries = entries.filter((entry) => entry.importId === activeImport.id);
+    const importEntries = entries.filter((entry) => entry.importId === importBatch.id);
 
-    return isLoftSeriesIntroductionSheet(activeImport.formatKey, importEntries);
-  }, [activeImport, entries]);
-  const isHandsSeriesSheet = useMemo(() => {
-    if (!activeImport) {
-      return false;
-    }
-
-    const importEntries = entries.filter((entry) => entry.importId === activeImport.id);
-
-    return isHandsSeriesIntroductionSheet(activeImport.formatKey, importEntries);
-  }, [activeImport, entries]);
+    return {
+      isLoftSeriesSheet: isLoftSeriesIntroductionSheet(importBatch.formatKey, importEntries),
+      isHandsSeriesSheet: isHandsSeriesIntroductionSheet(importBatch.formatKey, importEntries),
+    };
+  }
 
   function getEntryMatchedStoreName(entry: StoreIntroductionEntry) {
-    if (!activeImport) {
+    const importBatch = imports.find((item) => item.id === entry.importId);
+    if (!importBatch) {
       return entry.matchedStoreName;
     }
 
+    const flags = getImportSheetFlags(importBatch);
+
     return getMatchedStoreNameForIntroduction(
       entry,
-      activeImport.formatKey,
+      importBatch.formatKey,
       stores,
-      isLoftSeriesSheet,
-      isHandsSeriesSheet,
+      flags.isLoftSeriesSheet,
+      flags.isHandsSeriesSheet,
     );
   }
 
@@ -220,80 +260,83 @@ export function StoreIntroductionPanel({
   }
 
   const retailChainOptions = useMemo(() => {
-    if (!activeImport) {
-      return [] as string[];
-    }
-
-    const importEntries = entries.filter((entry) => entry.importId === activeImport.id);
     const chains = new Set<string>();
 
-    importEntries.forEach((entry) => {
-      const matchedName = getMatchedStoreNameForIntroduction(
-        entry,
-        activeImport.formatKey,
-        stores,
-        isLoftSeriesSheet,
-        isHandsSeriesSheet,
-      );
+    imports.forEach((importBatch) => {
+      const flags = getImportSheetFlags(importBatch);
+      entries
+        .filter((entry) => entry.importId === importBatch.id)
+        .forEach((entry) => {
+          const matchedName = getMatchedStoreNameForIntroduction(
+            entry,
+            importBatch.formatKey,
+            stores,
+            flags.isLoftSeriesSheet,
+            flags.isHandsSeriesSheet,
+          );
 
-      if (matchedName && matchedName !== "店舗不明") {
-        chains.add(matchedName);
+          if (matchedName && matchedName !== "店舗不明") {
+            chains.add(matchedName);
+          }
+        });
+
+      if (importBatch.chainName) {
+        chains.add(importBatch.chainName);
       }
     });
 
-    if (activeImport.chainName) {
-      chains.add(activeImport.chainName);
-    }
-
     return Array.from(chains).sort((left, right) => left.localeCompare(right, "ja"));
-  }, [activeImport, entries, isHandsSeriesSheet, isLoftSeriesSheet, stores]);
-
-  const effectiveRetailChainFilter = useMemo(() => {
-    if (selectedRetailChainFilter !== "all") {
-      return selectedRetailChainFilter;
-    }
-
-    if (isLoftSeriesSheet) {
-      return "ロフト";
-    }
-
-    if (isHandsSeriesSheet) {
-      return "ハンズ";
-    }
-
-    if (activeImport?.chainName) {
-      return activeImport.chainName;
-    }
-
-    if (retailChainOptions.length === 1) {
-      return retailChainOptions[0] ?? "all";
-    }
-
-    return "all";
-  }, [activeImport?.chainName, isHandsSeriesSheet, isLoftSeriesSheet, retailChainOptions, selectedRetailChainFilter]);
+  }, [entries, imports, stores]);
 
   const productOptions = useMemo(() => {
     const optionMap = new Map<string, { key: string; jan: string; productName: string }>();
 
-    entries
-      .filter((entry) => entry.importId === activeImport?.id)
-      .forEach((entry) => {
-        const jan = getEntryJan(entry);
-        const productName = getEntryProductName(entry);
-        const key = `${jan}::${productName}`;
+    entries.forEach((entry) => {
+      const displayProduct = getEntryDisplayProduct(entry);
+      const key = displayProduct.productKey;
 
-        if (!optionMap.has(key)) {
-          optionMap.set(key, { key, jan, productName });
-        }
-      });
+      if (!optionMap.has(key)) {
+        optionMap.set(key, {
+          key,
+          jan: displayProduct.jan,
+          productName: displayProduct.productName,
+        });
+      }
+    });
 
     return Array.from(optionMap.values()).sort((left, right) =>
       left.productName.localeCompare(right.productName, "ja"),
     );
-  }, [activeImport?.id, clientId, entries, products]);
+  }, [clientId, entries, products]);
+
+  const matrixProductOptions = useMemo(() => {
+    const optionMap = new Map<string, { key: string; jan: string; productName: string }>();
+
+    latestEntriesPerChain.forEach((entry) => {
+      const chainName = getEntryMatchedStoreName(entry);
+      if (selectedRetailChainFilter !== "all" && chainName !== selectedRetailChainFilter) {
+        return;
+      }
+
+      const displayProduct = getEntryDisplayProduct(entry);
+      const key = displayProduct.productKey;
+
+      if (!optionMap.has(key)) {
+        optionMap.set(key, {
+          key,
+          jan: displayProduct.jan,
+          productName: displayProduct.productName,
+        });
+      }
+    });
+
+    return Array.from(optionMap.values()).sort((left, right) =>
+      left.productName.localeCompare(right.productName, "ja"),
+    );
+  }, [latestEntriesPerChain, products, selectedRetailChainFilter]);
 
   const matrixProducts = useMemo(() => {
-    let options = productOptions;
+    let options = matrixProductOptions;
 
     if (selectedProductKey !== "all") {
       options = options.filter((option) => option.key === selectedProductKey);
@@ -315,73 +358,95 @@ export function StoreIntroductionPanel({
         productName: option.productName,
       }),
     );
-  }, [productOptions, productSearchQuery, selectedProductKey]);
+  }, [matrixProductOptions, productSearchQuery, selectedProductKey]);
 
   const introductionMatrix = useMemo(() => {
-    if (!activeImport) {
-      return { rows: [], products: [] as IntroductionMatrixProduct[] };
-    }
-
-    const importEntries = entries
-      .filter((entry) => entry.importId === activeImport.id)
+    const importEntries = latestEntriesPerChain
       .filter((entry) => matchesRetailChainFilter(entry))
-      .map((entry) => ({
-        storeCode: entry.storeCode,
-        storeName: entry.storeName,
-        address: entry.address,
-        postalCode: entry.postalCode,
-        jan: getEntryJan(entry),
-        productName: getEntryProductName(entry),
-        isIntroduced: entry.isIntroduced,
-        chainName: getEntryMatchedStoreName(entry),
-      }));
+      .map((entry) => {
+        const displayProduct = getEntryDisplayProduct(entry);
+
+        return {
+          storeCode: entry.storeCode,
+          storeName: entry.storeName,
+          address: entry.address,
+          postalCode: entry.postalCode,
+          jan: displayProduct.jan,
+          productName: displayProduct.productName,
+          productKey: displayProduct.productKey,
+          isIntroduced: entry.isIntroduced,
+          chainName: getEntryMatchedStoreName(entry),
+        };
+      });
 
     return buildStoreIntroductionMatrix({
-      chainFilter: effectiveRetailChainFilter,
+      chainFilter: selectedRetailChainFilter,
       storeLocations,
       entries: importEntries,
       products: matrixProducts,
       showIntroducedOnly,
     });
   }, [
-    activeImport,
-    clientId,
-    effectiveRetailChainFilter,
-    entries,
-    isHandsSeriesSheet,
-    isLoftSeriesSheet,
+    latestEntriesPerChain,
     matrixProducts,
-    productSearchQuery,
-    products,
+    selectedRetailChainFilter,
     showIntroducedOnly,
     storeLocations,
-    stores,
   ]);
 
   const productChainKpis = useMemo(() => {
-    if (!activeImport) {
+    if (imports.length === 0) {
       return [];
     }
 
-    const importEntries = entries
-      .filter((entry) => entry.importId === activeImport.id)
-      .filter((entry) => matchesRetailChainFilter(entry))
-      .map((entry) => ({
-        jan: getEntryJan(entry),
-        productName: getEntryProductName(entry),
-        chainName: getEntryMatchedStoreName(entry),
-        isIntroduced: entry.isIntroduced,
-      }));
+    return Array.from(latestImportIdByChain.entries())
+      .flatMap(([chainName, importId]) => {
+        const importBatch = imports.find((item) => item.id === importId);
+        if (!importBatch) {
+          return [];
+        }
 
-    return summarizeProductChainKpis(importEntries, activeImport.formatKey);
+        if (
+          selectedRetailChainFilter !== "all" &&
+          selectedRetailChainFilter !== chainName
+        ) {
+          return [];
+        }
+
+        const importEntries = entries
+          .filter((entry) => entry.importId === importBatch.id)
+          .map((entry) => ({
+            jan: getEntryJan(entry),
+            productName: getEntryProductName(entry),
+            productKey: getEntryProductKey(entry),
+            chainName: getEntryMatchedStoreName(entry),
+            isIntroduced: entry.isIntroduced,
+          }));
+
+        return enrichProductChainKpisWithStoreMaster(
+          summarizeProductChainKpis(importEntries, importBatch.formatKey).map((kpi) => ({
+            ...kpi,
+            fileName: importBatch.fileName,
+            importedAt: importBatch.importedAt,
+          })),
+          storeLocations,
+        );
+      })
+      .sort((left, right) => {
+        const chainCompare = left.chainName.localeCompare(right.chainName, "ja");
+        if (chainCompare !== 0) {
+          return chainCompare;
+        }
+
+        return left.productName.localeCompare(right.productName, "ja");
+      });
   }, [
-    activeImport,
-    clientId,
     entries,
-    isHandsSeriesSheet,
-    isLoftSeriesSheet,
+    imports,
+    latestImportIdByChain,
     products,
     selectedRetailChainFilter,
+    storeLocations,
     stores,
   ]);
 
@@ -390,9 +455,7 @@ export function StoreIntroductionPanel({
       return null;
     }
 
-    const matches = productChainKpis.filter(
-      (kpi) => `${kpi.jan}::${kpi.productName}` === selectedProductKey,
-    );
+    const matches = productChainKpis.filter((kpi) => kpi.productKey === selectedProductKey);
 
     if (selectedRetailChainFilter !== "all") {
       return matches.find((kpi) => kpi.chainName === selectedRetailChainFilter) ?? matches[0] ?? null;
@@ -402,12 +465,9 @@ export function StoreIntroductionPanel({
   }, [productChainKpis, selectedProductKey, selectedRetailChainFilter]);
 
   const summary = useMemo(() => {
-    const importEntries = entries.filter((entry) => entry.importId === activeImport?.id);
-    const filtered = importEntries.filter((entry) => {
+    const filtered = latestEntriesPerChain.filter((entry) => {
       if (selectedProductKey !== "all") {
-        const jan = getEntryJan(entry);
-        const productName = getEntryProductName(entry);
-        if (`${jan}::${productName}` !== selectedProductKey) {
+        if (getEntryProductKey(entry) !== selectedProductKey) {
           return false;
         }
       }
@@ -422,16 +482,13 @@ export function StoreIntroductionPanel({
     return summarizeIntroducedStoresByChannel(
       filtered.map((entry) => ({
         storeName: entry.storeName,
+        storeCode: entry.storeCode,
         matchedStoreName: getEntryMatchedStoreName(entry),
         isIntroduced: entry.isIntroduced,
       })),
     );
   }, [
-    activeImport?.id,
-    clientId,
-    entries,
-    isHandsSeriesSheet,
-    isLoftSeriesSheet,
+    latestEntriesPerChain,
     products,
     productSearchQuery,
     selectedProductKey,
@@ -468,11 +525,19 @@ export function StoreIntroductionPanel({
       ]);
       const firstEntry = result.entries[0];
       setSelectedProductKey(
-        firstEntry ? `${firstEntry.jan}::${firstEntry.productName}` : "all",
+        firstEntry
+          ? resolveIntroductionDisplayProduct(
+              firstEntry.jan,
+              firstEntry.productName,
+              clientId,
+              products,
+            ).productKey
+          : "all",
       );
       setSelectedRetailChainFilter("all");
       setProductSearchQuery("");
       setNotice(result.message);
+      await onStoreLocationsRefresh?.();
     } catch (error) {
       setNotice(error instanceof Error ? error.message : "導入店舗ファイルの取込に失敗しました。");
     } finally {
@@ -524,6 +589,8 @@ export function StoreIntroductionPanel({
               accept=".xlsx,.xls,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
               disabled={isUploading || !clientId}
               fullWidth
+              label="導入店舗ファイルをアップロード"
+              description="Excelファイル（.xlsx / .xls）を選択できます。"
               onFileChange={(file) => void handleFileChange(file)}
             />
             {isUploading ? <UploadStatus isProcessing message="読み取り中" /> : null}
@@ -574,13 +641,17 @@ export function StoreIntroductionPanel({
             {productChainKpis.length > 0 ? (
               <div className="grid gap-3">
                 <h3 className="text-base font-semibold">チェーン別KPI</h3>
+                <p className="text-sm text-muted-foreground">
+                  ハンズ・ロフトの「全店舗」「導入率」は店舗マスタ（公式サイト）基準です。導入店舗数のみ取込Excelから集計します。
+                </p>
                 <div className="overflow-x-auto rounded-lg border">
                   <Table className="min-w-[820px]">
                     <TableHeader>
                       <TableRow>
                         <TableHead>小売企業</TableHead>
-                        <TableHead>商品名</TableHead>
+                        <TableHead className="text-left">商品名</TableHead>
                         <TableHead>JAN</TableHead>
+                        <TableHead>取込ファイル</TableHead>
                         <TableHead>導入店舗</TableHead>
                         <TableHead>全店舗</TableHead>
                         <TableHead>導入率</TableHead>
@@ -589,10 +660,13 @@ export function StoreIntroductionPanel({
                     </TableHeader>
                     <TableBody>
                       {productChainKpis.map((kpi) => (
-                        <TableRow key={`${kpi.chainName}-${kpi.jan}-${kpi.productName}`}>
+                        <TableRow key={`${kpi.chainName}-${kpi.jan}-${kpi.productName}-${kpi.fileName}`}>
                           <TableCell className="font-medium">{kpi.chainName}</TableCell>
-                          <TableCell>{kpi.productName}</TableCell>
+                          <TableCell className="text-left">{kpi.productName}</TableCell>
                           <TableCell className="font-mono text-xs">{kpi.jan}</TableCell>
+                          <TableCell className="max-w-[200px] truncate text-xs" title={kpi.fileName}>
+                            {kpi.fileName || "-"}
+                          </TableCell>
                           <TableCell>{kpi.introducedCount.toLocaleString()}店</TableCell>
                           <TableCell>
                             {kpi.hasFullStoreList
@@ -680,15 +754,16 @@ export function StoreIntroductionPanel({
               <Table className="min-w-[720px]">
                 <TableHeader>
                   <TableRow>
-                    <TableHead className="sticky left-0 z-10 bg-background">店舗名</TableHead>
+                    <TableHead className="sticky left-0 z-10 min-w-[96px] bg-background">小売企業</TableHead>
+                    <TableHead className="sticky left-[96px] z-10 bg-background">店舗名</TableHead>
                     <TableHead className="min-w-[240px]">住所</TableHead>
                     {introductionMatrix.products.map((product) => (
                       <TableHead
                         key={product.key}
-                        className="min-w-[120px]"
+                        className="min-w-[120px] text-left"
                         title={`${product.productName} (${product.jan})`}
                       >
-                        {product.productName}
+                        <span className="line-clamp-2">{product.productName}</span>
                       </TableHead>
                     ))}
                   </TableRow>
@@ -697,7 +772,7 @@ export function StoreIntroductionPanel({
                   {introductionMatrix.rows.length === 0 ? (
                     <TableRow>
                       <TableCell
-                        colSpan={2 + introductionMatrix.products.length}
+                        colSpan={3 + introductionMatrix.products.length}
                         className="py-8 text-center text-base text-muted-foreground"
                       >
                         表示対象の店舗がありません。
@@ -707,6 +782,9 @@ export function StoreIntroductionPanel({
                     introductionMatrix.rows.map((row) => (
                       <TableRow key={row.rowKey}>
                         <TableCell className="sticky left-0 z-10 bg-background font-medium">
+                          {row.chainName || "-"}
+                        </TableCell>
+                        <TableCell className="sticky left-[96px] z-10 bg-background font-medium">
                           {row.storeName}
                         </TableCell>
                         <TableCell>{row.address || "-"}</TableCell>

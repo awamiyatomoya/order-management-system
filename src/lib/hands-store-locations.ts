@@ -30,26 +30,49 @@ type JsonLdStore = {
 };
 
 export async function fetchHandsStoreLocationsFromOfficialSite(): Promise<ParsedHandsStoreLocation[]> {
-  const stores: ParsedHandsStoreLocation[] = [];
-
-  for (const pageUrl of HANDS_SHOP_LIST_PAGES) {
+  const pageResults = await Promise.allSettled(
+    HANDS_SHOP_LIST_PAGES.map(async (pageUrl) => {
     const response = await fetch(pageUrl, {
       headers: {
         "User-Agent": "order-management-system/1.0 (+https://order-management-system-4w3n.vercel.app)",
         Accept: "text/html",
       },
-      next: { revalidate: 60 * 60 * 24 },
+      cache: "no-store",
     });
 
-    if (!response.ok) {
-      throw new Error(`ハンズ公式サイトの取得に失敗しました (${pageUrl}: ${response.status})`);
+      if (!response.ok) {
+        throw new Error(`${pageUrl}: ${response.status}`);
+      }
+
+      return parseHandsShopListHtml(await response.text());
+    }),
+  );
+
+  const stores: ParsedHandsStoreLocation[] = [];
+  const errors: string[] = [];
+
+  pageResults.forEach((result, index) => {
+    if (result.status === "fulfilled") {
+      stores.push(...result.value);
+      return;
     }
 
-    stores.push(...parseHandsShopListHtml(await response.text()));
+    const reason =
+      result.reason instanceof Error ? result.reason.message : String(result.reason ?? "unknown error");
+    errors.push(`${HANDS_SHOP_LIST_PAGES[index]} (${reason})`);
+  });
+
+  const deduped = dedupeHandsStoreLocations(stores);
+  if (deduped.length === 0) {
+    throw new Error(
+      `ハンズ公式サイトから店舗を取得できませんでした。${errors.join(" / ")}`,
+    );
   }
 
-  return dedupeHandsStoreLocations(stores);
+  return deduped;
 }
+
+// 地域別ページに同一店舗が重複掲載されるため、storeCode で一意化する（全ページ合計120件→90店舗）。
 
 export function parseHandsShopListHtml(html: string): ParsedHandsStoreLocation[] {
   const stores: ParsedHandsStoreLocation[] = [];
@@ -107,7 +130,7 @@ function dedupeHandsStoreLocations(locations: ParsedHandsStoreLocation[]) {
   const map = new Map<string, ParsedHandsStoreLocation>();
 
   locations.forEach((location) => {
-    const key = location.storeName.normalize("NFKC").toLowerCase().replace(/\s+/g, "");
+    const key = location.storeCode || location.officialSlug || location.storeName;
     map.set(key, location);
   });
 

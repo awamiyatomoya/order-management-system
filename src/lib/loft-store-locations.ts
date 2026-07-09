@@ -12,7 +12,7 @@ export async function fetchLoftStoreLocationsFromOfficialSite(): Promise<ParsedL
       "User-Agent": "order-management-system/1.0 (+https://order-management-system-4w3n.vercel.app)",
       Accept: "text/html",
     },
-    next: { revalidate: 60 * 60 * 24 },
+    cache: "no-store",
   });
 
   if (!response.ok) {
@@ -24,7 +24,7 @@ export async function fetchLoftStoreLocationsFromOfficialSite(): Promise<ParsedL
 
 export function parseLoftShopListHtml(html: string): ParsedLoftStoreLocation[] {
   const parts = html.split('class="shopdetail-box"');
-  const stores: ParsedLoftStoreLocation[] = [];
+  const map = new Map<string, ParsedLoftStoreLocation>();
 
   for (const part of parts.slice(1)) {
     const nameMatch = part.match(/shop-name[^>]*>\s*<a[^>]*>([^<]+)<\/a>/);
@@ -47,7 +47,7 @@ export function parseLoftShopListHtml(html: string): ParsedLoftStoreLocation[] {
       continue;
     }
 
-    stores.push({
+    map.set(idMatch[1], {
       storeCode: `loft-${idMatch[1]}`,
       storeName: nameMatch[1].trim(),
       postalCode: postalMatch?.[1]?.trim() ?? "",
@@ -57,7 +57,7 @@ export function parseLoftShopListHtml(html: string): ParsedLoftStoreLocation[] {
     });
   }
 
-  return stores;
+  return Array.from(map.values());
 }
 
 export function mergeLoftLocationsWithExisting(

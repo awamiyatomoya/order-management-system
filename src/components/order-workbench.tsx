@@ -95,8 +95,7 @@ import {
   type StoreLocationRecord,
 } from "@/lib/store-location-groups";
 import type { OrderWorkbenchInitialData } from "@/lib/supabase/read-order-data";
-import { readStoreLocationRecords } from "@/lib/supabase/store-location-actions";
-import { syncLoftStoreLocationsFromOfficialSite } from "@/lib/supabase/store-introduction-actions";
+import { readStoreLocationRecords, type OfficialStoreChainName } from "@/lib/supabase/store-location-actions";
 import {
   deleteProduct,
   fetchProductMasterProducts,
@@ -850,6 +849,14 @@ export function OrderWorkbench({
   const [productNotice, setProductNotice] = useState("");
   const [deliveryDestinationNotice, setDeliveryDestinationNotice] = useState("");
   const [storeNotice, setStoreNotice] = useState("");
+  const [storeLocationSyncNotice, setStoreLocationSyncNotice] = useState("");
+  const [officialStoreSyncPrompt, setOfficialStoreSyncPrompt] = useState<null | {
+    chainName: OfficialStoreChainName;
+    newStoreCount: number;
+    officialCount: number;
+    currentCount: number;
+    sampleStoreNames: string[];
+  }>(null);
   const [clientName, setClientName] = useState("");
   const [clientNotice, setClientNotice] = useState("");
   const [orderSearch, setOrderSearch] = useState("");
@@ -900,6 +907,7 @@ export function OrderWorkbench({
   const [isEditingStoreMaster, setIsEditingStoreMaster] = useState(false);
   const [storeMasterDrafts, setStoreMasterDrafts] = useState<StoreMasterDraft[]>([]);
   const skippedInitialProductPageLoadRef = useRef(false);
+  const autoSyncedHandsRef = useRef(false);
   const setNotice = (..._messages: string[]) => {
     void _messages;
   };
@@ -1272,6 +1280,20 @@ export function OrderWorkbench({
       setSelectedStoreChain(preferredChain);
     }
   }, [initialStoreChain, selectedStoreChain, storeLocationsByChain, stores, view]);
+
+  useEffect(() => {
+    if (view !== "stores" || selectedStoreChain !== "ハンズ") {
+      return;
+    }
+
+    const handsCount = storeLocationsByChain.get("ハンズ")?.length ?? 0;
+    if (handsCount > 0 || autoSyncedHandsRef.current || isSyncingStoreLocations) {
+      return;
+    }
+
+    autoSyncedHandsRef.current = true;
+    void handleOfficialStoreSync("ハンズ", { isAuto: true });
+  }, [isSyncingStoreLocations, selectedStoreChain, storeLocationsByChain, view]);
 
   useEffect(() => {
     if (view !== "products") {
@@ -2853,21 +2875,100 @@ export function OrderWorkbench({
     router.replace(query ? `${pathname}?${query}` : pathname, { scroll: false });
   }
 
-  async function handleSyncLoftStoreLocations() {
+  async function finalizeOfficialStoreSync(chainName: OfficialStoreChainName) {
+    const response = await fetch("/api/official-store-sync", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ chain: chainName }),
+      cache: "no-store",
+    });
+    const result = (await response.json()) as {
+      ok: boolean;
+      message: string;
+      count: number;
+    };
+
+    setStoreLocationSyncNotice(result.message);
+
+    if (result.ok) {
+      const locations = await readStoreLocationRecords();
+      setStoreLocations(locations);
+      handleStoreChainSelect(chainName);
+      router.refresh();
+    } else {
+      autoSyncedHandsRef.current = false;
+    }
+  }
+
+  async function handleOfficialStoreSync(
+    chainName: OfficialStoreChainName,
+    options?: { isAuto?: boolean },
+  ) {
     setIsSyncingStoreLocations(true);
-    setStoreNotice("");
+    setStoreLocationSyncNotice(
+      options?.isAuto ? `${chainName}公式サイトから店舗情報を取得しています...` : "",
+    );
 
     try {
-      const result = await syncLoftStoreLocationsFromOfficialSite();
-      setStoreNotice(result.message);
+      const currentCount = storeLocationsByChain.get(chainName)?.length ?? 0;
 
-      if (result.ok) {
-        const locations = await readStoreLocationRecords();
-        setStoreLocations(locations);
-        handleStoreChainSelect("ロフト");
+      if (!options?.isAuto || currentCount > 0) {
+        const previewResponse = await fetch(
+          `/api/official-store-sync?chain=${encodeURIComponent(chainName)}`,
+          { cache: "no-store" },
+        );
+        const preview = (await previewResponse.json()) as {
+          ok: boolean;
+          message?: string;
+          newStoreCount: number;
+          officialCount: number;
+          currentCount: number;
+          sampleStoreNames: string[];
+        };
+
+        if (!preview.ok) {
+          setStoreLocationSyncNotice(preview.message ?? "公式サイトの確認に失敗しました。");
+          autoSyncedHandsRef.current = false;
+          return;
+        }
+
+        if (preview.newStoreCount > 0) {
+          setOfficialStoreSyncPrompt({
+            chainName,
+            newStoreCount: preview.newStoreCount,
+            officialCount: preview.officialCount,
+            currentCount: preview.currentCount,
+            sampleStoreNames: preview.sampleStoreNames ?? [],
+          });
+          return;
+        }
       }
+
+      await finalizeOfficialStoreSync(chainName);
     } catch (error) {
-      setStoreNotice(error instanceof Error ? error.message : "ロフト店舗住所の更新に失敗しました。");
+      autoSyncedHandsRef.current = false;
+      setStoreLocationSyncNotice(
+        error instanceof Error ? error.message : `${chainName}店舗住所の更新に失敗しました。`,
+      );
+    } finally {
+      setIsSyncingStoreLocations(false);
+    }
+  }
+
+  async function confirmOfficialStoreSync() {
+    if (!officialStoreSyncPrompt) {
+      return;
+    }
+
+    setIsSyncingStoreLocations(true);
+
+    try {
+      await finalizeOfficialStoreSync(officialStoreSyncPrompt.chainName);
+      setOfficialStoreSyncPrompt(null);
+    } catch (error) {
+      setStoreLocationSyncNotice(
+        error instanceof Error ? error.message : "店舗マスタの更新に失敗しました。",
+      );
     } finally {
       setIsSyncingStoreLocations(false);
     }
@@ -4171,12 +4272,36 @@ export function OrderWorkbench({
                           variant="outline"
                           size="sm"
                           disabled={isSyncingStoreLocations}
-                          onClick={() => void handleSyncLoftStoreLocations()}
+                          onClick={() => void handleOfficialStoreSync("ロフト")}
+                        >
+                          {isSyncingStoreLocations ? "取得中..." : "公式サイトから更新"}
+                        </Button>
+                      ) : selectedStoreChain === "ハンズ" ? (
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          disabled={isSyncingStoreLocations}
+                          onClick={() => void handleOfficialStoreSync("ハンズ")}
                         >
                           {isSyncingStoreLocations ? "取得中..." : "公式サイトから更新"}
                         </Button>
                       ) : null}
                     </div>
+
+                    {storeLocationSyncNotice ? (
+                      <p
+                        className={`text-sm ${
+                          storeLocationSyncNotice.includes("失敗") ||
+                          storeLocationSyncNotice.includes("確認できません") ||
+                          storeLocationSyncNotice.includes("未設定")
+                            ? "text-destructive"
+                            : "text-muted-foreground"
+                        }`}
+                      >
+                        {storeLocationSyncNotice}
+                      </p>
+                    ) : null}
 
                     {selectedStoreChain ? (
                       <>
@@ -4189,9 +4314,11 @@ export function OrderWorkbench({
                           <p className="rounded-lg border px-4 py-8 text-center text-sm text-muted-foreground">
                             {storeLocationSearch.trim()
                               ? "条件に一致する店舗がありません。"
-                              : selectedStoreChain === "ロフト"
+                                : selectedStoreChain === "ロフト"
                                 ? "ロフト店舗が未登録です。「公式サイトから更新」を押してください。"
-                                : "このチェーンの個別店舗データはまだありません。"}
+                                : selectedStoreChain === "ハンズ"
+                                  ? "ハンズ店舗が未登録です。「公式サイトから更新」を押してください。"
+                                  : "このチェーンの個別店舗データはまだありません。"}
                           </p>
                         ) : (
                           <div className="overflow-x-auto rounded-lg border">
@@ -4243,6 +4370,10 @@ export function OrderWorkbench({
             storeLocations={storeLocations}
             initialImports={initialData.storeIntroductionImports}
             initialEntries={initialData.storeIntroductionEntries}
+            onStoreLocationsRefresh={async () => {
+              const locations = await readStoreLocationRecords();
+              setStoreLocations(locations);
+            }}
           />
         ) : null}
 
@@ -4697,7 +4828,76 @@ export function OrderWorkbench({
         </section>
         ) : null}
       </div>
+      {officialStoreSyncPrompt ? (
+        <OfficialStoreSyncDialog
+          prompt={officialStoreSyncPrompt}
+          isSaving={isSyncingStoreLocations}
+          onCancel={() => {
+            setOfficialStoreSyncPrompt(null);
+            autoSyncedHandsRef.current = false;
+          }}
+          onConfirm={() => void confirmOfficialStoreSync()}
+        />
+      ) : null}
     </main>
+  );
+}
+
+function OfficialStoreSyncDialog({
+  prompt,
+  isSaving,
+  onCancel,
+  onConfirm,
+}: {
+  prompt: {
+    chainName: OfficialStoreChainName;
+    newStoreCount: number;
+    officialCount: number;
+    currentCount: number;
+    sampleStoreNames: string[];
+  };
+  isSaving: boolean;
+  onCancel: () => void;
+  onConfirm: () => void;
+}) {
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="official-store-sync-title"
+        className="w-full max-w-md rounded-xl border bg-background p-6 shadow-xl"
+      >
+        <div className="flex flex-col gap-4">
+          <div className="flex items-start gap-3">
+            <TriangleAlert className="mt-0.5 h-5 w-5 shrink-0 text-amber-600" aria-hidden="true" />
+            <div className="flex flex-col gap-2">
+              <h2 id="official-store-sync-title" className="text-lg font-semibold">
+                公式サイトに新しく{prompt.newStoreCount}店舗が追加されています
+              </h2>
+              <p className="text-sm text-muted-foreground">
+                {prompt.chainName}の店舗マスタ（現在 {prompt.currentCount}店）に対し、公式サイトは
+                {prompt.officialCount}店舗です。店舗マスタにも登録してよろしいですか？
+              </p>
+              {prompt.sampleStoreNames.length > 0 ? (
+                <p className="text-sm text-muted-foreground">
+                  例: {prompt.sampleStoreNames.join("、")}
+                  {prompt.newStoreCount > prompt.sampleStoreNames.length ? " ほか" : ""}
+                </p>
+              ) : null}
+            </div>
+          </div>
+          <div className="flex flex-wrap justify-end gap-2">
+            <Button type="button" variant="outline" disabled={isSaving} onClick={onCancel}>
+              キャンセル
+            </Button>
+            <Button type="button" disabled={isSaving} onClick={onConfirm}>
+              {isSaving ? "登録中..." : "登録する"}
+            </Button>
+          </div>
+        </div>
+      </div>
+    </div>
   );
 }
 

@@ -564,14 +564,108 @@ export function normalizeProductMatchText(value: string) {
     .replace(/[ｰ\-ー‐]/g, "");
 }
 
+export function unifyIntroductionBatchProduct(
+  entries: ParsedStoreIntroductionEntry[],
+  clientId: string,
+  products: { clientId: string; jan: string; name: string }[],
+): { entries: ParsedStoreIntroductionEntry[]; warnings: string[] } {
+  if (entries.length === 0) {
+    return { entries, warnings: [] };
+  }
+
+  const janCounts = new Map<string, number>();
+  entries.forEach((entry) => {
+    if (!entry.jan || entry.jan === "UNKNOWN") {
+      return;
+    }
+    janCounts.set(entry.jan, (janCounts.get(entry.jan) ?? 0) + 1);
+  });
+
+  const warnings: string[] = [];
+  const uniqueJans = Array.from(janCounts.keys());
+  if (uniqueJans.length > 1) {
+    warnings.push(
+      `1ファイル内に複数のJANが検出されました（${uniqueJans.join(" / ")}）。最も多いJANに統一して保存します。`,
+    );
+  }
+
+  const dominantJan =
+    Array.from(janCounts.entries()).sort((left, right) => right[1] - left[1])[0]?.[0] ??
+    entries.find((entry) => entry.jan && entry.jan !== "UNKNOWN")?.jan ??
+    "";
+  const dominantEntry =
+    entries.find((entry) => entry.jan === dominantJan) ??
+    entries.find((entry) => entry.productName.trim()) ??
+    entries[0];
+  const resolved = resolveIntroductionProduct(
+    dominantJan,
+    dominantEntry.productName,
+    clientId,
+    products,
+  );
+  const displayProduct = resolveIntroductionDisplayProduct(
+    resolved.jan,
+    resolved.productName,
+    clientId,
+    products,
+  );
+
+  return {
+    entries: entries.map((entry) => ({
+      ...entry,
+      jan: displayProduct.jan,
+      productName: displayProduct.productName,
+    })),
+    warnings,
+  };
+}
+
+function shouldPreferExcelProductName(excelName: string, masterName: string) {
+  const excel = normalizeProductMatchText(excelName);
+  const master = normalizeProductMatchText(masterName);
+
+  if (!excel || excel === master) {
+    return false;
+  }
+
+  if (excel.includes(master) && excel.length > master.length + 2) {
+    return true;
+  }
+
+  if (excel.includes("14包") || excel.includes("esience") || excel.includes("エシエンス14")) {
+    return true;
+  }
+
+  return false;
+}
+
 export function resolveIntroductionProduct(
   parsedJan: string,
   productName: string,
   clientId: string,
   products: { clientId: string; jan: string; name: string }[],
 ) {
-  const normalizedExcel = normalizeProductMatchText(productName);
   const clientProducts = products.filter((product) => product.clientId === clientId);
+
+  if (parsedJan) {
+    const janMatch = clientProducts.find((product) => product.jan === parsedJan);
+    if (janMatch) {
+      const excelName = productName.trim();
+      if (excelName && shouldPreferExcelProductName(excelName, janMatch.name)) {
+        return {
+          jan: janMatch.jan,
+          productName: excelName,
+        };
+      }
+
+      return {
+        jan: janMatch.jan,
+        productName: janMatch.name,
+      };
+    }
+  }
+
+  const normalizedExcel = normalizeProductMatchText(productName);
 
   const matchedProduct = clientProducts
     .map((product) => ({
@@ -591,6 +685,114 @@ export function resolveIntroductionProduct(
   return {
     jan: parsedJan,
     productName: productName.trim() || parsedJan,
+  };
+}
+
+export type IntroductionProductCandidate = {
+  clientId: string;
+  jan: string;
+  name: string;
+  internalSku?: string;
+  formalProductName?: string | number | null;
+};
+
+export function getProductMasterDisplayName(
+  product: Pick<IntroductionProductCandidate, "name" | "formalProductName">,
+) {
+  const formalName = String(product.formalProductName ?? "").trim();
+  return formalName || product.name.trim();
+}
+
+function pickCanonicalIntroductionProduct(products: IntroductionProductCandidate[]) {
+  return (
+    products.find((product) => String(product.formalProductName ?? "").trim()) ??
+    products
+      .slice()
+      .sort((left, right) => left.name.localeCompare(right.name, "ja"))[0]
+  );
+}
+
+const introductionFamilyTokens = ["ダーマインショット", "エシエンス", "esience", "ダーマ"];
+
+function belongsToIntroductionProductFamily(productName: string) {
+  const normalized = normalizeProductMatchText(productName);
+  return introductionFamilyTokens.some((token) => normalized.includes(normalizeProductMatchText(token)));
+}
+
+function findIntroductionCanonicalProduct(
+  product: IntroductionProductCandidate,
+  clientProducts: IntroductionProductCandidate[],
+) {
+  const internalSku = product.internalSku?.trim();
+  if (internalSku) {
+    const family = clientProducts.filter(
+      (candidate) => candidate.internalSku?.trim() === internalSku,
+    );
+    if (family.length > 0) {
+      return pickCanonicalIntroductionProduct(family);
+    }
+  }
+
+  const displayName = getProductMasterDisplayName(product);
+  if (belongsToIntroductionProductFamily(displayName)) {
+    const dermaProducts = clientProducts.filter((candidate) =>
+      normalizeProductMatchText(getProductMasterDisplayName(candidate)).includes(
+        normalizeProductMatchText("ダーマインショット"),
+      ),
+    );
+
+    if (dermaProducts.length === 1) {
+      return dermaProducts[0];
+    }
+  }
+
+  return product;
+}
+
+export function buildIntroductionProductKey(
+  internalSku: string | undefined,
+  productName: string,
+  jan: string,
+) {
+  const sku = internalSku?.trim();
+  if (sku) {
+    return `sku:${sku}`;
+  }
+
+  const normalized = normalizeProductMatchText(productName);
+  return normalized ? `name:${normalized}` : `jan:${jan}`;
+}
+
+export function resolveIntroductionDisplayProduct(
+  parsedJan: string,
+  productName: string,
+  clientId: string,
+  products: IntroductionProductCandidate[],
+) {
+  const clientProducts = products.filter((product) => product.clientId === clientId);
+  const resolved = resolveIntroductionProduct(parsedJan, productName, clientId, products);
+
+  let matched =
+    clientProducts.find((product) => product.jan === resolved.jan) ??
+    (parsedJan ? clientProducts.find((product) => product.jan === parsedJan) : undefined);
+
+  if (matched) {
+    const canonical = findIntroductionCanonicalProduct(matched, clientProducts);
+    const displayName = getProductMasterDisplayName(canonical);
+
+    return {
+      jan: matched.jan,
+      productName: displayName,
+      productKey: buildIntroductionProductKey(canonical.internalSku, displayName, matched.jan),
+    };
+  }
+
+  const displayName = resolved.productName.trim() || resolved.jan;
+
+  return {
+    jan: resolved.jan,
+    productName: displayName,
+    productKey: buildIntroductionProductKey(undefined, displayName, resolved.jan),
   };
 }
 

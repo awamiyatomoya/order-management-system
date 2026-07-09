@@ -5,18 +5,20 @@ import { revalidatePath } from "next/cache";
 import {
   buildPromotionalAddressBook,
   parseStoreIntroductionWorkbook,
+  resolveIntroductionDisplayProduct,
   resolveIntroductionProduct,
   summarizeStoreIntroduction,
+  unifyIntroductionBatchProduct,
 } from "@/lib/store-introduction-parsers";
-import { detectIntroductionChainName } from "@/lib/store-introduction-kpi";
 import {
-  fetchHandsStoreLocationsFromOfficialSite,
-  mergeHandsLocationsWithExisting,
-} from "@/lib/hands-store-locations";
+  detectIntroductionChainName,
+} from "@/lib/store-introduction-kpi";
 import {
-  fetchLoftStoreLocationsFromOfficialSite,
-  mergeLoftLocationsWithExisting,
-} from "@/lib/loft-store-locations";
+  ensureHandsStoreLocationsFromOfficialSite,
+  ensureLoftStoreLocationsFromOfficialSite,
+  readStoreLocationRecords,
+  upsertStoreLocationRecords,
+} from "@/lib/supabase/store-location-actions";
 import {
   buildStoreLocationLookup,
   resolveStoreLocationAddress,
@@ -95,23 +97,59 @@ export async function importStoreIntroductionWorkbook(
     };
   }
 
+  const unified = unifyIntroductionBatchProduct(parsed.entries, clientId, products);
+  parsed = {
+    ...parsed,
+    entries: unified.entries,
+  };
+
+  const importWarnings = [...unified.warnings];
+
   const summary = summarizeStoreIntroduction(parsed.entries);
   const isLoftSeriesSheet = isLoftSeriesIntroductionSheet(parsed.formatKey, parsed.entries);
   const isHandsSeriesSheet = isHandsSeriesIntroductionSheet(parsed.formatKey, parsed.entries);
 
   if (isLoftSeriesSheet) {
-    await syncLoftStoreLocationsFromOfficialSite();
+    await ensureLoftStoreLocationsFromOfficialSite();
   }
 
   if (isHandsSeriesSheet) {
-    await syncHandsStoreLocationsFromOfficialSite();
+    await ensureHandsStoreLocationsFromOfficialSite();
   }
 
-  const storeLocationLookup = buildStoreLocationLookup(await readStoreLocations());
+  const storeLocations = await loadStoreLocationsForIntroduction({
+    isHandsSeriesSheet,
+    isLoftSeriesSheet,
+  });
+  const storeLocationLookup = buildStoreLocationLookup(storeLocations);
+
+  if (isHandsSeriesSheet || isLoftSeriesSheet) {
+    const unmatchedStoreNames = new Set<string>();
+
+    parsed.entries.forEach((entry) => {
+      if (!resolveStoreLocationMatch(entry, storeLocationLookup)) {
+        unmatchedStoreNames.add(entry.storeName.trim() || entry.storeCode || "店舗不明");
+      }
+    });
+
+    if (unmatchedStoreNames.size > 0) {
+      const chainLabel = isHandsSeriesSheet ? "ハンズ" : "ロフト";
+      importWarnings.push(
+        `${chainLabel}公式店舗マスタと照合できない店舗が${unmatchedStoreNames.size}件あります（${Array.from(unmatchedStoreNames).slice(0, 3).join("、")}${unmatchedStoreNames.size > 3 ? " ほか" : ""}）。「公式サイトから更新」で店舗マスタを同期してください。`,
+      );
+    }
+  }
+
   const importId = createId();
   const importedAt = new Date().toISOString();
   const entries: StoreIntroductionEntry[] = parsed.entries.map((entry) => {
     const resolvedProduct = resolveIntroductionProduct(entry.jan, entry.productName, clientId, products);
+    const displayProduct = resolveIntroductionDisplayProduct(
+      resolvedProduct.jan,
+      resolvedProduct.productName,
+      clientId,
+      products,
+    );
     const matchedLocation = resolveStoreLocationMatch(entry, storeLocationLookup);
     const enrichedAddress = resolveStoreLocationAddress(entry, storeLocationLookup);
 
@@ -119,8 +157,8 @@ export async function importStoreIntroductionWorkbook(
       id: createId(),
       importId,
       clientId,
-      jan: resolvedProduct.jan,
-      productName: resolvedProduct.productName,
+      jan: displayProduct.jan,
+      productName: displayProduct.productName,
       storeName: entry.storeName,
       storeCode: entry.storeCode,
       address: enrichedAddress || entry.address,
@@ -202,7 +240,11 @@ export async function importStoreIntroductionWorkbook(
     };
   }
 
-  await upsertStoreLocationsFromEntries(parsed.entries);
+  await upsertStoreLocationsFromEntries(parsed.entries, {
+    formatKey: parsed.formatKey,
+    chainName,
+    skipOfficialChainSync: isLoftSeriesSheet || isHandsSeriesSheet,
+  });
 
   revalidatePath("/store-introductions");
   revalidatePath("/stores");
@@ -215,13 +257,14 @@ export async function importStoreIntroductionWorkbook(
         : "0/1フラグ表";
   const chainLabel = chainName ? `${chainName} / ` : "";
   const sheetLabel = parsed.sheetCount > 1 ? `${parsed.sheetCount}シート / ` : "";
+  const warningLabel = importWarnings.length > 0 ? ` ${importWarnings.join(" ")}` : "";
 
   return {
     ok: true,
     savedToSupabase: true,
     importBatch,
     entries,
-    message: `${formatLabel}として取り込みました。${chainLabel}${sheetLabel}導入 ${summary.introducedStoreCount}店舗 / 全${summary.totalStoreCount}店舗（JAN ${summary.jans.length}件）。`,
+    message: `${formatLabel}として取り込みました。${chainLabel}${sheetLabel}導入 ${summary.introducedStoreCount}店舗 / 全${summary.totalStoreCount}店舗（JAN ${summary.jans.length}件）。${warningLabel}`,
   };
 }
 
@@ -248,29 +291,47 @@ export async function readStoreIntroductionData(clientId: string) {
     };
   }
 
-  const importIds = imports.map((item) => item.id);
+  const mappedImports = imports.map(mapStoreIntroductionImport);
+  const latestImportIds = getLatestImportIdsByChain(mappedImports);
   const { data: entries, error: entriesError } = await supabase
     .from("store_introduction_entries")
     .select(
       "id, import_id, client_id, jan, product_name, store_name, store_code, address, postal_code, is_introduced, matched_store_name",
     )
-    .in("import_id", importIds)
-    .order("store_name")
-    .limit(10000);
+    .in("import_id", latestImportIds)
+    .order("store_name");
 
   if (entriesError) {
     return {
-      imports: imports.map(mapStoreIntroductionImport),
+      imports: mappedImports,
       entries: [] as StoreIntroductionEntry[],
     };
   }
 
   return {
-    imports: imports.map(mapStoreIntroductionImport),
+    imports: mappedImports,
     entries: await enrichStoreIntroductionEntriesWithLocations(
       (entries ?? []).map(mapStoreIntroductionEntry),
     ),
   };
+}
+
+function getLatestImportIdsByChain(imports: StoreIntroductionImport[]) {
+  const latestImportIdByChain = new Map<string, string>();
+
+  imports.forEach((importBatch) => {
+    const chainName = importBatch.chainName.trim();
+    if (chainName && !latestImportIdByChain.has(chainName)) {
+      latestImportIdByChain.set(chainName, importBatch.id);
+    }
+  });
+
+  const importIds = Array.from(latestImportIdByChain.values());
+  if (importIds.length > 0) {
+    return importIds;
+  }
+
+  return imports[0] ? [imports[0].id] : [];
 }
 
 export async function syncHandsStoreLocationsFromOfficialSite(): Promise<{
@@ -278,41 +339,7 @@ export async function syncHandsStoreLocationsFromOfficialSite(): Promise<{
   message: string;
   count: number;
 }> {
-  if (!hasSupabaseServerEnv()) {
-    return {
-      ok: false,
-      message: "Supabase未設定のため、ハンズ店舗住所を保存できません。",
-      count: 0,
-    };
-  }
-
-  try {
-    const handsLocations = await fetchHandsStoreLocationsFromOfficialSite();
-    const existingLocations = await readStoreLocations();
-    const mergedLocations = mergeHandsLocationsWithExisting(handsLocations, existingLocations);
-
-    await upsertStoreLocations(
-      mergedLocations.map((location) => ({
-        ...location,
-        chainName: "ハンズ",
-      })),
-    );
-
-    revalidatePath("/store-introductions");
-    revalidatePath("/stores");
-
-    return {
-      ok: true,
-      message: `ハンズ公式サイトから ${mergedLocations.length}店舗の住所を取得しました。`,
-      count: mergedLocations.length,
-    };
-  } catch (error) {
-    return {
-      ok: false,
-      message: error instanceof Error ? error.message : "ハンズ店舗住所の取得に失敗しました。",
-      count: 0,
-    };
-  }
+  return ensureHandsStoreLocationsFromOfficialSite();
 }
 
 export async function syncLoftStoreLocationsFromOfficialSite(): Promise<{
@@ -320,41 +347,7 @@ export async function syncLoftStoreLocationsFromOfficialSite(): Promise<{
   message: string;
   count: number;
 }> {
-  if (!hasSupabaseServerEnv()) {
-    return {
-      ok: false,
-      message: "Supabase未設定のため、ロフト店舗住所を保存できません。",
-      count: 0,
-    };
-  }
-
-  try {
-    const loftLocations = await fetchLoftStoreLocationsFromOfficialSite();
-    const existingLocations = await readStoreLocations();
-    const mergedLocations = mergeLoftLocationsWithExisting(loftLocations, existingLocations);
-
-    await upsertStoreLocations(
-      mergedLocations.map((location) => ({
-        ...location,
-        chainName: "ロフト",
-      })),
-    );
-
-    revalidatePath("/store-introductions");
-    revalidatePath("/stores");
-
-    return {
-      ok: true,
-      message: `ロフト公式サイトから ${mergedLocations.length}店舗の住所を取得しました。`,
-      count: mergedLocations.length,
-    };
-  } catch (error) {
-    return {
-      ok: false,
-      message: error instanceof Error ? error.message : "ロフト店舗住所の取得に失敗しました。",
-      count: 0,
-    };
-  }
+  return ensureLoftStoreLocationsFromOfficialSite();
 }
 
 async function readStoreLocations(): Promise<StoreLocation[]> {
@@ -384,20 +377,63 @@ async function readStoreLocations(): Promise<StoreLocation[]> {
 async function enrichStoreIntroductionEntriesWithLocations(
   entries: StoreIntroductionEntry[],
 ): Promise<StoreIntroductionEntry[]> {
-  const lookup = buildStoreLocationLookup(await readStoreLocations());
+  const lookup = buildStoreLocationLookup(await readStoreLocationRecords());
 
   return entries.map((entry) => {
+    const matched = resolveStoreLocationMatch(entry, lookup);
     const address = resolveStoreLocationAddress(entry, lookup);
 
-    if (!address || address === entry.address) {
+    if (!address && !matched?.postalCode) {
       return entry;
     }
 
     return {
       ...entry,
-      address,
+      address: address || entry.address,
+      postalCode: matched?.postalCode || entry.postalCode,
     };
   });
+}
+
+async function loadStoreLocationsForIntroduction({
+  isHandsSeriesSheet = false,
+  isLoftSeriesSheet = false,
+  entries = [],
+}: {
+  isHandsSeriesSheet?: boolean;
+  isLoftSeriesSheet?: boolean;
+  entries?: StoreIntroductionEntry[];
+} = {}): Promise<StoreLocation[]> {
+  let locations = await readStoreLocations();
+  const needsHands =
+    isHandsSeriesSheet ||
+    entries.some(
+      (entry) =>
+        entry.matchedStoreName === "ハンズ" ||
+        entry.storeName.normalize("NFKC").toLowerCase().startsWith("hb") ||
+        entry.storeName.includes("ｈｂ"),
+    );
+  const needsLoft = isLoftSeriesSheet || entries.some((entry) => entry.matchedStoreName === "ロフト");
+
+  if (needsHands) {
+    try {
+      await ensureHandsStoreLocationsFromOfficialSite();
+      locations = await readStoreLocations();
+    } catch {
+      // 公式サイト取得に失敗しても、DB上の既存住所で続行する。
+    }
+  }
+
+  if (needsLoft) {
+    try {
+      await ensureLoftStoreLocationsFromOfficialSite();
+      locations = await readStoreLocations();
+    } catch {
+      // 公式サイト取得に失敗しても、DB上の既存住所で続行する。
+    }
+  }
+
+  return locations;
 }
 
 async function upsertStoreLocationsFromWorkbook(fileBuffer: ArrayBuffer) {
@@ -415,66 +451,41 @@ async function upsertStoreLocationsFromWorkbook(fileBuffer: ArrayBuffer) {
     return;
   }
 
-  await upsertStoreLocations(locations);
+  await upsertStoreLocationRecords(locations);
 }
 
 async function upsertStoreLocationsFromEntries(
   entries: { storeCode: string; storeName: string; postalCode: string; address: string }[],
+  options: {
+    formatKey: StoreIntroductionImport["formatKey"];
+    chainName: string;
+    skipOfficialChainSync?: boolean;
+  },
 ) {
+  if (
+    options.skipOfficialChainSync ||
+    options.formatKey === "hands-allocation-list" ||
+    options.chainName === "ハンズ" ||
+    options.chainName === "ロフト"
+  ) {
+    return;
+  }
+
   const locations = entries.filter((entry) => entry.address.trim());
   if (locations.length === 0) {
     return;
   }
 
-  await upsertStoreLocations(
+  await upsertStoreLocationRecords(
     locations.map((entry) => ({
       storeCode: entry.storeCode,
       storeName: entry.storeName,
       postalCode: entry.postalCode,
       address: entry.address,
       tel: "",
+      chainName: options.chainName,
     })),
   );
-}
-
-async function upsertStoreLocations(
-  locations: (Pick<StoreLocation, "storeCode" | "storeName" | "postalCode" | "address" | "tel"> & {
-    chainName?: string;
-  })[],
-) {
-  if (!hasSupabaseServerEnv() || locations.length === 0) {
-    return;
-  }
-
-  const supabase = createServerSupabaseClient();
-  const rows = locations
-    .filter((location) => location.storeCode)
-    .map((location) => {
-      const row: Record<string, string> = {
-        store_code: location.storeCode,
-        store_name: location.storeName,
-        postal_code: location.postalCode,
-        address: location.address,
-        tel: location.tel,
-      };
-
-      if (location.chainName) {
-        row.chain_name = location.chainName;
-      }
-
-      return row;
-    });
-
-  const upsertResult = await supabase.from("store_locations").upsert(rows, {
-    onConflict: "store_code",
-  });
-
-  if (upsertResult.error?.message?.includes("chain_name")) {
-    await supabase.from("store_locations").upsert(
-      rows.map(({ chain_name: _chainName, ...row }) => row),
-      { onConflict: "store_code" },
-    );
-  }
 }
 
 function mapStoreIntroductionImport(row: {

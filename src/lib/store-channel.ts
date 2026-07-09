@@ -131,9 +131,22 @@ export function classifyStoreChannel(storeName: string, matchedStoreName = "") {
 }
 
 export function summarizeIntroducedStoresByChannel(
-  entries: { storeName: string; matchedStoreName?: string; isIntroduced: boolean }[],
+  entries: { storeName: string; storeCode?: string; matchedStoreName?: string; isIntroduced: boolean }[],
 ) {
-  const introducedEntries = entries.filter((entry) => entry.isIntroduced);
+  const seen = new Set<string>();
+  const introducedEntries = entries.filter((entry) => {
+    if (!entry.isIntroduced) {
+      return false;
+    }
+
+    const key = `${entry.matchedStoreName ?? ""}::${entry.storeCode ?? ""}::${entry.storeName}`;
+    if (seen.has(key)) {
+      return false;
+    }
+
+    seen.add(key);
+    return true;
+  });
 
   const summary: StoreChannelSummary = {
     introduced: introducedEntries.length,

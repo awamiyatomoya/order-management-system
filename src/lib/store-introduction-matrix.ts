@@ -17,6 +17,7 @@ export type IntroductionMatrixProduct = {
 
 export type IntroductionMatrixRow = {
   rowKey: string;
+  chainName: string;
   storeName: string;
   address: string;
   introducedByProduct: Record<string, boolean>;
@@ -30,6 +31,7 @@ export type IntroductionMatrixEntry = {
   postalCode: string;
   jan: string;
   productName: string;
+  productKey: string;
   isIntroduced: boolean;
   chainName: string;
 };
@@ -48,6 +50,7 @@ export function buildStoreIntroductionMatrix({
   showIntroducedOnly: boolean;
 }): { rows: IntroductionMatrixRow[]; products: IntroductionMatrixProduct[] } {
   const introductionLookup = buildIntroductionLookup(entries, products);
+  const chainNameLookup = buildChainNameLookup(entries);
   const storeRows = buildMatrixStoreRows(chainFilter, storeLocations, entries);
   const storeLocationLookup = buildStoreLocationLookup(storeLocations);
 
@@ -63,9 +66,14 @@ export function buildStoreIntroductionMatrix({
       const hasAnyIntroduction = Object.values(introducedByProduct).some(Boolean);
       const address =
         resolveStoreLocationAddress(store, storeLocationLookup) || formatStoreLocationAddress(store);
+      const chainName =
+        matchKeys.map((key) => chainNameLookup.get(key)).find(Boolean) ??
+        store.chainName ??
+        "";
 
       return {
         rowKey: matchKeys[0] ?? store.storeName,
+        chainName,
         storeName: store.storeName,
         address,
         introducedByProduct,
@@ -78,6 +86,22 @@ export function buildStoreIntroductionMatrix({
   return { rows, products };
 }
 
+function buildChainNameLookup(entries: IntroductionMatrixEntry[]) {
+  const lookup = new Map<string, string>();
+
+  entries.forEach((entry) => {
+    if (!entry.chainName) {
+      return;
+    }
+
+    buildStoreMatchKeys(entry.storeName, entry.storeCode).forEach((storeKey) => {
+      lookup.set(storeKey, entry.chainName);
+    });
+  });
+
+  return lookup;
+}
+
 function buildIntroductionLookup(
   entries: IntroductionMatrixEntry[],
   products: IntroductionMatrixProduct[],
@@ -86,7 +110,7 @@ function buildIntroductionLookup(
   const lookup = new Map<string, boolean>();
 
   entries.forEach((entry) => {
-    const productKey = `${entry.jan}::${entry.productName}`;
+    const productKey = entry.productKey;
     if (!productKeys.has(productKey)) {
       return;
     }
@@ -107,18 +131,60 @@ function isProductIntroduced(
   return storeMatchKeys.some((storeKey) => lookup.get(`${storeKey}::${productKey}`) === true);
 }
 
+type MatrixStoreRow = StoreLocation & {
+  chainName?: string;
+};
+
 function buildMatrixStoreRows(
   chainFilter: string,
   storeLocations: StoreLocationRecord[],
   entries: IntroductionMatrixEntry[],
-) {
+): MatrixStoreRow[] {
+  if (chainFilter === "all") {
+    const chains = Array.from(
+      new Set(entries.map((entry) => entry.chainName.trim()).filter(Boolean)),
+    );
+
+    if (chains.length === 0) {
+      return dedupeStoreRows(
+        entries.map((entry) => ({
+          ...enrichStoreFromLocations(
+            {
+              storeCode: entry.storeCode,
+              storeName: entry.storeName,
+              postalCode: entry.postalCode,
+              address: entry.address,
+              tel: "",
+            },
+            storeLocations,
+          ),
+          chainName: entry.chainName,
+        })),
+      );
+    }
+
+    return dedupeStoreRows(
+      chains.flatMap((chainName) =>
+        buildMatrixStoreRowsForChain(chainName, storeLocations, entries),
+      ),
+    );
+  }
+
+  return buildMatrixStoreRowsForChain(chainFilter, storeLocations, entries);
+}
+
+function buildMatrixStoreRowsForChain(
+  chainFilter: string,
+  storeLocations: StoreLocationRecord[],
+  entries: IntroductionMatrixEntry[],
+): MatrixStoreRow[] {
   const filteredEntries = entries.filter(
     (entry) => chainFilter === "all" || entry.chainName === chainFilter,
   );
 
   const entryStores = dedupeStoreRows(
-    filteredEntries.map((entry) =>
-      enrichStoreFromLocations(
+    filteredEntries.map((entry) => ({
+      ...enrichStoreFromLocations(
         {
           storeCode: entry.storeCode,
           storeName: entry.storeName,
@@ -128,23 +194,27 @@ function buildMatrixStoreRows(
         },
         storeLocations,
       ),
-    ),
+      chainName: entry.chainName,
+    })),
   );
 
-  if (chainFilter !== "all" && hasCompleteStoreListFromEntries(filteredEntries)) {
+  if (hasCompleteStoreListFromEntries(filteredEntries)) {
     return entryStores;
   }
 
-  if (chainFilter !== "all") {
-    const chainStores = storeLocations.filter(
+  const chainStores = storeLocations
+    .filter(
       (location) =>
         location.chainName === chainFilter ||
         inferStoreLocationChainName(location) === chainFilter,
-    );
+    )
+    .map((location) => ({
+      ...location,
+      chainName: location.chainName || inferStoreLocationChainName(location),
+    }));
 
-    if (chainStores.length > 0) {
-      return dedupeStoreRows(chainStores);
-    }
+  if (chainStores.length > 0) {
+    return dedupeStoreRows(chainStores);
   }
 
   return entryStores;
@@ -186,15 +256,20 @@ function enrichStoreFromLocations(store: StoreLocation, storeLocations: StoreLoc
   };
 }
 
-function dedupeStoreRows(stores: StoreLocation[]) {
-  const map = new Map<string, StoreLocation>();
+function dedupeStoreRows(stores: MatrixStoreRow[]) {
+  const map = new Map<string, MatrixStoreRow>();
 
   stores.forEach((store) => {
     const normalizedName = normalizeStoreLocationName(store.storeName);
-    const key = normalizedName || store.storeCode || store.storeName;
+    const chainPrefix = store.chainName?.trim() ? `${store.chainName.trim()}::` : "";
+    const key = `${chainPrefix}${normalizedName || store.storeCode || store.storeName}`;
     const current = map.get(key);
 
-    if (!current || (!formatStoreLocationAddress(current) && formatStoreLocationAddress(store))) {
+    if (
+      !current ||
+      (!formatStoreLocationAddress(current) && formatStoreLocationAddress(store)) ||
+      (!current.chainName && store.chainName)
+    ) {
       map.set(key, store);
     }
   });

@@ -21,7 +21,7 @@ import type {
 import type { StoreLocationRecord } from "@/lib/store-location-groups";
 import { calculatePayoutRateFromPrices } from "@/lib/payout-rate";
 import { productMasterExtraFields } from "@/lib/product-master-fields";
-import { readStoreLocationRecords } from "@/lib/supabase/store-location-actions";
+import { readStoreLocationRecords, readStoreLocationRecordsWithHandsAutoSync } from "@/lib/supabase/store-location-actions";
 import { createServerSupabaseClient, hasSupabaseServerEnv } from "./server";
 
 export const productSelectColumns = [
@@ -200,7 +200,11 @@ export async function getOrderWorkbenchInitialData(
       requirements.importBatches ? readImportBatches(supabase) : null,
       requirements.deliveryDestinations ? readDeliveryDestinations(supabase) : [],
       requirements.stores ? readStores(supabase) : [],
-      requirements.storeLocations ? readStoreLocationRecords() : [],
+      requirements.storeLocations
+        ? scope === "stores"
+          ? readStoreLocationRecordsWithHandsAutoSync()
+          : readStoreLocationRecords()
+        : [],
       requirements.deletionLogs ? readDeletionLogs(supabase) : null,
     ]);
 

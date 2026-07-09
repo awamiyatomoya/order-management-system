@@ -127,7 +127,9 @@ function stripLeadingPostalCodes(address: string) {
 
   while (normalized !== previous) {
     previous = normalized;
-    normalized = normalized.replace(/^(\d{3}-\d{4})\s+/, "");
+    normalized = normalized
+      .replace(/^(\d{3}-\d{4})\s+/, "")
+      .replace(/^(\d{7})\s+/, "");
   }
 
   return normalized;
@@ -184,6 +186,11 @@ export function resolveStoreLocationMatch(
   const truncatedMatch = findTruncatedStoreNameMatch(entry.storeName, lookup.byName);
   if (truncatedMatch) {
     return truncatedMatch;
+  }
+
+  const handsMatch = findHandsStoreLocationMatch(entry.storeName, lookup.byName);
+  if (handsMatch) {
+    return handsMatch;
   }
 
   if (entry.storeCode && !isExcelInternalStoreCode(entry.storeCode)) {
@@ -306,6 +313,79 @@ function findCosmeticLoftStoreMatch(
   }
 
   return bestScore >= 2 ? bestMatch : undefined;
+}
+
+export function normalizeHandsStoreMatchName(value: string) {
+  return normalizeStoreLocationName(value)
+    .replace(/^hb/, "ハンズビー")
+    .replace(/ハンズビーハンズ/, "ハンズ")
+    .replace(/city/g, "シティ")
+    .replace(/northgate/g, "")
+    .replace(/パルコシティ/g, "")
+    .replace(/\d+店$/, "")
+    .replace(/店$/, "");
+}
+
+function findHandsStoreLocationMatch(
+  storeName: string,
+  byName: Map<string, StoreLocation>,
+) {
+  const normalizedEntry = normalizeHandsStoreMatchName(storeName);
+  if (normalizedEntry.length < 3) {
+    return undefined;
+  }
+
+  const handsLocations = Array.from(byName.values()).filter(
+    (location) =>
+      location.storeCode.startsWith("hands-") ||
+      normalizeStoreLocationName(location.storeName).includes("ハンズ"),
+  );
+
+  if (handsLocations.length === 0) {
+    return undefined;
+  }
+
+  let bestMatch: StoreLocation | undefined;
+  let bestScore = 0;
+
+  for (const location of handsLocations) {
+    const normalizedCandidate = normalizeHandsStoreMatchName(location.storeName);
+    let score = 0;
+
+    if (normalizedEntry === normalizedCandidate) {
+      score = 1000;
+    } else if (
+      normalizedEntry.includes(normalizedCandidate) ||
+      normalizedCandidate.includes(normalizedEntry)
+    ) {
+      score = Math.min(normalizedEntry.length, normalizedCandidate.length) + 100;
+    } else {
+      for (let length = Math.min(normalizedEntry.length, 10); length >= 4; length -= 1) {
+        const fragment = normalizedEntry.slice(0, length);
+        if (normalizedCandidate.includes(fragment)) {
+          score = length;
+          break;
+        }
+      }
+
+      if (score === 0) {
+        for (let length = Math.min(normalizedCandidate.length, 10); length >= 4; length -= 1) {
+          const fragment = normalizedCandidate.slice(0, length);
+          if (normalizedEntry.includes(fragment)) {
+            score = length;
+            break;
+          }
+        }
+      }
+    }
+
+    if (score > bestScore) {
+      bestScore = score;
+      bestMatch = location;
+    }
+  }
+
+  return bestScore >= 4 ? bestMatch : undefined;
 }
 
 function findTruncatedStoreNameMatch(
