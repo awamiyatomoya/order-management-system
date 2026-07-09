@@ -451,7 +451,7 @@ export function StoreIntroductionPanel({
     stores,
   ]);
 
-  const selectedProductKpi = useMemo(() => {
+  const companyDetailKpi = useMemo(() => {
     if (selectedProductKey === "all") {
       return null;
     }
@@ -459,11 +459,13 @@ export function StoreIntroductionPanel({
     const matches = productChainKpis.filter((kpi) => kpi.productKey === selectedProductKey);
 
     if (selectedRetailChainFilter !== "all") {
-      return matches.find((kpi) => kpi.chainName === selectedRetailChainFilter) ?? matches[0] ?? null;
+      return matches.find((kpi) => kpi.chainName === selectedRetailChainFilter) ?? null;
     }
 
     return aggregateProductChainKpis(matches);
   }, [productChainKpis, selectedProductKey, selectedRetailChainFilter]);
+
+  const selectedProductKpi = companyDetailKpi;
 
   const summary = useMemo(() => {
     const filtered = latestEntriesPerChain.filter((entry) => {
@@ -612,17 +614,17 @@ export function StoreIntroductionPanel({
               <h3 className="text-base font-semibold">企業詳細</h3>
               <div className="grid grid-cols-2 gap-2.5">
               <FeaturedSummaryCard
-                label={selectedProductKpi ? "導入店舗" : "導入店舗合計"}
-                value={selectedProductKpi?.introducedCount ?? summary.introduced}
+                label={selectedProductKey !== "all" ? "導入店舗" : "導入店舗合計"}
+                value={summary.introduced}
                 unit="店舗"
               />
               <div className="grid grid-cols-2 gap-1">
-                {selectedProductKpi?.hasFullStoreList ? (
+                {companyDetailKpi?.hasFullStoreList ? (
                   <>
-                    <SummaryCard label="全店舗" value={selectedProductKpi.totalStoreCount} />
+                    <SummaryCard label="全店舗" value={companyDetailKpi.totalStoreCount} />
                     <SummaryCard
                       label="導入率"
-                      value={selectedProductKpi.penetrationRate ?? 0}
+                      value={companyDetailKpi.penetrationRate ?? 0}
                       suffix="%"
                     />
                   </>
@@ -643,7 +645,7 @@ export function StoreIntroductionPanel({
               <div className="grid gap-3">
                 <h3 className="text-base font-semibold">チェーン別KPI</h3>
                 <p className="text-sm text-muted-foreground">
-                  ハンズ・ロフトの「全店舗」「導入率」は店舗マスタ（公式サイト）基準です。導入店舗数のみ取込Excelから集計します。
+                  ハンズ・ロフト・@cosme STOREの「全店舗」「導入率」は店舗マスタ（公式サイト）基準です。導入店舗数のみ取込Excelから集計します。
                 </p>
                 <div className="overflow-x-auto rounded-lg border">
                   <Table className="min-w-[820px]">

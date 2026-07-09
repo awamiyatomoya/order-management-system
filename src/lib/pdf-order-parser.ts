@@ -543,15 +543,74 @@ function extractOrderNoCandidate(value: string) {
 
 function resolveOrderNoFromLines(lines: string[], text: string, fallbackOrderNo = "") {
   return (
-    extractValueAfterLabel(lines, ["発注番号", "注文番号"]) ||
+    (looksLikeOrderNo(fallbackOrderNo) ? fallbackOrderNo : "") ||
     extractOrderNoFromHeaderRows(lines) ||
     extractValue(text, [
       /発注\s*(?:No|NO|番号|書番号)\s*[:：]?\s*([A-Z0-9][A-Z0-9\-_/]*)/i,
       /注文\s*(?:No|NO|番号)\s*[:：]?\s*([A-Z0-9][A-Z0-9\-_/]*)/i,
       /NO\.\s*([A-Z0-9][A-Z0-9\-_/]*)/i,
     ]) ||
-    fallbackOrderNo
+    extractOrderNoAfterLabel(lines, ["発注番号", "注文番号"]) ||
+    ""
   );
+}
+
+function extractOrderNoAfterLabel(lines: string[], labels: string[]) {
+  const index = lines.findIndex((line) => labels.some((label) => line.includes(label)));
+
+  if (index === -1) {
+    return "";
+  }
+
+  const labelLine = lines[index];
+  const inlineMatch = labelLine.match(/(?:発注番号|注文番号)\s*[:：]?\s*(\S+)/);
+
+  if (inlineMatch?.[1] && looksLikeOrderNo(inlineMatch[1])) {
+    return cleanupValue(inlineMatch[1]);
+  }
+
+  const value = lines.slice(index + 1, index + 12).find((line) => {
+    const trimmed = line.trim();
+
+    return trimmed && !labelOnlyPattern.test(trimmed) && looksLikeOrderNo(trimmed);
+  });
+
+  return value ? cleanupValue(value) : "";
+}
+
+function looksLikeOrderNo(value: string) {
+  const trimmed = value.trim();
+
+  if (!trimmed || isLikelyPdfAddressLine(trimmed) || isLikelyNonQuantityLine(trimmed)) {
+    return false;
+  }
+
+  const compact = trimmed.replace(/[\s\-_]/g, "");
+
+  if (/^\d{5,10}$/.test(compact)) {
+    return true;
+  }
+
+  return /^[A-Z0-9][A-Z0-9\-_/]{2,}$/i.test(trimmed);
+}
+
+function isLikelyPdfAddressLine(value: string) {
+  if (/[都道府県]/.test(value)) {
+    return true;
+  }
+
+  if (
+    /[ァ-ヴー]/.test(value) &&
+    /(?:ケン|ク|グン|シ|チョウ|ムラ|バンチ|番地|ダイラ|マチ)/.test(value)
+  ) {
+    return true;
+  }
+
+  if (/(?:市|区|町|村|郡)/.test(value) && /\d/.test(value) && !/^\d+$/.test(value.replace(/\D/g, ""))) {
+    return true;
+  }
+
+  return /ケン.{2,}/.test(value) && /(?:グン|シ|ク|チョウ|ムラ)/.test(value);
 }
 
 function extractDatesFromLinesAfterLabel(lines: string[], labels: string[]) {

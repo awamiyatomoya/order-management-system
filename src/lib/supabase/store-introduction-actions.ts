@@ -14,6 +14,7 @@ import {
   detectIntroductionChainName,
 } from "@/lib/store-introduction-kpi";
 import {
+  ensureAtCosmeStoreLocationsFromOfficialSite,
   ensureHandsStoreLocationsFromOfficialSite,
   ensureLoftStoreLocationsFromOfficialSite,
   readStoreLocationRecords,
@@ -27,6 +28,7 @@ import {
 } from "@/lib/store-location-matching";
 import {
   getMatchedStoreNameForIntroduction,
+  isAtCosmeSeriesIntroductionSheet,
   isHandsSeriesIntroductionSheet,
   isLoftSeriesIntroductionSheet,
 } from "@/lib/store-matching";
@@ -108,6 +110,7 @@ export async function importStoreIntroductionWorkbook(
   const summary = summarizeStoreIntroduction(parsed.entries);
   const isLoftSeriesSheet = isLoftSeriesIntroductionSheet(parsed.formatKey, parsed.entries);
   const isHandsSeriesSheet = isHandsSeriesIntroductionSheet(parsed.formatKey, parsed.entries);
+  const isAtCosmeSeriesSheet = isAtCosmeSeriesIntroductionSheet(parsed.formatKey, parsed.entries);
 
   if (isLoftSeriesSheet) {
     await ensureLoftStoreLocationsFromOfficialSite();
@@ -117,13 +120,18 @@ export async function importStoreIntroductionWorkbook(
     await ensureHandsStoreLocationsFromOfficialSite();
   }
 
+  if (isAtCosmeSeriesSheet) {
+    await ensureAtCosmeStoreLocationsFromOfficialSite();
+  }
+
   const storeLocations = await loadStoreLocationsForIntroduction({
     isHandsSeriesSheet,
     isLoftSeriesSheet,
+    isAtCosmeSeriesSheet,
   });
   const storeLocationLookup = buildStoreLocationLookup(storeLocations);
 
-  if (isHandsSeriesSheet || isLoftSeriesSheet) {
+  if (isHandsSeriesSheet || isLoftSeriesSheet || isAtCosmeSeriesSheet) {
     const unmatchedStoreNames = new Set<string>();
 
     parsed.entries.forEach((entry) => {
@@ -133,7 +141,7 @@ export async function importStoreIntroductionWorkbook(
     });
 
     if (unmatchedStoreNames.size > 0) {
-      const chainLabel = isHandsSeriesSheet ? "ハンズ" : "ロフト";
+      const chainLabel = isHandsSeriesSheet ? "ハンズ" : isLoftSeriesSheet ? "ロフト" : "@cosme STORE";
       importWarnings.push(
         `${chainLabel}公式店舗マスタと照合できない店舗が${unmatchedStoreNames.size}件あります（${Array.from(unmatchedStoreNames).slice(0, 3).join("、")}${unmatchedStoreNames.size > 3 ? " ほか" : ""}）。「公式サイトから更新」で店舗マスタを同期してください。`,
       );
@@ -248,7 +256,7 @@ export async function importStoreIntroductionWorkbook(
   await upsertStoreLocationsFromEntries(parsed.entries, {
     formatKey: parsed.formatKey,
     chainName,
-    skipOfficialChainSync: isLoftSeriesSheet || isHandsSeriesSheet,
+    skipOfficialChainSync: isLoftSeriesSheet || isHandsSeriesSheet || isAtCosmeSeriesSheet,
   });
 
   revalidatePath("/store-introductions");
@@ -405,10 +413,12 @@ async function enrichStoreIntroductionEntriesWithLocations(
 async function loadStoreLocationsForIntroduction({
   isHandsSeriesSheet = false,
   isLoftSeriesSheet = false,
+  isAtCosmeSeriesSheet = false,
   entries = [],
 }: {
   isHandsSeriesSheet?: boolean;
   isLoftSeriesSheet?: boolean;
+  isAtCosmeSeriesSheet?: boolean;
   entries?: StoreIntroductionEntry[];
 } = {}): Promise<StoreLocation[]> {
   let locations = await readStoreLocations();
@@ -421,6 +431,8 @@ async function loadStoreLocationsForIntroduction({
         entry.storeName.includes("ｈｂ"),
     );
   const needsLoft = isLoftSeriesSheet || entries.some((entry) => entry.matchedStoreName === "ロフト");
+  const needsAtCosme =
+    isAtCosmeSeriesSheet || entries.some((entry) => entry.matchedStoreName === "@cosme STORE");
 
   if (needsHands) {
     try {
@@ -434,6 +446,15 @@ async function loadStoreLocationsForIntroduction({
   if (needsLoft) {
     try {
       await ensureLoftStoreLocationsFromOfficialSite();
+      locations = await readStoreLocations();
+    } catch {
+      // 公式サイト取得に失敗しても、DB上の既存住所で続行する。
+    }
+  }
+
+  if (needsAtCosme) {
+    try {
+      await ensureAtCosmeStoreLocationsFromOfficialSite();
       locations = await readStoreLocations();
     } catch {
       // 公式サイト取得に失敗しても、DB上の既存住所で続行する。
@@ -472,8 +493,10 @@ async function upsertStoreLocationsFromEntries(
   if (
     options.skipOfficialChainSync ||
     options.formatKey === "hands-allocation-list" ||
+    options.formatKey === "store-allocation-list" ||
     options.chainName === "ハンズ" ||
-    options.chainName === "ロフト"
+    options.chainName === "ロフト" ||
+    options.chainName === "@cosme STORE"
   ) {
     return;
   }

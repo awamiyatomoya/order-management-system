@@ -13,6 +13,13 @@ export function inferStoreLocationChainName(location: Pick<StoreLocation, "store
     return "ハンズ";
   }
 
+  if (
+    location.storeCode.startsWith("atcosme-") ||
+    /@cosme|アットコスメ/i.test(location.storeName)
+  ) {
+    return "@cosme STORE";
+  }
+
   return "";
 }
 
@@ -50,7 +57,7 @@ export function countChainStoreLocations(locations: StoreLocationRecord[], chain
   return groupStoreLocationsByChain(locations).get(chainName)?.length ?? 0;
 }
 
-export const officialChainStoreMasters = new Set(["ハンズ", "ロフト"]);
+export const officialChainStoreMasters = new Set(["ハンズ", "ロフト", "@cosme STORE"]);
 
 export function hasOfficialChainStoreMaster(chainName: string) {
   return officialChainStoreMasters.has(chainName.trim());

@@ -8,7 +8,7 @@ export const maxDuration = 60;
 export const dynamic = "force-dynamic";
 
 function parseChainName(value: string | null): OfficialStoreChainName | null {
-  if (value === "ハンズ" || value === "ロフト") {
+  if (value === "ハンズ" || value === "ロフト" || value === "@cosme STORE") {
     return value;
   }
 

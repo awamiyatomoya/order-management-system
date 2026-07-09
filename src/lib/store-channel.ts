@@ -12,6 +12,8 @@ const channelChainNames: Record<Exclude<StoreChannel, "other">, string[]> = {
     "プラザ",
     "アットコスメ",
     "@cosme",
+    "@cosme STORE",
+    "アットコスメストア",
     "インキューブ",
     "ミモザ",
     "アフタヌーンティー",

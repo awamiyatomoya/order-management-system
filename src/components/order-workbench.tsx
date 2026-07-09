@@ -4286,6 +4286,16 @@ export function OrderWorkbench({
                         >
                           {isSyncingStoreLocations ? "取得中..." : "公式サイトから更新"}
                         </Button>
+                      ) : selectedStoreChain === "@cosme STORE" ? (
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          disabled={isSyncingStoreLocations}
+                          onClick={() => void handleOfficialStoreSync("@cosme STORE")}
+                        >
+                          {isSyncingStoreLocations ? "取得中..." : "公式サイトから更新"}
+                        </Button>
                       ) : null}
                     </div>
 
@@ -4318,7 +4328,9 @@ export function OrderWorkbench({
                                 ? "ロフト店舗が未登録です。「公式サイトから更新」を押してください。"
                                 : selectedStoreChain === "ハンズ"
                                   ? "ハンズ店舗が未登録です。「公式サイトから更新」を押してください。"
-                                  : "このチェーンの個別店舗データはまだありません。"}
+                                  : selectedStoreChain === "@cosme STORE"
+                                    ? "@cosme STORE店舗が未登録です。「公式サイトから更新」を押してください。"
+                                    : "このチェーンの個別店舗データはまだありません。"}
                           </p>
                         ) : (
                           <div className="overflow-x-auto rounded-lg border">

@@ -1,3 +1,5 @@
+import { resolveOyamaAtCosmeOfficialStoreCode } from "@/lib/store-allocation-matching";
+
 export type StoreLocation = {
   storeCode: string;
   storeName: string;
@@ -164,6 +166,14 @@ export function resolveStoreLocationMatch(
 ) {
   if (looksLikeStoreAddress(entry.address)) {
     return undefined;
+  }
+
+  const oyamaOfficialCode = resolveOyamaAtCosmeOfficialStoreCode(entry.storeCode);
+  if (oyamaOfficialCode) {
+    const oyamaMatch = lookup.byCode.get(oyamaOfficialCode);
+    if (oyamaMatch) {
+      return oyamaMatch;
+    }
   }
 
   for (const key of buildStoreNameMatchKeys(entry.storeName)) {

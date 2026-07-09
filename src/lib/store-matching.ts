@@ -1,4 +1,5 @@
 import type { Order, Store, StoreIntroductionFormatKey } from "@/lib/types";
+import { isStoreAllocationIntroductionSheet } from "@/lib/store-allocation-matching";
 import { matchStoreAllocationChain } from "@/lib/store-allocation-matching";
 
 export const defaultStoreChains: Store[] = [
@@ -206,6 +207,13 @@ export function isLoftSeriesIntroductionSheet(
   return loftCodeMatches >= Math.min(10, Math.ceil(entries.length * 0.2));
 }
 
+export function isAtCosmeSeriesIntroductionSheet(
+  formatKey: StoreIntroductionFormatKey,
+  entries: { storeName: string; storeCode: string }[],
+) {
+  return isStoreAllocationIntroductionSheet(formatKey, entries);
+}
+
 export function getMatchedStoreNameForIntroduction(
   entry: { storeName: string; storeCode: string },
   formatKey: StoreIntroductionFormatKey,
@@ -354,11 +362,36 @@ export function normalizeStoreMatchText(value: string) {
     .replace(/[\s　・･\\/／\-ー‐‑‒–—―_,，、.．()（）［\]\[【】]/g, "");
 }
 
+function getAeonChainMatchScore(memo: string) {
+  if (!memo) {
+    return 0;
+  }
+
+  if (memo.includes("cosme") || memo.includes("アットコスメ")) {
+    return 0;
+  }
+
+  if (
+    memo.startsWith("イオンモール") ||
+    memo.startsWith("イオン") ||
+    memo.includes("aeon") ||
+    memo.includes("マルート")
+  ) {
+    return memo.length + 100;
+  }
+
+  return 0;
+}
+
 function getStoreMatchScore(memoStoreName: string, store: Store) {
   const memo = normalizeStoreMatchText(memoStoreName);
   const candidates = [store.name, ...store.aliases]
     .map((alias) => normalizeStoreMatchText(alias))
     .filter(Boolean);
+
+  if (normalizeStoreMatchText(store.name) === "イオン") {
+    return getAeonChainMatchScore(memo);
+  }
 
   return candidates.reduce((score, candidate) => {
     if (memo === candidate) {

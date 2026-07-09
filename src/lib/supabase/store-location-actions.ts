@@ -12,6 +12,7 @@ import {
 import type { StoreLocation } from "@/lib/store-location-matching";
 import { listChainStoreLocationCodes } from "@/lib/store-location-sync";
 import { fetchLoftStoreLocationsFromOfficialSite } from "@/lib/loft-store-locations";
+import { fetchAtCosmeStoreLocationsFromOfficialSite } from "@/lib/atcosme-store-locations";
 import { createServerSupabaseClient, hasSupabaseServerEnv } from "./server";
 
 export async function readStoreLocationRecords(): Promise<StoreLocationRecord[]> {
@@ -238,7 +239,7 @@ async function finalizeOfficialChainSync(
   };
 }
 
-export type OfficialStoreChainName = "ハンズ" | "ロフト";
+export type OfficialStoreChainName = "ハンズ" | "ロフト" | "@cosme STORE";
 
 export async function previewOfficialChainStoreSync(chainName: OfficialStoreChainName): Promise<{
   ok: boolean;
@@ -270,7 +271,9 @@ export async function previewOfficialChainStoreSync(chainName: OfficialStoreChai
     const officialLocations =
       chainName === "ハンズ"
         ? await fetchHandsStoreLocationsFromOfficialSite()
-        : await fetchLoftStoreLocationsFromOfficialSite();
+        : chainName === "ロフト"
+          ? await fetchLoftStoreLocationsFromOfficialSite()
+          : await fetchAtCosmeStoreLocationsFromOfficialSite();
     const newStores = officialLocations.filter((location) => !existingCodes.has(location.storeCode));
 
     return {
@@ -303,7 +306,11 @@ export async function applyOfficialChainStoreSync(
     return ensureHandsStoreLocationsFromOfficialSite();
   }
 
-  return ensureLoftStoreLocationsFromOfficialSite();
+  if (chainName === "ロフト") {
+    return ensureLoftStoreLocationsFromOfficialSite();
+  }
+
+  return ensureAtCosmeStoreLocationsFromOfficialSite();
 }
 
 export async function ensureHandsStoreLocationsFromOfficialSite(): Promise<{
@@ -371,6 +378,41 @@ export async function ensureLoftStoreLocationsFromOfficialSite(): Promise<{
     return {
       ok: false,
       message: error instanceof Error ? error.message : "ロフト店舗住所の取得に失敗しました。",
+      count: 0,
+    };
+  }
+}
+
+export async function ensureAtCosmeStoreLocationsFromOfficialSite(): Promise<{
+  ok: boolean;
+  message: string;
+  count: number;
+}> {
+  if (!hasSupabaseServerEnv()) {
+    return {
+      ok: false,
+      message: "Supabase未設定のため、@cosme STORE店舗住所を保存できません。",
+      count: 0,
+    };
+  }
+
+  try {
+    const atCosmeLocations = await fetchAtCosmeStoreLocationsFromOfficialSite();
+    const replaceResult = await replaceOfficialChainStoreLocations("@cosme STORE", atCosmeLocations);
+
+    if (replaceResult.error) {
+      return {
+        ok: false,
+        message: `@cosme STORE店舗の保存に失敗しました: ${replaceResult.error}`,
+        count: 0,
+      };
+    }
+
+    return finalizeOfficialChainSync("@cosme STORE", atCosmeLocations.length, replaceResult.removedCount);
+  } catch (error) {
+    return {
+      ok: false,
+      message: error instanceof Error ? error.message : "@cosme STORE店舗住所の取得に失敗しました。",
       count: 0,
     };
   }
