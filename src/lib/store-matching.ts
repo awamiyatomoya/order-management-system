@@ -1,6 +1,11 @@
 import type { Order, Store, StoreIntroductionFormatKey } from "@/lib/types";
 import { isStoreAllocationIntroductionSheet } from "@/lib/store-allocation-matching";
 import { matchStoreAllocationChain } from "@/lib/store-allocation-matching";
+import {
+  isLikelyAeonChainStoreName,
+  scoreAeonChainName,
+  scoreAtCosmeStoreName,
+} from "@/lib/retail-chain-matching";
 
 export const defaultStoreChains: Store[] = [
   {
@@ -363,24 +368,11 @@ export function normalizeStoreMatchText(value: string) {
 }
 
 function getAeonChainMatchScore(memo: string) {
-  if (!memo) {
-    return 0;
-  }
+  return scoreAeonChainName(memo);
+}
 
-  if (memo.includes("cosme") || memo.includes("アットコスメ")) {
-    return 0;
-  }
-
-  if (
-    memo.startsWith("イオンモール") ||
-    memo.startsWith("イオン") ||
-    memo.includes("aeon") ||
-    memo.includes("マルート")
-  ) {
-    return memo.length + 100;
-  }
-
-  return 0;
+function getAtCosmeStoreMatchScore(memo: string) {
+  return scoreAtCosmeStoreName(memo);
 }
 
 function getStoreMatchScore(memoStoreName: string, store: Store) {
@@ -389,16 +381,29 @@ function getStoreMatchScore(memoStoreName: string, store: Store) {
     .map((alias) => normalizeStoreMatchText(alias))
     .filter(Boolean);
 
-  if (normalizeStoreMatchText(store.name) === "イオン") {
+  const normalizedStoreName = normalizeStoreMatchText(store.name);
+  if (normalizedStoreName === "イオン") {
     return getAeonChainMatchScore(memo);
   }
 
+  if (normalizedStoreName === normalizeStoreMatchText("@cosme STORE")) {
+    return getAtCosmeStoreMatchScore(memo);
+  }
+
   return candidates.reduce((score, candidate) => {
+    if (normalizeStoreMatchText(store.name) === "イオン" || candidate === normalizeStoreMatchText("イオン")) {
+      return score;
+    }
+
     if (memo === candidate) {
       return Math.max(score, candidate.length + 1000);
     }
 
     if (memo.includes(candidate) || candidate.includes(memo)) {
+      if (candidate === normalizeStoreMatchText("イオン") && !isLikelyAeonChainStoreName(memoStoreName)) {
+        return score;
+      }
+
       return Math.max(score, candidate.length);
     }
 
