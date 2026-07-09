@@ -172,6 +172,17 @@ export function getStoreNameFromMemo(memo: string, stores: Store[]) {
   return matchedStore?.name ?? "店舗不明";
 }
 
+export function isHandsSeriesIntroductionSheet(
+  formatKey: StoreIntroductionFormatKey,
+  entries: { storeName: string; storeCode: string }[],
+) {
+  if (formatKey !== "hands-allocation-list" || entries.length < 5) {
+    return false;
+  }
+
+  return true;
+}
+
 export function isLoftSeriesIntroductionSheet(
   formatKey: StoreIntroductionFormatKey,
   entries: { storeName: string; storeCode: string }[],
@@ -199,7 +210,12 @@ export function getMatchedStoreNameForIntroduction(
   formatKey: StoreIntroductionFormatKey,
   stores: Store[],
   isLoftSeriesSheet: boolean,
+  isHandsSeriesSheet = false,
 ) {
+  if (formatKey === "hands-allocation-list" || isHandsSeriesSheet) {
+    return "ハンズ";
+  }
+
   if (formatKey === "flag-list" && isLoftSeriesSheet) {
     return "ロフト";
   }

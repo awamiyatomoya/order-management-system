@@ -40,7 +40,7 @@ export type Store = {
   aliases: string[];
 };
 
-export type StoreIntroductionFormatKey = "row-list" | "flag-list";
+export type StoreIntroductionFormatKey = "row-list" | "flag-list" | "hands-allocation-list";
 
 export type StoreIntroductionImport = {
   id: string;

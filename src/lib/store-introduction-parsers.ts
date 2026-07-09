@@ -1,6 +1,5 @@
 import * as XLSX from "xlsx";
-
-export type StoreIntroductionFormatKey = "row-list" | "flag-list";
+import type { StoreIntroductionFormatKey } from "@/lib/types";
 
 export type ParsedStoreIntroductionEntry = {
   jan: string;
@@ -37,6 +36,14 @@ export function parseStoreIntroductionWorkbook(buffer: ArrayBuffer): ParsedStore
       continue;
     }
 
+    const handsAllocation = tryParseHandsAllocationListSheet(sheet);
+    if (handsAllocation.entries.length > 0) {
+      formatKey = formatKey ?? "hands-allocation-list";
+      allEntries.push(...handsAllocation.entries);
+      parsedSheetCount += 1;
+      continue;
+    }
+
     const flagList = tryParseFlagListSheet(sheet, workbook);
     if (flagList.entries.length > 0) {
       formatKey = formatKey ?? "flag-list";
@@ -55,7 +62,7 @@ export function parseStoreIntroductionWorkbook(buffer: ArrayBuffer): ParsedStore
 
   if (allEntries.length === 0) {
     throw new Error(
-      "導入店舗シートを読み取れませんでした。フェーズ1対応形式（店舗一覧表・0/1フラグ表）か確認してください。",
+      "導入店舗シートを読み取れませんでした。フェーズ1対応形式（店舗一覧表・0/1フラグ表・ハンズ按分表）か確認してください。",
     );
   }
 
@@ -64,6 +71,134 @@ export function parseStoreIntroductionWorkbook(buffer: ArrayBuffer): ParsedStore
     entries: dedupeEntries(allEntries),
     sheetCount: parsedSheetCount,
   };
+}
+
+function tryParseHandsAllocationListSheet(sheet: XLSX.WorkSheet): ParsedStoreIntroduction {
+  const rows = sheetToRows(sheet);
+  const storeNameHeaderIndex = rows.findIndex((row) => {
+    const normalized = row.map(normalizeHeaderCell);
+    return normalized.includes("商品名称") && normalized.includes("納品日");
+  });
+
+  if (storeNameHeaderIndex === -1) {
+    return { formatKey: "hands-allocation-list", entries: [], sheetCount: 0 };
+  }
+
+  const hasHandsTitle = rows.some((row) =>
+    row.some((cell) => stringCell(cell).includes("ハンズ各店按分数")),
+  );
+  const storeCodeRowIndex = storeNameHeaderIndex - 1;
+
+  if (!hasHandsTitle || storeCodeRowIndex < 0) {
+    return { formatKey: "hands-allocation-list", entries: [], sheetCount: 0 };
+  }
+
+  const storeCodeRow = rows[storeCodeRowIndex];
+  const storeNameRow = rows[storeNameHeaderIndex];
+  const storeColumns = findHandsStoreColumns(storeCodeRow, storeNameRow);
+
+  if (storeColumns.length < 5) {
+    return { formatKey: "hands-allocation-list", entries: [], sheetCount: 0 };
+  }
+
+  const fallbackProduct = findHandsWorkbookProduct(rows);
+  const entries: ParsedStoreIntroductionEntry[] = [];
+
+  for (const row of rows.slice(storeNameHeaderIndex + 1)) {
+    const productName = stringCell(row[3]);
+    const jan = extractJan(row[2]) || extractJan(row[1]) || fallbackProduct.jan;
+    const hasAllocation = storeColumns.some(({ columnIndex }) => isPositiveAllocation(row[columnIndex]));
+
+    if (!productName && !jan) {
+      continue;
+    }
+
+    if (!hasAllocation) {
+      continue;
+    }
+
+    if (productName.includes("販促物同梱")) {
+      continue;
+    }
+
+    const resolvedJan = jan || fallbackProduct.jan || "UNKNOWN";
+    const resolvedProductName = productName || fallbackProduct.productName;
+
+    storeColumns.forEach(({ columnIndex, storeCode, storeName }) => {
+      entries.push({
+        jan: resolvedJan,
+        productName: resolvedProductName,
+        storeName,
+        storeCode,
+        address: "",
+        postalCode: "",
+        isIntroduced: isPositiveAllocation(row[columnIndex]),
+      });
+    });
+  }
+
+  if (entries.length < 5) {
+    return { formatKey: "hands-allocation-list", entries: [], sheetCount: 0 };
+  }
+
+  return {
+    formatKey: "hands-allocation-list",
+    entries: dedupeEntries(entries),
+    sheetCount: 0,
+  };
+}
+
+function findHandsStoreColumns(storeCodeRow: unknown[], storeNameRow: unknown[]) {
+  const columns: { columnIndex: number; storeCode: string; storeName: string }[] = [];
+
+  for (let columnIndex = 0; columnIndex < storeCodeRow.length; columnIndex += 1) {
+    const storeCode = normalizeHandsStoreCode(storeCodeRow[columnIndex]);
+    const storeName = stringCell(storeNameRow[columnIndex]);
+
+    if (!storeCode || !storeName || storeName.includes("全店")) {
+      continue;
+    }
+
+    columns.push({ columnIndex, storeCode, storeName });
+  }
+
+  return columns;
+}
+
+function normalizeHandsStoreCode(value: unknown) {
+  const raw = stringCell(value);
+  if (!raw || !/^\d{1,4}$/.test(raw)) {
+    return "";
+  }
+
+  return raw;
+}
+
+function isPositiveAllocation(value: unknown) {
+  if (typeof value === "number") {
+    return value > 0;
+  }
+
+  const normalized = stringCell(value).replace(/[　\s]/g, "");
+  if (!normalized) {
+    return false;
+  }
+
+  const numeric = Number(normalized);
+  return Number.isFinite(numeric) && numeric > 0;
+}
+
+function findHandsWorkbookProduct(rows: unknown[][]) {
+  for (const row of rows.slice(0, 15)) {
+    const jan = extractJan(row[2]) || extractJan(row[1]);
+    const productName = stringCell(row[3]) || stringCell(row[2]);
+
+    if (jan && productName && !productName.includes("販促物同梱")) {
+      return { jan, productName };
+    }
+  }
+
+  return { jan: "", productName: "" };
 }
 
 function tryParseRowListSheet(sheet: XLSX.WorkSheet): ParsedStoreIntroduction {

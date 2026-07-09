@@ -43,7 +43,8 @@ export function summarizeProductChainKpis(
       const productName = productEntries[0]?.productName ?? key.split("::").slice(2).join("::");
       const introducedCount = productEntries.filter((entry) => entry.isIntroduced).length;
       const totalStoreCount = productEntries.length;
-      const hasFullStoreList = formatKey === "flag-list" && totalStoreCount >= 5;
+      const hasFullStoreList =
+        (formatKey === "flag-list" || formatKey === "hands-allocation-list") && totalStoreCount >= 5;
 
       return {
         jan,
@@ -71,9 +72,14 @@ export function summarizeProductChainKpis(
 export function detectIntroductionChainName(
   entries: { chainName?: string; matchedStoreName?: string }[],
   isLoftSeriesSheet: boolean,
+  isHandsSeriesSheet = false,
 ): string {
   if (isLoftSeriesSheet) {
     return "ロフト";
+  }
+
+  if (isHandsSeriesSheet) {
+    return "ハンズ";
   }
 
   const counts = new Map<string, number>();

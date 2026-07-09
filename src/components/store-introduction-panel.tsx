@@ -27,6 +27,7 @@ import {
 } from "@/lib/store-introduction-parsers";
 import {
   getMatchedStoreNameForIntroduction,
+  isHandsSeriesIntroductionSheet,
   isLoftSeriesIntroductionSheet,
 } from "@/lib/store-matching";
 import { summarizeIntroducedStoresByChannel } from "@/lib/store-channel";
@@ -173,6 +174,15 @@ export function StoreIntroductionPanel({
 
     return isLoftSeriesIntroductionSheet(activeImport.formatKey, importEntries);
   }, [activeImport, entries]);
+  const isHandsSeriesSheet = useMemo(() => {
+    if (!activeImport) {
+      return false;
+    }
+
+    const importEntries = entries.filter((entry) => entry.importId === activeImport.id);
+
+    return isHandsSeriesIntroductionSheet(activeImport.formatKey, importEntries);
+  }, [activeImport, entries]);
 
   function getEntryMatchedStoreName(entry: StoreIntroductionEntry) {
     if (!activeImport) {
@@ -184,6 +194,7 @@ export function StoreIntroductionPanel({
       activeImport.formatKey,
       stores,
       isLoftSeriesSheet,
+      isHandsSeriesSheet,
     );
   }
 
@@ -222,6 +233,7 @@ export function StoreIntroductionPanel({
         activeImport.formatKey,
         stores,
         isLoftSeriesSheet,
+        isHandsSeriesSheet,
       );
 
       if (matchedName && matchedName !== "店舗不明") {
@@ -234,7 +246,7 @@ export function StoreIntroductionPanel({
     }
 
     return Array.from(chains).sort((left, right) => left.localeCompare(right, "ja"));
-  }, [activeImport, entries, isLoftSeriesSheet, stores]);
+  }, [activeImport, entries, isHandsSeriesSheet, isLoftSeriesSheet, stores]);
 
   const effectiveRetailChainFilter = useMemo(() => {
     if (selectedRetailChainFilter !== "all") {
@@ -243,6 +255,10 @@ export function StoreIntroductionPanel({
 
     if (isLoftSeriesSheet) {
       return "ロフト";
+    }
+
+    if (isHandsSeriesSheet) {
+      return "ハンズ";
     }
 
     if (activeImport?.chainName) {
@@ -254,7 +270,7 @@ export function StoreIntroductionPanel({
     }
 
     return "all";
-  }, [activeImport?.chainName, isLoftSeriesSheet, retailChainOptions, selectedRetailChainFilter]);
+  }, [activeImport?.chainName, isHandsSeriesSheet, isLoftSeriesSheet, retailChainOptions, selectedRetailChainFilter]);
 
   const productOptions = useMemo(() => {
     const optionMap = new Map<string, { key: string; jan: string; productName: string }>();
@@ -332,6 +348,7 @@ export function StoreIntroductionPanel({
     clientId,
     effectiveRetailChainFilter,
     entries,
+    isHandsSeriesSheet,
     isLoftSeriesSheet,
     matrixProducts,
     productSearchQuery,
@@ -361,6 +378,7 @@ export function StoreIntroductionPanel({
     activeImport,
     clientId,
     entries,
+    isHandsSeriesSheet,
     isLoftSeriesSheet,
     products,
     selectedRetailChainFilter,
@@ -412,6 +430,7 @@ export function StoreIntroductionPanel({
     activeImport?.id,
     clientId,
     entries,
+    isHandsSeriesSheet,
     isLoftSeriesSheet,
     products,
     productSearchQuery,

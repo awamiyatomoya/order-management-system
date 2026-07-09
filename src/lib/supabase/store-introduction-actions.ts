@@ -10,16 +10,22 @@ import {
 } from "@/lib/store-introduction-parsers";
 import { detectIntroductionChainName } from "@/lib/store-introduction-kpi";
 import {
+  fetchHandsStoreLocationsFromOfficialSite,
+  mergeHandsLocationsWithExisting,
+} from "@/lib/hands-store-locations";
+import {
   fetchLoftStoreLocationsFromOfficialSite,
   mergeLoftLocationsWithExisting,
 } from "@/lib/loft-store-locations";
 import {
   buildStoreLocationLookup,
   resolveStoreLocationAddress,
+  resolveStoreLocationMatch,
   type StoreLocation,
 } from "@/lib/store-location-matching";
 import {
   getMatchedStoreNameForIntroduction,
+  isHandsSeriesIntroductionSheet,
   isLoftSeriesIntroductionSheet,
 } from "@/lib/store-matching";
 import type { Product, Store, StoreIntroductionEntry, StoreIntroductionImport } from "@/lib/types";
@@ -91,9 +97,14 @@ export async function importStoreIntroductionWorkbook(
 
   const summary = summarizeStoreIntroduction(parsed.entries);
   const isLoftSeriesSheet = isLoftSeriesIntroductionSheet(parsed.formatKey, parsed.entries);
+  const isHandsSeriesSheet = isHandsSeriesIntroductionSheet(parsed.formatKey, parsed.entries);
 
   if (isLoftSeriesSheet) {
     await syncLoftStoreLocationsFromOfficialSite();
+  }
+
+  if (isHandsSeriesSheet) {
+    await syncHandsStoreLocationsFromOfficialSite();
   }
 
   const storeLocationLookup = buildStoreLocationLookup(await readStoreLocations());
@@ -101,6 +112,7 @@ export async function importStoreIntroductionWorkbook(
   const importedAt = new Date().toISOString();
   const entries: StoreIntroductionEntry[] = parsed.entries.map((entry) => {
     const resolvedProduct = resolveIntroductionProduct(entry.jan, entry.productName, clientId, products);
+    const matchedLocation = resolveStoreLocationMatch(entry, storeLocationLookup);
     const enrichedAddress = resolveStoreLocationAddress(entry, storeLocationLookup);
 
     return {
@@ -112,18 +124,19 @@ export async function importStoreIntroductionWorkbook(
       storeName: entry.storeName,
       storeCode: entry.storeCode,
       address: enrichedAddress || entry.address,
-      postalCode: entry.postalCode,
+      postalCode: matchedLocation?.postalCode || entry.postalCode,
       isIntroduced: entry.isIntroduced,
       matchedStoreName: getMatchedStoreNameForIntroduction(
         entry,
         parsed.formatKey,
         stores,
         isLoftSeriesSheet,
+        isHandsSeriesSheet,
       ),
     };
   });
 
-  const chainName = detectIntroductionChainName(entries, isLoftSeriesSheet);
+  const chainName = detectIntroductionChainName(entries, isLoftSeriesSheet, isHandsSeriesSheet);
 
   const importBatch: StoreIntroductionImport = {
     id: importId,
@@ -194,7 +207,12 @@ export async function importStoreIntroductionWorkbook(
   revalidatePath("/store-introductions");
   revalidatePath("/stores");
 
-  const formatLabel = parsed.formatKey === "row-list" ? "店舗一覧表" : "0/1フラグ表";
+  const formatLabel =
+    parsed.formatKey === "row-list"
+      ? "店舗一覧表"
+      : parsed.formatKey === "hands-allocation-list"
+        ? "ハンズ按分表"
+        : "0/1フラグ表";
   const chainLabel = chainName ? `${chainName} / ` : "";
   const sheetLabel = parsed.sheetCount > 1 ? `${parsed.sheetCount}シート / ` : "";
 
@@ -253,6 +271,48 @@ export async function readStoreIntroductionData(clientId: string) {
       (entries ?? []).map(mapStoreIntroductionEntry),
     ),
   };
+}
+
+export async function syncHandsStoreLocationsFromOfficialSite(): Promise<{
+  ok: boolean;
+  message: string;
+  count: number;
+}> {
+  if (!hasSupabaseServerEnv()) {
+    return {
+      ok: false,
+      message: "Supabase未設定のため、ハンズ店舗住所を保存できません。",
+      count: 0,
+    };
+  }
+
+  try {
+    const handsLocations = await fetchHandsStoreLocationsFromOfficialSite();
+    const existingLocations = await readStoreLocations();
+    const mergedLocations = mergeHandsLocationsWithExisting(handsLocations, existingLocations);
+
+    await upsertStoreLocations(
+      mergedLocations.map((location) => ({
+        ...location,
+        chainName: "ハンズ",
+      })),
+    );
+
+    revalidatePath("/store-introductions");
+    revalidatePath("/stores");
+
+    return {
+      ok: true,
+      message: `ハンズ公式サイトから ${mergedLocations.length}店舗の住所を取得しました。`,
+      count: mergedLocations.length,
+    };
+  } catch (error) {
+    return {
+      ok: false,
+      message: error instanceof Error ? error.message : "ハンズ店舗住所の取得に失敗しました。",
+      count: 0,
+    };
+  }
 }
 
 export async function syncLoftStoreLocationsFromOfficialSite(): Promise<{

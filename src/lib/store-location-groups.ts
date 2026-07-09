@@ -9,6 +9,10 @@ export function inferStoreLocationChainName(location: Pick<StoreLocation, "store
     return "ロフト";
   }
 
+  if (location.storeCode.startsWith("hands-") || /ハンズ|hands/i.test(location.storeName)) {
+    return "ハンズ";
+  }
+
   return "";
 }
 
