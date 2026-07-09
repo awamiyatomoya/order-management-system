@@ -44,6 +44,14 @@ export function parseStoreIntroductionWorkbook(buffer: ArrayBuffer): ParsedStore
       continue;
     }
 
+    const storeAllocation = tryParseStoreAllocationListSheet(sheet, sheetName);
+    if (storeAllocation.entries.length > 0) {
+      formatKey = formatKey ?? "store-allocation-list";
+      allEntries.push(...storeAllocation.entries);
+      parsedSheetCount += 1;
+      continue;
+    }
+
     const flagList = tryParseFlagListSheet(sheet, workbook);
     if (flagList.entries.length > 0) {
       formatKey = formatKey ?? "flag-list";
@@ -62,7 +70,7 @@ export function parseStoreIntroductionWorkbook(buffer: ArrayBuffer): ParsedStore
 
   if (allEntries.length === 0) {
     throw new Error(
-      "導入店舗シートを読み取れませんでした。フェーズ1対応形式（店舗一覧表・0/1フラグ表・ハンズ按分表）か確認してください。",
+      "導入店舗シートを読み取れませんでした。フェーズ1対応形式（店舗一覧表・0/1フラグ表・ハンズ按分表・店舗割振表）か確認してください。",
     );
   }
 
@@ -248,8 +256,171 @@ function tryParseRowListSheet(sheet: XLSX.WorkSheet): ParsedStoreIntroduction {
   };
 }
 
+function tryParseStoreAllocationListSheet(
+  sheet: XLSX.WorkSheet,
+  sheetName: string,
+): ParsedStoreIntroduction {
+  const rows = sheetToRows(sheet);
+
+  if (!looksLikeStoreAllocationListSheet(rows, sheetName)) {
+    return { formatKey: "store-allocation-list", entries: [], sheetCount: 0 };
+  }
+
+  const jan = findStoreAllocationMetadataValue(rows, ["jan"]);
+  const productName = findStoreAllocationMetadataValue(rows, [
+    "商品名orシリーズ名",
+    "商品名称",
+    "商品名",
+  ]);
+  const productColumns = findStoreAllocationProductColumns(rows, jan);
+
+  if (!jan || productColumns.length === 0) {
+    return { formatKey: "store-allocation-list", entries: [], sheetCount: 0 };
+  }
+
+  const entries: ParsedStoreIntroductionEntry[] = [];
+
+  for (const row of rows) {
+    const storeCode = stringCell(row[0]);
+    const storeName = stringCell(row[1]);
+
+    if (!/^\d{2,4}$/.test(storeCode) || !storeName || storeName.includes("全店")) {
+      continue;
+    }
+
+    productColumns.forEach(({ columnIndex, jan: columnJan, productName: columnProductName }) => {
+      entries.push({
+        jan: columnJan,
+        productName: columnProductName || productName,
+        storeName,
+        storeCode,
+        address: "",
+        postalCode: "",
+        isIntroduced: isPositiveAllocation(row[columnIndex]),
+      });
+    });
+  }
+
+  if (entries.length < 5) {
+    return { formatKey: "store-allocation-list", entries: [], sheetCount: 0 };
+  }
+
+  return {
+    formatKey: "store-allocation-list",
+    entries: dedupeEntries(entries),
+    sheetCount: 0,
+  };
+}
+
+function looksLikeStoreAllocationListSheet(rows: unknown[][], sheetName: string) {
+  if (/店舗割振/.test(sheetName)) {
+    return true;
+  }
+
+  const hasJanMetadata = rows.some((row) => {
+    const label = normalizeHeaderCell(row[1]);
+    return label === "jan" && Boolean(extractJan(row[4]));
+  });
+  const hasProductMetadata = rows.some((row) => {
+    const label = normalizeHeaderCell(row[1]);
+    return label.includes("商品名") && Boolean(stringCell(row[4]));
+  });
+
+  let storeRows = 0;
+
+  for (const row of rows) {
+    const storeCode = stringCell(row[0]);
+    const storeName = stringCell(row[1]);
+
+    if (!/^\d{2,4}$/.test(storeCode) || !storeName) {
+      continue;
+    }
+
+    storeRows += 1;
+  }
+
+  return hasJanMetadata && hasProductMetadata && storeRows >= 5;
+}
+
+function findStoreAllocationMetadataValue(rows: unknown[][], labelCandidates: string[]) {
+  const normalizedCandidates = labelCandidates.map((candidate) => normalizeHeaderCell(candidate));
+
+  for (const row of rows.slice(0, 20)) {
+    const label = normalizeHeaderCell(row[1]);
+
+    if (!normalizedCandidates.some((candidate) => label === candidate || label.includes(candidate))) {
+      continue;
+    }
+
+    const jan = extractJan(row[4]);
+    if (jan) {
+      return jan;
+    }
+
+    const value = stringCell(row[4]);
+    if (value) {
+      return value;
+    }
+  }
+
+  return "";
+}
+
+function findStoreAllocationProductColumns(rows: unknown[][], fallbackJan: string) {
+  const janRow = rows.find((row) => normalizeHeaderCell(row[1]) === "jan");
+  const productNameRow = rows.find((row) => {
+    const label = normalizeHeaderCell(row[1]);
+    return label.includes("商品名");
+  });
+
+  if (!janRow) {
+    return fallbackJan
+      ? [
+          {
+            columnIndex: 4,
+            jan: fallbackJan,
+            productName: productNameRow ? stringCell(productNameRow[4]) : "",
+          },
+        ]
+      : [];
+  }
+
+  const columns: { columnIndex: number; jan: string; productName: string }[] = [];
+
+  for (let columnIndex = 4; columnIndex < janRow.length; columnIndex += 1) {
+    const jan = extractJan(janRow[columnIndex]);
+
+    if (!jan) {
+      continue;
+    }
+
+    columns.push({
+      columnIndex,
+      jan,
+      productName: productNameRow ? stringCell(productNameRow[columnIndex]) : "",
+    });
+  }
+
+  if (columns.length === 0 && fallbackJan) {
+    return [
+      {
+        columnIndex: 4,
+        jan: fallbackJan,
+        productName: productNameRow ? stringCell(productNameRow[4]) : "",
+      },
+    ];
+  }
+
+  return columns;
+}
+
 function tryParseFlagListSheet(sheet: XLSX.WorkSheet, workbook: XLSX.WorkBook): ParsedStoreIntroduction {
   const rows = sheetToRows(sheet);
+
+  if (looksLikeStoreAllocationListSheet(rows, "")) {
+    return { formatKey: "flag-list", entries: [], sheetCount: 0 };
+  }
+
   const sheetProduct = findJanAndProductFromSheet(sheet);
   const workbookProduct = findWorkbookJanAndProduct(workbook);
   const jan = sheetProduct.jan || workbookProduct.jan;

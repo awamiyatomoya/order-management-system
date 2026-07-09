@@ -57,7 +57,9 @@ export function summarizeProductChainKpis(
       const introducedCount = productEntries.filter((entry) => entry.isIntroduced).length;
       const importTotalStoreCount = productEntries.length;
       const hasImportStoreList =
-        (formatKey === "flag-list" || formatKey === "hands-allocation-list") &&
+        (formatKey === "flag-list" ||
+          formatKey === "hands-allocation-list" ||
+          formatKey === "store-allocation-list") &&
         importTotalStoreCount >= 5;
 
       return {

@@ -254,7 +254,9 @@ export async function importStoreIntroductionWorkbook(
       ? "店舗一覧表"
       : parsed.formatKey === "hands-allocation-list"
         ? "ハンズ按分表"
-        : "0/1フラグ表";
+        : parsed.formatKey === "store-allocation-list"
+          ? "店舗割振表"
+          : "0/1フラグ表";
   const chainLabel = chainName ? `${chainName} / ` : "";
   const sheetLabel = parsed.sheetCount > 1 ? `${parsed.sheetCount}シート / ` : "";
   const warningLabel = importWarnings.length > 0 ? ` ${importWarnings.join(" ")}` : "";
