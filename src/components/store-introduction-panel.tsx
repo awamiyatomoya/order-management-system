@@ -31,7 +31,7 @@ import {
   isLoftSeriesIntroductionSheet,
 } from "@/lib/store-matching";
 import { summarizeIntroducedStoresByChannel } from "@/lib/store-channel";
-import { summarizeProductChainKpis, enrichProductChainKpisWithStoreMaster } from "@/lib/store-introduction-kpi";
+import { summarizeProductChainKpis, enrichProductChainKpisWithStoreMaster, aggregateProductChainKpis, shouldShowProductChainKpi } from "@/lib/store-introduction-kpi";
 import {
   buildStoreIntroductionMatrix,
   type IntroductionMatrixProduct,
@@ -432,6 +432,7 @@ export function StoreIntroductionPanel({
           storeLocations,
         );
       })
+      .filter(shouldShowProductChainKpi)
       .sort((left, right) => {
         const chainCompare = left.chainName.localeCompare(right.chainName, "ja");
         if (chainCompare !== 0) {
@@ -461,7 +462,7 @@ export function StoreIntroductionPanel({
       return matches.find((kpi) => kpi.chainName === selectedRetailChainFilter) ?? matches[0] ?? null;
     }
 
-    return matches[0] ?? null;
+    return aggregateProductChainKpis(matches);
   }, [productChainKpis, selectedProductKey, selectedRetailChainFilter]);
 
   const summary = useMemo(() => {

@@ -1,4 +1,5 @@
 import type { StoreIntroductionFormatKey } from "@/lib/types";
+import { isStoreAllocationIntroductionSheet } from "@/lib/store-allocation-matching";
 import {
   countChainStoreLocations,
   hasOfficialChainStoreMaster,
@@ -91,8 +92,43 @@ export function summarizeProductChainKpis(
     });
 }
 
+export function aggregateProductChainKpis(kpis: ProductChainKpi[]) {
+  if (kpis.length === 0) {
+    return null;
+  }
+
+  if (kpis.length === 1) {
+    return kpis[0];
+  }
+
+  const introducedCount = kpis.reduce((sum, kpi) => sum + kpi.introducedCount, 0);
+  const totalStoreCount = kpis.reduce((sum, kpi) => sum + kpi.totalStoreCount, 0);
+  const hasFullStoreList = kpis.some((kpi) => kpi.hasFullStoreList);
+
+  return {
+    ...kpis[0],
+    introducedCount,
+    totalStoreCount,
+    importTotalStoreCount: totalStoreCount,
+    hasFullStoreList,
+    penetrationRate:
+      hasFullStoreList && totalStoreCount > 0
+        ? Math.round((introducedCount / totalStoreCount) * 1000) / 10
+        : null,
+  };
+}
+
+export function shouldShowProductChainKpi(kpi: ProductChainKpi) {
+  if (kpi.introducedCount > 0) {
+    return true;
+  }
+
+  return kpi.hasFullStoreList && kpi.totalStoreCount >= 5;
+}
+
 export function detectIntroductionChainName(
-  entries: { chainName?: string; matchedStoreName?: string }[],
+  entries: { chainName?: string; matchedStoreName?: string; storeName?: string; storeCode?: string }[],
+  formatKey: StoreIntroductionFormatKey,
   isLoftSeriesSheet: boolean,
   isHandsSeriesSheet = false,
 ): string {
@@ -102,6 +138,10 @@ export function detectIntroductionChainName(
 
   if (isHandsSeriesSheet) {
     return "ハンズ";
+  }
+
+  if (isStoreAllocationIntroductionSheet(formatKey, entries)) {
+    return "@cosme STORE";
   }
 
   const counts = new Map<string, number>();

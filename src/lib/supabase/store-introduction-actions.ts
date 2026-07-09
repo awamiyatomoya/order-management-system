@@ -174,7 +174,12 @@ export async function importStoreIntroductionWorkbook(
     };
   });
 
-  const chainName = detectIntroductionChainName(entries, isLoftSeriesSheet, isHandsSeriesSheet);
+  const chainName = detectIntroductionChainName(
+    entries,
+    parsed.formatKey,
+    isLoftSeriesSheet,
+    isHandsSeriesSheet,
+  );
 
   const importBatch: StoreIntroductionImport = {
     id: importId,

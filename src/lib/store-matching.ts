@@ -1,4 +1,5 @@
 import type { Order, Store, StoreIntroductionFormatKey } from "@/lib/types";
+import { matchStoreAllocationChain } from "@/lib/store-allocation-matching";
 
 export const defaultStoreChains: Store[] = [
   {
@@ -222,6 +223,13 @@ export function getMatchedStoreNameForIntroduction(
 
   if (formatKey === "flag-list" && isLoftSeriesStoreCode(entry.storeCode)) {
     return "ロフト";
+  }
+
+  if (formatKey === "store-allocation-list") {
+    const allocationChain = matchStoreAllocationChain(entry.storeCode, entry.storeName);
+    if (allocationChain) {
+      return allocationChain;
+    }
   }
 
   return getStoreNameFromMemo(entry.storeName, stores);
