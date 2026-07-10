@@ -14,6 +14,7 @@ const VIEW_CONFIG: Record<
   stores: { view: "stores", scope: "stores" },
   "store-introductions": { view: "storeIntroductions", scope: "storeIntroductions" },
   "sell-in": { view: "sellIn", scope: "sellIn" },
+  "sell-out": { view: "sellOut", scope: "sellOut" },
   "order-files": { view: "orderFiles", scope: "orderFiles" },
   history: { view: "history", scope: "history" },
 };

@@ -6,6 +6,17 @@ import {
   type StoreLocationRecord,
 } from "@/lib/store-location-groups";
 
+export function resolveIntroductionFormatKey(
+  formatKey: StoreIntroductionFormatKey,
+  fileName: string,
+): StoreIntroductionFormatKey {
+  if (formatKey === "row-list" && /住所録/.test(fileName)) {
+    return "promotional-address-list";
+  }
+
+  return formatKey;
+}
+
 export type ProductChainKpi = {
   jan: string;
   productName: string;
@@ -60,7 +71,9 @@ export function summarizeProductChainKpis(
       const hasImportStoreList =
         (formatKey === "flag-list" ||
           formatKey === "hands-allocation-list" ||
-          formatKey === "store-allocation-list") &&
+          formatKey === "store-allocation-list" ||
+          formatKey === "promotional-address-list" ||
+          formatKey === "ainz-shipment-list") &&
         importTotalStoreCount >= 5;
 
       return {
@@ -102,20 +115,39 @@ export function aggregateProductChainKpis(kpis: ProductChainKpi[]) {
   }
 
   const introducedCount = kpis.reduce((sum, kpi) => sum + kpi.introducedCount, 0);
-  const totalStoreCount = kpis.reduce((sum, kpi) => sum + kpi.totalStoreCount, 0);
-  const hasFullStoreList = kpis.some((kpi) => kpi.hasFullStoreList);
+  const totalStoreCount = sumUniqueChainTotalStores(kpis);
+  const hasFullStoreList = totalStoreCount > 0;
 
   return {
     ...kpis[0],
     introducedCount,
     totalStoreCount,
     importTotalStoreCount: totalStoreCount,
+    masterStoreCount: null,
+    storeCountMismatch: false,
     hasFullStoreList,
     penetrationRate:
       hasFullStoreList && totalStoreCount > 0
         ? Math.round((introducedCount / totalStoreCount) * 1000) / 10
         : null,
   };
+}
+
+export function sumUniqueChainTotalStores(kpis: ProductChainKpi[]) {
+  const byChain = new Map<string, number>();
+
+  kpis.forEach((kpi) => {
+    if (!kpi.hasFullStoreList || kpi.totalStoreCount <= 0) {
+      return;
+    }
+
+    const current = byChain.get(kpi.chainName);
+    if (current === undefined || kpi.totalStoreCount > current) {
+      byChain.set(kpi.chainName, kpi.totalStoreCount);
+    }
+  });
+
+  return Array.from(byChain.values()).reduce((sum, count) => sum + count, 0);
 }
 
 export function shouldShowProductChainKpi(kpi: ProductChainKpi) {
@@ -131,6 +163,7 @@ export function detectIntroductionChainName(
   formatKey: StoreIntroductionFormatKey,
   isLoftSeriesSheet: boolean,
   isHandsSeriesSheet = false,
+  isAinzSeriesSheet = false,
 ): string {
   if (isLoftSeriesSheet) {
     return "ロフト";
@@ -138,6 +171,10 @@ export function detectIntroductionChainName(
 
   if (isHandsSeriesSheet) {
     return "ハンズ";
+  }
+
+  if (isAinzSeriesSheet) {
+    return "アインズ";
   }
 
   if (isStoreAllocationIntroductionSheet(formatKey, entries)) {

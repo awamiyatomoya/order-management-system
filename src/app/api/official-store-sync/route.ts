@@ -1,22 +1,14 @@
+import { parseOfficialStoreChainName } from "@/lib/official-chain-store-masters";
 import {
   applyOfficialChainStoreSync,
   previewOfficialChainStoreSync,
-  type OfficialStoreChainName,
 } from "@/lib/supabase/store-location-actions";
 
 export const maxDuration = 60;
 export const dynamic = "force-dynamic";
 
-function parseChainName(value: string | null): OfficialStoreChainName | null {
-  if (value === "ハンズ" || value === "ロフト" || value === "@cosme STORE") {
-    return value;
-  }
-
-  return null;
-}
-
 export async function GET(request: Request) {
-  const chainName = parseChainName(new URL(request.url).searchParams.get("chain"));
+  const chainName = parseOfficialStoreChainName(new URL(request.url).searchParams.get("chain"));
 
   if (!chainName) {
     return Response.json({ ok: false, message: "チェーン名が不正です。" }, { status: 400 });
@@ -38,7 +30,7 @@ export async function POST(request: Request) {
     body = {};
   }
 
-  const chainName = parseChainName(body.chain ?? null);
+  const chainName = parseOfficialStoreChainName(body.chain ?? null);
 
   if (!chainName) {
     return Response.json({ ok: false, message: "チェーン名が不正です。" }, { status: 400 });

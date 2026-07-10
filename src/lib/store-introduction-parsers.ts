@@ -1,4 +1,9 @@
 import * as XLSX from "xlsx";
+import {
+  buildStoreNameMatchKeys,
+  normalizeStoreLocationName,
+  type StoreLocation,
+} from "@/lib/store-location-matching";
 import type { StoreIntroductionFormatKey } from "@/lib/types";
 
 export type ParsedStoreIntroductionEntry = {
@@ -18,7 +23,9 @@ export type ParsedStoreIntroduction = {
 };
 
 const janPattern = /\d{13}/;
-const addressBookSheetNamePattern = /販促物|送付先|店舗住所|店舗マスタ/;
+const addressBookSheetNamePattern = /販促物|送付先|店舗住所|店舗マスタ|アインズ|ｱｲﾝｽﾞ/;
+const skippedIntroductionSheetNamePattern =
+  /^(設定|発注サイクル|取引先|商品マスタ|切替マスタ|JAN指定|Shop|目標|CSV|EDI|②)/;
 
 export function parseStoreIntroductionWorkbook(buffer: ArrayBuffer): ParsedStoreIntroduction {
   const workbook = XLSX.read(buffer, { type: "array", cellDates: true });
@@ -36,10 +43,25 @@ export function parseStoreIntroductionWorkbook(buffer: ArrayBuffer): ParsedStore
       continue;
     }
 
+    if (
+      skippedIntroductionSheetNamePattern.test(sheetName.trim()) &&
+      !sheetMentionsAinzShipmentList(sheet)
+    ) {
+      continue;
+    }
+
     const handsAllocation = tryParseHandsAllocationListSheet(sheet);
     if (handsAllocation.entries.length > 0) {
       formatKey = formatKey ?? "hands-allocation-list";
       allEntries.push(...handsAllocation.entries);
+      parsedSheetCount += 1;
+      continue;
+    }
+
+    const ainzShipment = tryParseAinzShipmentListSheet(sheet, workbook);
+    if (ainzShipment.entries.length > 0) {
+      formatKey = formatKey ?? "ainz-shipment-list";
+      allEntries.push(...ainzShipment.entries);
       parsedSheetCount += 1;
       continue;
     }
@@ -65,12 +87,21 @@ export function parseStoreIntroductionWorkbook(buffer: ArrayBuffer): ParsedStore
       formatKey = formatKey ?? "row-list";
       allEntries.push(...rowList.entries);
       parsedSheetCount += 1;
+      continue;
+    }
+
+    const promotionalAddressList = tryParsePromotionalAddressListSheet(sheet);
+    if (promotionalAddressList.entries.length > 0) {
+      formatKey = formatKey ?? "promotional-address-list";
+      allEntries.push(...promotionalAddressList.entries);
+      parsedSheetCount += 1;
+      continue;
     }
   }
 
   if (allEntries.length === 0) {
     throw new Error(
-      "導入店舗シートを読み取れませんでした。フェーズ1対応形式（店舗一覧表・0/1フラグ表・ハンズ按分表・店舗割振表）か確認してください。",
+      "導入店舗シートを読み取れませんでした。フェーズ1対応形式（店舗一覧表・0/1フラグ表・ハンズ按分表・店舗割振表・住所録・アインズ送り込みリスト）か確認してください。",
     );
   }
 
@@ -254,6 +285,590 @@ function tryParseRowListSheet(sheet: XLSX.WorkSheet): ParsedStoreIntroduction {
     entries: dedupeEntries(entries),
     sheetCount: 0,
   };
+}
+
+function tryParsePromotionalAddressListSheet(sheet: XLSX.WorkSheet): ParsedStoreIntroduction {
+  const rows = sheetToRows(sheet);
+  const headerIndex = rows.findIndex((row) => {
+    const normalized = row.map(normalizeHeaderCell);
+    return (
+      normalized.some((cell) => ["各店コード", "店舗コード", "店コード"].includes(cell)) &&
+      normalized.some((cell) =>
+        ["送り先名称①", "送り先名称1", "送り先名称", "店舗名", "店名"].includes(cell),
+      ) &&
+      normalized.some((cell) => ["住所①", "住所1", "住所"].includes(cell))
+    );
+  });
+
+  if (headerIndex === -1 || looksLikeFlagListSheet(rows)) {
+    return { formatKey: "row-list", entries: [], sheetCount: 0 };
+  }
+
+  const header = rows[headerIndex].map(normalizeHeaderCell);
+  const storeCodeIndex = findColumnIndex(header, ["各店コード", "店舗コード", "店コード", "回答店番", "店番"]);
+  const storeNameIndex = findColumnIndex(header, [
+    "送り先名称①",
+    "送り先名称1",
+    "送り先名称",
+    "店舗名",
+    "店名",
+  ]);
+  const postalCodeIndex = findColumnIndex(header, ["郵便番号"]);
+  const addressIndex = findColumnIndex(header, ["住所①", "住所1", "住所"]);
+  const quantityIndex = findColumnIndex(header, ["個数"]);
+  const unitCountIndex = findColumnIndex(header, ["台数"]);
+  const panelIndex = findColumnIndex(header, ["パネル"]);
+  const metadata = findPromotionalAddressMetadata(rows.slice(0, headerIndex));
+  const entries: ParsedStoreIntroductionEntry[] = [];
+
+  for (const row of rows.slice(headerIndex + 1)) {
+    const storeName = stringCell(row[storeNameIndex]);
+    const storeCode = stringCell(row[storeCodeIndex]);
+
+    if (!storeName) {
+      continue;
+    }
+
+    entries.push({
+      jan: metadata.jan || "UNKNOWN",
+      productName: metadata.productName,
+      storeName,
+      storeCode,
+      address: stringCell(row[addressIndex]),
+      postalCode: normalizePostalCode(stringCell(row[postalCodeIndex])),
+      isIntroduced: isPromotionalAddressIntroduced(row, {
+        quantityIndex,
+        unitCountIndex,
+        panelIndex,
+      }),
+    });
+  }
+
+  if (entries.length < 5) {
+    return { formatKey: "row-list", entries: [], sheetCount: 0 };
+  }
+
+  return {
+    formatKey: "promotional-address-list",
+    entries: dedupeEntries(entries),
+    sheetCount: 0,
+  };
+}
+
+function isAinzShipmentIntroduced(row: unknown[]) {
+  return isPositiveAllocation(row[4]);
+}
+
+function toAinzShipmentStoreCode(storeCode: string) {
+  const normalized = storeCode.trim();
+  if (/^10\d{3,4}$/.test(normalized)) {
+    return normalized;
+  }
+
+  const shortCode = String(Number(normalized.replace(/\D/g, "") || normalized));
+  if (!shortCode || shortCode === "NaN") {
+    return normalized;
+  }
+
+  return `10${shortCode.padStart(3, "0")}`;
+}
+
+function isAinzShipmentStoreRow(storeCode: string, storeName: string) {
+  if (!/^10\d{3,4}$/.test(storeCode)) {
+    return false;
+  }
+
+  if (!storeName || storeName.includes("全店")) {
+    return false;
+  }
+
+  if (/^関東\d+$/.test(storeName) || /^九州\d+$/.test(storeName)) {
+    return false;
+  }
+
+  if (/^新店/.test(storeName)) {
+    return false;
+  }
+
+  if (storeName === "札幌センター" || storeName === "関東センター") {
+    return false;
+  }
+
+  if (/^アイン薬局/.test(storeName)) {
+    return false;
+  }
+
+  return true;
+}
+
+function buildAinzShipmentStatusMap(rows: unknown[][]) {
+  const storeHeaderIndex = findAinzShipmentStoreHeaderIndex(rows);
+  const statusMap = new Map<string, { isIntroduced: boolean; storeName: string }>();
+  let sawStoreRow = false;
+
+  for (const row of rows.slice(storeHeaderIndex + 1)) {
+    const storeCode = stringCell(row[1]);
+    const storeName = stringCell(row[2]);
+
+    if (!storeCode && !storeName) {
+      if (sawStoreRow) {
+        break;
+      }
+      continue;
+    }
+
+    if (!isAinzShipmentStoreRow(storeCode, storeName)) {
+      continue;
+    }
+
+    sawStoreRow = true;
+    const shipmentStatus = {
+      isIntroduced: isAinzShipmentIntroduced(row),
+      storeName,
+    };
+
+    buildAinzStoreCodeAliases(storeCode).forEach((alias) => {
+      statusMap.set(alias, shipmentStatus);
+    });
+  }
+
+  return statusMap;
+}
+
+function registerAinzIntroductionStatus(
+  statusByCode: Map<string, { isIntroduced: boolean; storeName: string }>,
+  statusByName: Map<string, { isIntroduced: boolean; storeName: string }>,
+  storeCode: string,
+  storeName: string,
+  status: { isIntroduced: boolean; storeName: string },
+  addressBook?: Map<string, PromotionalAddressEntry>,
+) {
+  buildAinzStoreCodeAliases(storeCode).forEach((alias) => {
+    statusByCode.set(alias, status);
+  });
+
+  buildStoreNameMatchKeys(storeName).forEach((key) => {
+    statusByName.set(key, status);
+  });
+
+  if (!addressBook) {
+    return;
+  }
+
+  const addressEntry = lookupAinzAddressBookEntry(storeCode, addressBook);
+  if (addressEntry) {
+    buildStoreNameMatchKeys(addressEntry.storeName).forEach((key) => {
+      statusByName.set(key, status);
+    });
+  }
+}
+
+function lookupAinzShipmentStatus(
+  storeCode: string,
+  statusMap: Map<string, { isIntroduced: boolean; storeName: string }>,
+) {
+  for (const alias of buildAinzStoreCodeAliases(storeCode)) {
+    const status = statusMap.get(alias);
+    if (status) {
+      return status;
+    }
+  }
+
+  return undefined;
+}
+
+export function mergeAinzIntroductionEntriesWithStoreMaster(
+  entries: ParsedStoreIntroductionEntry[],
+  locations: Array<
+    Pick<StoreLocation, "storeCode" | "storeName" | "postalCode" | "address"> & {
+      chainName?: string;
+    }
+  >,
+  addressBook?: Map<string, PromotionalAddressEntry>,
+) {
+  const ainzLocations = locations.filter((location) => location.storeCode.startsWith("ainz-"));
+
+  if (ainzLocations.length < 5) {
+    return entries;
+  }
+
+  const statusByCode = new Map<string, { isIntroduced: boolean; storeName: string }>();
+  const statusByName = new Map<string, { isIntroduced: boolean; storeName: string }>();
+
+  entries.forEach((entry) => {
+    if (!isAinzShipmentStoreRow(entry.storeCode, entry.storeName)) {
+      return;
+    }
+
+    const status = {
+      isIntroduced: entry.isIntroduced,
+      storeName: entry.storeName,
+    };
+
+    registerAinzIntroductionStatus(
+      statusByCode,
+      statusByName,
+      entry.storeCode,
+      entry.storeName,
+      status,
+      addressBook,
+    );
+  });
+
+  const metadata = {
+    jan: entries[0]?.jan ?? "",
+    productName: entries[0]?.productName ?? "",
+  };
+
+  const merged = ainzLocations.map((location) => {
+    const shipmentStatus = lookupAinzIntroductionStatusForOfficialStore(
+      location,
+      statusByCode,
+      statusByName,
+    );
+
+    return {
+      jan: metadata.jan,
+      productName: metadata.productName,
+      storeName: location.storeName,
+      storeCode: location.storeCode,
+      address: location.address,
+      postalCode: location.postalCode || extractPostalCodeFromAddress(location.address),
+      isIntroduced: shipmentStatus?.isIntroduced ?? false,
+    };
+  });
+
+  return dedupeEntries(merged);
+}
+
+function lookupAinzIntroductionStatusForOfficialStore(
+  location: Pick<StoreLocation, "storeCode" | "storeName">,
+  statusByCode: Map<string, { isIntroduced: boolean; storeName: string }>,
+  statusByName: Map<string, { isIntroduced: boolean; storeName: string }>,
+) {
+  const byCode = lookupAinzShipmentStatus(location.storeCode, statusByCode);
+  if (byCode) {
+    return byCode;
+  }
+
+  return lookupAinzIntroductionStatusByName(location.storeName, statusByName);
+}
+
+function lookupAinzIntroductionStatusByName(
+  storeName: string,
+  statusByName: Map<string, { isIntroduced: boolean; storeName: string }>,
+) {
+  for (const key of buildStoreNameMatchKeys(storeName)) {
+    const status = statusByName.get(key);
+    if (status) {
+      return status;
+    }
+  }
+
+  const normalizedTarget = normalizeStoreLocationName(storeName);
+  if (!normalizedTarget) {
+    return undefined;
+  }
+
+  for (const [key, status] of statusByName.entries()) {
+    if (
+      normalizedTarget.includes(key) ||
+      key.includes(normalizedTarget) ||
+      normalizedTarget.endsWith(key) ||
+      key.endsWith(normalizedTarget)
+    ) {
+      return status;
+    }
+  }
+
+  return undefined;
+}
+
+function tryParseAinzShipmentListSheet(
+  sheet: XLSX.WorkSheet,
+  workbook: XLSX.WorkBook,
+): ParsedStoreIntroduction {
+  const rows = sheetToRows(sheet);
+
+  if (!looksLikeAinzShipmentListSheet(rows)) {
+    return { formatKey: "ainz-shipment-list", entries: [], sheetCount: 0 };
+  }
+
+  const metadata = findAinzShipmentMetadata(rows);
+  if (!metadata.jan) {
+    return { formatKey: "ainz-shipment-list", entries: [], sheetCount: 0 };
+  }
+
+  const addressBook = loadAinzAddressBook(workbook);
+  const statusMap = buildAinzShipmentStatusMap(rows);
+
+  const storeHeaderIndex = findAinzShipmentStoreHeaderIndex(rows);
+  const entries: ParsedStoreIntroductionEntry[] = [];
+  let sawStoreRow = false;
+
+  for (const row of rows.slice(storeHeaderIndex + 1)) {
+    const storeCode = stringCell(row[1]);
+    const storeName = stringCell(row[2]);
+
+    if (!storeCode && !storeName) {
+      if (sawStoreRow) {
+        break;
+      }
+      continue;
+    }
+
+    if (!isAinzShipmentStoreRow(storeCode, storeName)) {
+      continue;
+    }
+
+    sawStoreRow = true;
+
+    const addressEntry = lookupAinzAddressBookEntry(storeCode, addressBook);
+    const shipmentStatus = lookupAinzShipmentStatus(storeCode, statusMap);
+
+    entries.push({
+      jan: metadata.jan,
+      productName: metadata.productName,
+      storeName: addressEntry?.storeName || storeName,
+      storeCode,
+      address: "",
+      postalCode: "",
+      isIntroduced: shipmentStatus?.isIntroduced ?? isAinzShipmentIntroduced(row),
+    });
+  }
+
+  if (entries.length < 5) {
+    return { formatKey: "ainz-shipment-list", entries: [], sheetCount: 0 };
+  }
+
+  return {
+    formatKey: "ainz-shipment-list",
+    entries: dedupeEntries(entries),
+    sheetCount: 0,
+  };
+}
+
+function looksLikeAinzShipmentListSheet(rows: unknown[][]) {
+  const hasTitle = rows.some((row) => row.some((cell) => stringCell(cell).includes("本部送り込みリスト")));
+  const metadata = findAinzShipmentMetadata(rows);
+
+  return hasTitle && Boolean(metadata.jan);
+}
+
+function findAinzShipmentMetadata(rows: unknown[][]) {
+  let jan = "";
+  let productName = "";
+
+  for (const row of rows.slice(0, 20)) {
+    const normalized = row.map(normalizeHeaderCell);
+    const janLabelIndex = normalized.findIndex((cell) => cell === "jan" || cell === "ｊａｎ");
+    if (janLabelIndex >= 0) {
+      const candidateJan = extractJan(row[janLabelIndex + 1] ?? row[4]);
+      if (candidateJan) {
+        jan = candidateJan;
+      }
+    }
+
+    const codeLabel = normalizeHeaderCell(row[1]);
+    const nameLabel = normalizeHeaderCell(row[2]);
+    const productLabel = normalizeHeaderCell(row[3]);
+    if (
+      (codeLabel === "コ-ド" || codeLabel === "コード" || codeLabel.includes("コード")) &&
+      (nameLabel === "名" || nameLabel === "店名") &&
+      productLabel.includes("商品名")
+    ) {
+      const candidateProductName = stringCell(row[4]);
+      if (candidateProductName && candidateProductName !== "バーコード") {
+        productName = candidateProductName;
+      }
+    }
+  }
+
+  return { jan, productName };
+}
+
+function findAinzShipmentStoreHeaderIndex(rows: unknown[][]) {
+  const index = rows.findIndex((row) => {
+    const codeLabel = normalizeHeaderCell(row[1]);
+    const nameLabel = normalizeHeaderCell(row[2]);
+    return (
+      (codeLabel === "コ-ド" || codeLabel === "コード" || codeLabel.includes("コード")) &&
+      (nameLabel === "名" || nameLabel === "店名")
+    );
+  });
+
+  return index >= 0 ? index : 13;
+}
+
+export function buildAinzStoreCodeAliases(storeCode: string) {
+  const normalized = storeCode.trim();
+  const aliases = new Set<string>([normalized]);
+
+  if (/^10\d{3,4}$/.test(normalized)) {
+    aliases.add(String(Number(normalized.slice(1))));
+  }
+
+  if (/^\d{1,4}$/.test(normalized)) {
+    aliases.add(`10${normalized.padStart(3, "0")}`);
+  }
+
+  return Array.from(aliases);
+}
+
+function toAinzAddressStoreCode(shipmentStoreCode: string) {
+  const normalized = shipmentStoreCode.trim();
+  if (/^10\d{3,4}$/.test(normalized)) {
+    return String(Number(normalized.slice(1)));
+  }
+
+  return normalized;
+}
+
+function loadAinzAddressBook(workbook: XLSX.WorkBook) {
+  const map = new Map<string, PromotionalAddressEntry>();
+
+  for (const sheetName of workbook.SheetNames) {
+    const sheet = workbook.Sheets[sheetName];
+    if (!sheet) {
+      continue;
+    }
+
+    const rows = sheetToRows(sheet);
+    const hasAinzHeader = rows.some((row) =>
+      row
+        .map(normalizeHeaderCell)
+        .some((cell) => cell === "販売店様名" || cell.includes("販売店様名")),
+    );
+
+    if (!hasAinzHeader && !/アインズ|ｱｲﾝｽﾞ/.test(sheetName)) {
+      continue;
+    }
+
+    parseAddressBookRows(rows).forEach((entry) => {
+      map.set(entry.storeCode, entry);
+      buildAinzStoreCodeAliases(entry.storeCode).forEach((alias) => {
+        if (!map.has(alias)) {
+          map.set(alias, entry);
+        }
+      });
+    });
+  }
+
+  return map;
+}
+
+export function loadAinzAddressBookFromBuffer(buffer: ArrayBuffer) {
+  const workbook = XLSX.read(buffer, { type: "array", cellDates: true });
+  return loadAinzAddressBook(workbook);
+}
+
+function lookupAinzAddressBookEntry(
+  storeCode: string,
+  addressBook: Map<string, PromotionalAddressEntry>,
+) {
+  for (const alias of buildAinzStoreCodeAliases(storeCode)) {
+    const entry = addressBook.get(alias);
+    if (entry) {
+      return entry;
+    }
+  }
+
+  const shortCode = toAinzAddressStoreCode(storeCode);
+  return addressBook.get(shortCode) ?? addressBook.get(storeCode);
+}
+
+function extractPostalCodeFromAddress(address: string) {
+  const match = address.trim().match(/^(\d{3}-\d{4}|\d{7})\b/);
+  if (!match) {
+    return "";
+  }
+
+  return normalizePostalCode(match[1]);
+}
+
+export function countWorkbookAddressBookEntries(buffer: ArrayBuffer) {
+  const workbook = XLSX.read(buffer, { type: "array", cellDates: true });
+  return buildPromotionalAddressBook(workbook).size;
+}
+
+function findPromotionalAddressMetadata(rows: unknown[][]) {
+  let bestProductName = "";
+  let bestProductScore = Number.NEGATIVE_INFINITY;
+
+  for (const row of rows) {
+    for (const cell of row) {
+      const text = stringCell(cell);
+      if (!text) {
+        continue;
+      }
+
+      if (!/エシエンス|ダーマ|esience|cxaz/i.test(text)) {
+        continue;
+      }
+
+      const score = scorePromotionalAddressProductName(text);
+      if (score > bestProductScore) {
+        bestProductScore = score;
+        bestProductName = text.replace(/^★/, "").trim();
+      }
+    }
+  }
+
+  const jan = rows.flatMap((row) => row.map((cell) => extractJan(cell))).find(Boolean) ?? "";
+
+  return {
+    jan,
+    productName: bestProductName || "販促物",
+  };
+}
+
+function scorePromotionalAddressProductName(productName: string) {
+  let score = scoreWorkbookProductRow(productName);
+
+  const normalized = normalizeProductMatchText(productName);
+  if (/パネル|w600|沢尻/.test(normalized)) {
+    score -= 120;
+  }
+
+  if (/什器|販促物|依頼/.test(normalized)) {
+    score -= 40;
+  }
+
+  if (normalized.includes("ダーマインショット") || normalized.includes("ダーマショット")) {
+    score += 80;
+  }
+
+  return score;
+}
+
+function isPromotionalAddressIntroduced(
+  row: unknown[],
+  indexes: { quantityIndex: number; unitCountIndex: number; panelIndex: number },
+) {
+  const panel = stringCell(row[indexes.panelIndex]);
+  if (panel.includes("●")) {
+    return true;
+  }
+
+  if (isPositiveAllocation(row[indexes.quantityIndex])) {
+    return true;
+  }
+
+  const unitCount = stringCell(row[indexes.unitCountIndex]).replace(/[　\s]/g, "");
+  if (unitCount && /\d/.test(unitCount) && !/^0/.test(unitCount)) {
+    return true;
+  }
+
+  return false;
+}
+
+function normalizePostalCode(value: string) {
+  const digits = value.replace(/\D/g, "");
+  if (digits.length === 7) {
+    return `${digits.slice(0, 3)}-${digits.slice(3)}`;
+  }
+
+  return value.trim();
 }
 
 function tryParseStoreAllocationListSheet(
@@ -561,19 +1176,55 @@ function loadPromotionalAddressBook(workbook: XLSX.WorkBook) {
 }
 
 function parseAddressBookRows(rows: unknown[][]) {
+  const ainzHeaderIndex = rows.findIndex((row) => {
+    const normalized = row.map(normalizeHeaderCell);
+    return (
+      normalized.some((cell) => cell === "販売店様名" || cell.includes("販売店様名")) &&
+      normalized.some((cell) => ["住所", "住所1", "住所①"].includes(cell))
+    );
+  });
+
+  if (ainzHeaderIndex >= 0) {
+    const header = rows[ainzHeaderIndex].map(normalizeHeaderCell);
+    const storeNameIndex = findColumnIndex(header, ["販売店様名", "店舗名", "店名"]);
+    const addressIndex = findColumnIndex(header, ["住所", "住所1", "住所①"]);
+    const telIndex = findColumnIndex(header, ["tel", "電話", "電話番号"]);
+
+    return rows
+      .slice(ainzHeaderIndex + 1)
+      .map((row) => {
+        const storeCode = stringCell(row[0]);
+        const storeName = stringCell(row[storeNameIndex]);
+        const addressText = stringCell(row[addressIndex]);
+
+        if (!storeName || storeName === "販売店様名" || !looksLikeStoreAddress(addressText)) {
+          return null;
+        }
+
+        return {
+          storeCode,
+          storeName,
+          postalCode: extractPostalCodeFromAddress(addressText),
+          address: addressText,
+          tel: stringCell(row[telIndex]),
+        };
+      })
+      .filter((entry): entry is PromotionalAddressEntry => Boolean(entry));
+  }
+
   const headerIndex = rows.findIndex((row) => {
     const normalized = row.map(normalizeHeaderCell);
     return (
-      normalized.some((cell) => ["店舗コード", "店コード", "回答店番", "店番"].includes(cell)) &&
-      normalized.some((cell) => ["店名", "店舗名"].includes(cell)) &&
+      normalized.some((cell) => ["店舗コード", "店コード", "回答店番", "店番", "各店コード"].includes(cell)) &&
+      normalized.some((cell) => ["店名", "店舗名", "送り先名称①", "送り先名称1", "送り先名称"].includes(cell)) &&
       normalized.some((cell) => ["住所", "住所1", "住所①"].includes(cell))
     );
   });
 
   if (headerIndex >= 0) {
     const header = rows[headerIndex].map(normalizeHeaderCell);
-    const storeCodeIndex = findColumnIndex(header, ["店舗コード", "店コード", "回答店番", "店番"]);
-    const storeNameIndex = findColumnIndex(header, ["店名", "店舗名"]);
+    const storeCodeIndex = findColumnIndex(header, ["店舗コード", "店コード", "回答店番", "店番", "各店コード"]);
+    const storeNameIndex = findColumnIndex(header, ["店名", "店舗名", "送り先名称①", "送り先名称1", "送り先名称"]);
     const postalCodeIndex = findColumnIndex(header, ["郵便番号"]);
     const addressIndex = findColumnIndex(header, ["住所", "住所1", "住所①"]);
     const telIndex = findColumnIndex(header, ["tel", "電話", "電話番号"]);
@@ -818,8 +1469,9 @@ export function resolveIntroductionProduct(
 ) {
   const clientProducts = products.filter((product) => product.clientId === clientId);
 
-  if (parsedJan) {
-    const janMatch = clientProducts.find((product) => product.jan === parsedJan);
+  const normalizedJan = parsedJan.trim();
+  if (normalizedJan && normalizedJan !== "UNKNOWN") {
+    const janMatch = clientProducts.find((product) => product.jan === normalizedJan);
     if (janMatch) {
       const excelName = productName.trim();
       if (excelName && shouldPreferExcelProductName(excelName, janMatch.name)) {
@@ -836,12 +1488,15 @@ export function resolveIntroductionProduct(
     }
   }
 
-  const normalizedExcel = normalizeProductMatchText(productName);
+  const normalizedExcel = normalizeDermaProductAlias(productName);
 
   const matchedProduct = clientProducts
     .map((product) => ({
       product,
-      score: getIntroductionProductMatchScore(normalizedExcel, normalizeProductMatchText(product.name)),
+      score: getIntroductionProductMatchScore(
+        normalizedExcel,
+        normalizeDermaProductAlias(normalizeProductMatchText(getProductMasterDisplayName(product))),
+      ),
     }))
     .filter((match) => match.score > 0)
     .sort((a, b) => b.score - a.score)[0]?.product;
@@ -934,6 +1589,43 @@ export function buildIntroductionProductKey(
   return normalized ? `name:${normalized}` : `jan:${jan}`;
 }
 
+function normalizeDermaProductAlias(value: string) {
+  return normalizeProductMatchText(value)
+    .replace(/ダマショット/g, "ダマインショット")
+    .replace(/ダーマショット/g, "ダーマインショット");
+}
+
+function findIntroductionProductByFamily(
+  productName: string,
+  clientProducts: IntroductionProductCandidate[],
+) {
+  if (!belongsToIntroductionProductFamily(productName)) {
+    return undefined;
+  }
+
+  const dermaProducts = clientProducts.filter((candidate) =>
+    belongsToIntroductionProductFamily(getProductMasterDisplayName(candidate)),
+  );
+
+  if (dermaProducts.length === 1) {
+    return dermaProducts[0];
+  }
+
+  const normalizedExcel = normalizeDermaProductAlias(productName);
+  const scored = dermaProducts
+    .map((product) => ({
+      product,
+      score: getIntroductionProductMatchScore(
+        normalizedExcel,
+        normalizeDermaProductAlias(getProductMasterDisplayName(product)),
+      ),
+    }))
+    .filter((match) => match.score > 0)
+    .sort((left, right) => right.score - left.score);
+
+  return scored[0]?.product;
+}
+
 export function resolveIntroductionDisplayProduct(
   parsedJan: string,
   productName: string,
@@ -945,7 +1637,13 @@ export function resolveIntroductionDisplayProduct(
 
   let matched =
     clientProducts.find((product) => product.jan === resolved.jan) ??
-    (parsedJan ? clientProducts.find((product) => product.jan === parsedJan) : undefined);
+    (parsedJan && parsedJan !== "UNKNOWN"
+      ? clientProducts.find((product) => product.jan === parsedJan)
+      : undefined);
+
+  if (!matched && (!parsedJan || parsedJan === "UNKNOWN")) {
+    matched = findIntroductionProductByFamily(productName, clientProducts);
+  }
 
   if (matched) {
     const canonical = findIntroductionCanonicalProduct(matched, clientProducts);
@@ -980,7 +1678,11 @@ function getIntroductionProductMatchScore(excelName: string, masterName: string)
     return Math.min(excelName.length, masterName.length) + 100;
   }
 
-  if (masterName.includes("ダーマインショット") && excelName.includes("ダーマインショット")) {
+  if (
+    (masterName.includes("ダマインショット") && excelName.includes("ダマインショット")) ||
+    (masterName.includes("ダマインショット") && excelName.includes("ダマショット")) ||
+    (masterName.includes("ダマショット") && excelName.includes("ダマインショット"))
+  ) {
     return 500;
   }
 
@@ -1029,6 +1731,28 @@ function findWorkbookProductName(workbook: XLSX.WorkBook) {
   return "";
 }
 
+function sheetMentionsAinzShipmentList(sheet: XLSX.WorkSheet) {
+  const ref = sheet["!ref"];
+  if (!ref) {
+    return false;
+  }
+
+  const range = XLSX.utils.decode_range(ref);
+  const maxRow = Math.min(range.s.r + 8, range.e.r);
+  const maxColumn = Math.min(range.s.c + 8, range.e.c);
+
+  for (let rowIndex = range.s.r; rowIndex <= maxRow; rowIndex += 1) {
+    for (let columnIndex = range.s.c; columnIndex <= maxColumn; columnIndex += 1) {
+      const address = XLSX.utils.encode_cell({ r: rowIndex, c: columnIndex });
+      if (stringCell(sheet[address]?.v).includes("本部送り込みリスト")) {
+        return true;
+      }
+    }
+  }
+
+  return false;
+}
+
 function sheetToRows(sheet: XLSX.WorkSheet) {
   const ref = sheet["!ref"];
   if (!ref) {
@@ -1061,9 +1785,11 @@ function sheetToRows(sheet: XLSX.WorkSheet) {
 
 function normalizeHeaderCell(value: unknown) {
   return stringCell(value)
+    .normalize("NFKC")
     .toLowerCase()
     .replace(/\s+/g, "")
-    .replace(/[()（）]/g, "");
+    .replace(/[()（）]/g, "")
+    .replace(/[ｰ\-ー‐－]/g, "-");
 }
 
 function findColumnIndex(header: string[], candidates: string[]) {

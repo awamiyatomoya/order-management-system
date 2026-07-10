@@ -16,6 +16,8 @@ import type {
   Store,
   StoreIntroductionEntry,
   StoreIntroductionImport,
+  SelloutEntry,
+  SelloutImport,
   Supplier,
 } from "@/lib/types";
 import type { StoreLocationRecord } from "@/lib/store-location-groups";
@@ -48,6 +50,7 @@ export type OrderWorkbenchDataScope =
   | "orderFiles"
   | "payouts"
   | "sellIn"
+  | "sellOut"
   | "history"
   | "storeIntroductions";
 
@@ -63,6 +66,8 @@ export type OrderWorkbenchInitialData = {
   storeLocations: StoreLocationRecord[];
   storeIntroductionImports: StoreIntroductionImport[];
   storeIntroductionEntries: StoreIntroductionEntry[];
+  selloutImports: SelloutImport[];
+  selloutEntries: SelloutEntry[];
   deletionLogs: DeletionLog[];
   source: "supabase" | "error";
   message: string;
@@ -244,6 +249,8 @@ export async function getOrderWorkbenchInitialData(
       storeLocations,
       storeIntroductionImports: [],
       storeIntroductionEntries: [],
+      selloutImports: [],
+      selloutEntries: [],
       deletionLogs,
       source: "supabase",
       message: "Supabaseから読み取ったデータを表示しています。保存処理はまだ仮実装です。",
@@ -264,6 +271,7 @@ function getDataRequirements(scope: OrderWorkbenchDataScope) {
       scope === "orders" ||
       scope === "products" ||
       scope === "sellIn" ||
+      scope === "sellOut" ||
       scope === "payouts" ||
       scope === "history" ||
       scope === "storeIntroductions",
@@ -289,6 +297,8 @@ function getEmptyInitialData(message: string): OrderWorkbenchInitialData {
     storeLocations: [],
     storeIntroductionImports: [],
     storeIntroductionEntries: [],
+    selloutImports: [],
+    selloutEntries: [],
     deletionLogs: [],
     source: "error",
     message,

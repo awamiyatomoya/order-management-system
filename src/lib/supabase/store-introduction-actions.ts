@@ -9,17 +9,21 @@ import {
   resolveIntroductionProduct,
   summarizeStoreIntroduction,
   unifyIntroductionBatchProduct,
+  countWorkbookAddressBookEntries,
+  mergeAinzIntroductionEntriesWithStoreMaster,
+  loadAinzAddressBookFromBuffer,
 } from "@/lib/store-introduction-parsers";
 import {
   detectIntroductionChainName,
 } from "@/lib/store-introduction-kpi";
 import {
-  ensureAtCosmeStoreLocationsFromOfficialSite,
-  ensureHandsStoreLocationsFromOfficialSite,
-  ensureLoftStoreLocationsFromOfficialSite,
+  ensureAinzStoreLocationsFromOfficialSite,
+  ensureOfficialChainStoreLocationsFromOfficialSite,
   readStoreLocationRecords,
   upsertStoreLocationRecords,
 } from "@/lib/supabase/store-location-actions";
+import { hasOfficialChainStoreMaster } from "@/lib/official-chain-store-masters";
+import type { OfficialStoreChainName } from "@/lib/official-chain-store-masters";
 import {
   buildStoreLocationLookup,
   resolveStoreLocationAddress,
@@ -29,6 +33,7 @@ import {
 import {
   getMatchedStoreNameForIntroduction,
   isAtCosmeSeriesIntroductionSheet,
+  isAinzSeriesIntroductionSheet,
   isHandsSeriesIntroductionSheet,
   isLoftSeriesIntroductionSheet,
 } from "@/lib/store-matching";
@@ -81,11 +86,23 @@ export async function importStoreIntroductionWorkbook(
 
   let parsed;
 
+  const fileBuffer = await file.arrayBuffer();
+  await upsertStoreLocationsFromWorkbook(fileBuffer);
+  const savedAddressCount = countWorkbookAddressBookEntries(fileBuffer);
+
   try {
-    const fileBuffer = await file.arrayBuffer();
     parsed = parseStoreIntroductionWorkbook(fileBuffer);
-    await upsertStoreLocationsFromWorkbook(fileBuffer);
   } catch (error) {
+    if (savedAddressCount >= 5) {
+      revalidatePath("/store-introductions");
+      revalidatePath("/stores");
+      return {
+        ok: false,
+        message:
+          "住所録Excelは店舗マスタには保存しません（公式サイトを正とします）。導入データを取り込むには送り込みリスト等の導入Excelをアップロードしてください。",
+      };
+    }
+
     return {
       ok: false,
       message: error instanceof Error ? error.message : "導入店舗ファイルを読み取れませんでした。",
@@ -96,6 +113,20 @@ export async function importStoreIntroductionWorkbook(
     return {
       ok: false,
       message: "導入店舗データが1件も見つかりませんでした。",
+    };
+  }
+
+  if (parsed.formatKey === "ainz-shipment-list") {
+    await ensureAinzStoreLocationsFromOfficialSite();
+    const storeLocations = await readStoreLocationRecords();
+    const ainzAddressBook = loadAinzAddressBookFromBuffer(fileBuffer);
+    parsed = {
+      ...parsed,
+      entries: mergeAinzIntroductionEntriesWithStoreMaster(
+        parsed.entries,
+        storeLocations,
+        ainzAddressBook,
+      ),
     };
   }
 
@@ -111,27 +142,18 @@ export async function importStoreIntroductionWorkbook(
   const isLoftSeriesSheet = isLoftSeriesIntroductionSheet(parsed.formatKey, parsed.entries);
   const isHandsSeriesSheet = isHandsSeriesIntroductionSheet(parsed.formatKey, parsed.entries);
   const isAtCosmeSeriesSheet = isAtCosmeSeriesIntroductionSheet(parsed.formatKey, parsed.entries);
-
-  if (isLoftSeriesSheet) {
-    await ensureLoftStoreLocationsFromOfficialSite();
-  }
-
-  if (isHandsSeriesSheet) {
-    await ensureHandsStoreLocationsFromOfficialSite();
-  }
-
-  if (isAtCosmeSeriesSheet) {
-    await ensureAtCosmeStoreLocationsFromOfficialSite();
-  }
+  const isAinzSeriesSheet = isAinzSeriesIntroductionSheet(parsed.formatKey, parsed.entries);
 
   const storeLocations = await loadStoreLocationsForIntroduction({
     isHandsSeriesSheet,
     isLoftSeriesSheet,
     isAtCosmeSeriesSheet,
+    isAinzSeriesSheet,
+    entries: [],
   });
   const storeLocationLookup = buildStoreLocationLookup(storeLocations);
 
-  if (isHandsSeriesSheet || isLoftSeriesSheet || isAtCosmeSeriesSheet) {
+  if (isHandsSeriesSheet || isLoftSeriesSheet || isAtCosmeSeriesSheet || isAinzSeriesSheet) {
     const unmatchedStoreNames = new Set<string>();
 
     parsed.entries.forEach((entry) => {
@@ -141,7 +163,13 @@ export async function importStoreIntroductionWorkbook(
     });
 
     if (unmatchedStoreNames.size > 0) {
-      const chainLabel = isHandsSeriesSheet ? "ハンズ" : isLoftSeriesSheet ? "ロフト" : "@cosme STORE";
+      const chainLabel = isHandsSeriesSheet
+        ? "ハンズ"
+        : isLoftSeriesSheet
+          ? "ロフト"
+          : isAtCosmeSeriesSheet
+            ? "@cosme STORE"
+            : "アインズ";
       importWarnings.push(
         `${chainLabel}公式店舗マスタと照合できない店舗が${unmatchedStoreNames.size}件あります（${Array.from(unmatchedStoreNames).slice(0, 3).join("、")}${unmatchedStoreNames.size > 3 ? " ほか" : ""}）。「公式サイトから更新」で店舗マスタを同期してください。`,
       );
@@ -167,7 +195,7 @@ export async function importStoreIntroductionWorkbook(
       clientId,
       jan: displayProduct.jan,
       productName: displayProduct.productName,
-      storeName: entry.storeName,
+      storeName: matchedLocation?.storeName || entry.storeName,
       storeCode: entry.storeCode,
       address: enrichedAddress || entry.address,
       postalCode: matchedLocation?.postalCode || entry.postalCode,
@@ -178,6 +206,7 @@ export async function importStoreIntroductionWorkbook(
         stores,
         isLoftSeriesSheet,
         isHandsSeriesSheet,
+        isAinzSeriesSheet,
       ),
     };
   });
@@ -187,6 +216,7 @@ export async function importStoreIntroductionWorkbook(
     parsed.formatKey,
     isLoftSeriesSheet,
     isHandsSeriesSheet,
+    isAinzSeriesSheet,
   );
 
   const importBatch: StoreIntroductionImport = {
@@ -265,11 +295,15 @@ export async function importStoreIntroductionWorkbook(
   const formatLabel =
     parsed.formatKey === "row-list"
       ? "店舗一覧表"
-      : parsed.formatKey === "hands-allocation-list"
-        ? "ハンズ按分表"
-        : parsed.formatKey === "store-allocation-list"
-          ? "店舗割振表"
-          : "0/1フラグ表";
+      : parsed.formatKey === "promotional-address-list"
+        ? "住所録"
+        : parsed.formatKey === "ainz-shipment-list"
+          ? "アインズ送り込みリスト"
+          : parsed.formatKey === "hands-allocation-list"
+            ? "ハンズ按分表"
+            : parsed.formatKey === "store-allocation-list"
+              ? "店舗割振表"
+              : "0/1フラグ表";
   const chainLabel = chainName ? `${chainName} / ` : "";
   const sheetLabel = parsed.sheetCount > 1 ? `${parsed.sheetCount}シート / ` : "";
   const warningLabel = importWarnings.length > 0 ? ` ${importWarnings.join(" ")}` : "";
@@ -354,7 +388,7 @@ export async function syncHandsStoreLocationsFromOfficialSite(): Promise<{
   message: string;
   count: number;
 }> {
-  return ensureHandsStoreLocationsFromOfficialSite();
+  return ensureOfficialChainStoreLocationsFromOfficialSite("ハンズ");
 }
 
 export async function syncLoftStoreLocationsFromOfficialSite(): Promise<{
@@ -362,7 +396,7 @@ export async function syncLoftStoreLocationsFromOfficialSite(): Promise<{
   message: string;
   count: number;
 }> {
-  return ensureLoftStoreLocationsFromOfficialSite();
+  return ensureOfficialChainStoreLocationsFromOfficialSite("ロフト");
 }
 
 async function readStoreLocations(): Promise<StoreLocation[]> {
@@ -414,47 +448,45 @@ async function loadStoreLocationsForIntroduction({
   isHandsSeriesSheet = false,
   isLoftSeriesSheet = false,
   isAtCosmeSeriesSheet = false,
+  isAinzSeriesSheet = false,
   entries = [],
 }: {
   isHandsSeriesSheet?: boolean;
   isLoftSeriesSheet?: boolean;
   isAtCosmeSeriesSheet?: boolean;
+  isAinzSeriesSheet?: boolean;
   entries?: StoreIntroductionEntry[];
 } = {}): Promise<StoreLocation[]> {
   let locations = await readStoreLocations();
-  const needsHands =
+  const chainsToSync = new Set<OfficialStoreChainName>();
+
+  if (
     isHandsSeriesSheet ||
     entries.some(
       (entry) =>
         entry.matchedStoreName === "ハンズ" ||
         entry.storeName.normalize("NFKC").toLowerCase().startsWith("hb") ||
         entry.storeName.includes("ｈｂ"),
-    );
-  const needsLoft = isLoftSeriesSheet || entries.some((entry) => entry.matchedStoreName === "ロフト");
-  const needsAtCosme =
-    isAtCosmeSeriesSheet || entries.some((entry) => entry.matchedStoreName === "@cosme STORE");
-
-  if (needsHands) {
-    try {
-      await ensureHandsStoreLocationsFromOfficialSite();
-      locations = await readStoreLocations();
-    } catch {
-      // 公式サイト取得に失敗しても、DB上の既存住所で続行する。
-    }
+    )
+  ) {
+    chainsToSync.add("ハンズ");
   }
 
-  if (needsLoft) {
-    try {
-      await ensureLoftStoreLocationsFromOfficialSite();
-      locations = await readStoreLocations();
-    } catch {
-      // 公式サイト取得に失敗しても、DB上の既存住所で続行する。
-    }
+  if (isLoftSeriesSheet || entries.some((entry) => entry.matchedStoreName === "ロフト")) {
+    chainsToSync.add("ロフト");
   }
 
-  if (needsAtCosme) {
+  if (isAtCosmeSeriesSheet || entries.some((entry) => entry.matchedStoreName === "@cosme STORE")) {
+    chainsToSync.add("@cosme STORE");
+  }
+
+  if (isAinzSeriesSheet || entries.some((entry) => entry.matchedStoreName === "アインズ")) {
+    chainsToSync.add("アインズ");
+  }
+
+  for (const chainName of chainsToSync) {
     try {
-      await ensureAtCosmeStoreLocationsFromOfficialSite();
+      await ensureOfficialChainStoreLocationsFromOfficialSite(chainName);
       locations = await readStoreLocations();
     } catch {
       // 公式サイト取得に失敗しても、DB上の既存住所で続行する。
@@ -479,7 +511,27 @@ async function upsertStoreLocationsFromWorkbook(fileBuffer: ArrayBuffer) {
     return;
   }
 
-  await upsertStoreLocationRecords(locations);
+  const isAinzAddressBook =
+    workbook.SheetNames.some((sheetName) => /アインズ|ｱｲﾝｽﾞ/.test(sheetName)) ||
+    locations.some((entry) => /アインズ|ainz/i.test(entry.storeName));
+
+  const addressBookChainName = isAinzAddressBook
+    ? "アインズ"
+    : workbook.SheetNames.some((sheetName) => /インキューブ|incube/i.test(sheetName)) ||
+        locations.some((entry) => /インキューブ|incube/i.test(entry.storeName))
+      ? "インキューブ"
+      : "";
+
+  if (addressBookChainName && hasOfficialChainStoreMaster(addressBookChainName)) {
+    return;
+  }
+
+  await upsertStoreLocationRecords(
+    locations.map((entry) => ({
+      ...entry,
+      chainName: addressBookChainName || undefined,
+    })),
+  );
 }
 
 async function upsertStoreLocationsFromEntries(
@@ -490,14 +542,7 @@ async function upsertStoreLocationsFromEntries(
     skipOfficialChainSync?: boolean;
   },
 ) {
-  if (
-    options.skipOfficialChainSync ||
-    options.formatKey === "hands-allocation-list" ||
-    options.formatKey === "store-allocation-list" ||
-    options.chainName === "ハンズ" ||
-    options.chainName === "ロフト" ||
-    options.chainName === "@cosme STORE"
-  ) {
+  if (options.skipOfficialChainSync || hasOfficialChainStoreMaster(options.chainName)) {
     return;
   }
 

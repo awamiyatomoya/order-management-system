@@ -1,26 +1,61 @@
 import type { StoreLocation } from "@/lib/store-location-matching";
+import {
+  hasOfficialChainStoreMaster,
+  officialChainStoreMasters,
+} from "@/lib/official-chain-store-masters";
 
 export type StoreLocationRecord = StoreLocation & {
   chainName: string;
 };
 
+export { hasOfficialChainStoreMaster, officialChainStoreMasters };
+
 export function inferStoreLocationChainName(location: Pick<StoreLocation, "storeCode" | "storeName">) {
-  if (location.storeCode.startsWith("loft-") || /ロフト|loft/i.test(location.storeName)) {
+  if (location.storeCode.startsWith("loft-")) {
     return "ロフト";
   }
 
-  if (location.storeCode.startsWith("hands-") || /ハンズ|hands/i.test(location.storeName)) {
+  if (location.storeCode.startsWith("hands-")) {
     return "ハンズ";
   }
 
-  if (
-    location.storeCode.startsWith("atcosme-") ||
-    /@cosme|アットコスメ/i.test(location.storeName)
-  ) {
+  if (location.storeCode.startsWith("atcosme-")) {
     return "@cosme STORE";
   }
 
+  if (location.storeCode.startsWith("ainz-")) {
+    return "アインズ";
+  }
+
+  if (/ロフト|loft/i.test(location.storeName)) {
+    return "ロフト";
+  }
+
+  if (/ハンズ|hands/i.test(location.storeName)) {
+    return "ハンズ";
+  }
+
+  if (/@cosme|アットコスメ/i.test(location.storeName)) {
+    return "@cosme STORE";
+  }
+
+  if (/アインズ|ainz/i.test(location.storeName)) {
+    return "アインズ";
+  }
+
   return "";
+}
+
+export function belongsToStoreLocationChain(
+  location: Pick<StoreLocation, "storeCode" | "storeName"> & { chainName?: string },
+  chainName: string,
+) {
+  const inferred = inferStoreLocationChainName(location);
+  if (inferred) {
+    return inferred === chainName;
+  }
+
+  return location.chainName?.trim() === chainName;
 }
 
 export function groupStoreLocationsByChain(
@@ -55,12 +90,6 @@ export function countHandsStoreLocations(locations: StoreLocationRecord[]) {
 
 export function countChainStoreLocations(locations: StoreLocationRecord[], chainName: string) {
   return groupStoreLocationsByChain(locations).get(chainName)?.length ?? 0;
-}
-
-export const officialChainStoreMasters = new Set(["ハンズ", "ロフト", "@cosme STORE"]);
-
-export function hasOfficialChainStoreMaster(chainName: string) {
-  return officialChainStoreMasters.has(chainName.trim());
 }
 
 export function filterStoreLocations(

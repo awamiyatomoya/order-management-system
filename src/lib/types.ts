@@ -44,7 +44,9 @@ export type StoreIntroductionFormatKey =
   | "row-list"
   | "flag-list"
   | "hands-allocation-list"
-  | "store-allocation-list";
+  | "store-allocation-list"
+  | "promotional-address-list"
+  | "ainz-shipment-list";
 
 export type StoreIntroductionImport = {
   id: string;
@@ -153,4 +155,40 @@ export type SupplierMapping = {
   headerRow: number;
   columns: Record<string, string>;
   valueMaps: Record<string, Record<string, string>>;
+};
+
+export type SelloutLayoutType = "row-list" | "matrix-product-store";
+
+export type SelloutImport = {
+  id: string;
+  clientId: string;
+  fileName: string;
+  profileKey: string;
+  retailer: string;
+  layoutType: SelloutLayoutType;
+  periodStart: string;
+  periodEnd: string;
+  importedAt: string;
+  entryCount: number;
+  storeCount: number;
+  totalQty: number;
+  totalAmount: number;
+};
+
+export type SelloutEntry = {
+  id: string;
+  importId: string;
+  clientId: string;
+  periodStart: string;
+  periodEnd: string;
+  retailer: string;
+  storeCode: string;
+  storeName: string;
+  matchedStoreCode: string;
+  matchedStoreName: string;
+  jan: string;
+  productName: string;
+  qty: number;
+  amount: number;
+  stock: number | null;
 };

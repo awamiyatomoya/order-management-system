@@ -330,7 +330,7 @@ function getDataRequirements(scope: OrderWorkbenchDataScope) {
   return {
     clients: scope !== "stores",
     suppliers: scope === "orders",
-    products: scope === "orders" || scope === "products" || scope === "payouts" || scope === "sellIn" || scope === "storeIntroductions",
+    products: scope === "orders" || scope === "products" || scope === "payouts" || scope === "sellIn" || scope === "sellOut" || scope === "storeIntroductions",
     orders: scope === "orders" || scope === "payouts" || scope === "history" || scope === "sellIn",
     importBatches: scope === "orderFiles" || scope === "history",
     deliveryDestinations: scope === "deliveryDestinations" || scope === "orders",
@@ -357,6 +357,8 @@ export function getDemoOrderWorkbenchInitialData(
     storeLocations: req.storeLocations ? demoStoreLocations : [],
     storeIntroductionImports: req.storeIntroductions ? demoStoreIntroductionImports : [],
     storeIntroductionEntries: req.storeIntroductions ? demoStoreIntroductionEntries : [],
+    selloutImports: [],
+    selloutEntries: [],
     deletionLogs: [],
     source: "supabase",
     message: "デモモード: すべてのデータは架空のサンプルです。保存・取り込みは無効です。",

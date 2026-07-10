@@ -219,15 +219,31 @@ export function isAtCosmeSeriesIntroductionSheet(
   return isStoreAllocationIntroductionSheet(formatKey, entries);
 }
 
+export function isAinzSeriesIntroductionSheet(
+  formatKey: StoreIntroductionFormatKey,
+  entries: { storeName: string; storeCode: string }[],
+) {
+  if (formatKey !== "ainz-shipment-list" || entries.length < 5) {
+    return false;
+  }
+
+  return true;
+}
+
 export function getMatchedStoreNameForIntroduction(
   entry: { storeName: string; storeCode: string },
   formatKey: StoreIntroductionFormatKey,
   stores: Store[],
   isLoftSeriesSheet: boolean,
   isHandsSeriesSheet = false,
+  isAinzSeriesSheet = false,
 ) {
   if (formatKey === "hands-allocation-list" || isHandsSeriesSheet) {
     return "ハンズ";
+  }
+
+  if (formatKey === "ainz-shipment-list" || isAinzSeriesSheet) {
+    return "アインズ";
   }
 
   if (formatKey === "flag-list" && isLoftSeriesSheet) {

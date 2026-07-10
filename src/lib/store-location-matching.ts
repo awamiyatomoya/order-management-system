@@ -1,4 +1,5 @@
 import { resolveOyamaAtCosmeOfficialStoreCode } from "@/lib/store-allocation-matching";
+import { buildAinzStoreCodeAliases } from "@/lib/store-introduction-parsers";
 
 export type StoreLocation = {
   storeCode: string;
@@ -47,7 +48,7 @@ const TRUNCATED_STORE_NAME_ALIASES: Record<string, string[]> = {
 };
 
 export function looksLikeStoreAddress(value: string) {
-  const trimmed = value.trim();
+  const trimmed = (value ?? "").trim();
   if (trimmed.length < 4) {
     return false;
   }
@@ -142,9 +143,12 @@ export function buildStoreLocationLookup(locations: StoreLocation[]) {
   const byName = new Map<string, StoreLocation>();
 
   locations.forEach((location) => {
-    if (location.storeCode) {
-      byCode.set(location.storeCode, location);
-    }
+    const codeAliases = buildAinzStoreCodeAliases(location.storeCode);
+    codeAliases.forEach((storeCode) => {
+      if (storeCode) {
+        byCode.set(storeCode, location);
+      }
+    });
 
     buildStoreNameMatchKeys(location.storeName).forEach((key) => {
       if (!byName.has(key)) {
@@ -164,7 +168,7 @@ export function resolveStoreLocationMatch(
   entry: Pick<StoreLocation, "storeCode" | "storeName" | "postalCode" | "address">,
   lookup: ReturnType<typeof buildStoreLocationLookup>,
 ) {
-  if (looksLikeStoreAddress(entry.address)) {
+  if (!entry.storeName.trim() && looksLikeStoreAddress(entry.address)) {
     return undefined;
   }
 

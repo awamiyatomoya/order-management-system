@@ -68,6 +68,7 @@ import {
 } from "@/lib/store-matching";
 import { supplierMappings } from "@/lib/supplier-mappings";
 import { StoreIntroductionPanel } from "@/components/store-introduction-panel";
+import { SelloutPanel } from "@/components/sellout-panel";
 import {
   productMasterExtraFields,
   type ProductMasterExtraKey,
@@ -96,6 +97,7 @@ import {
 } from "@/lib/store-location-groups";
 import type { OrderWorkbenchInitialData } from "@/lib/supabase/read-order-data";
 import { readStoreLocationRecords, type OfficialStoreChainName } from "@/lib/supabase/store-location-actions";
+import { isOfficialStoreChainName } from "@/lib/official-chain-store-masters";
 import {
   deleteProduct,
   fetchProductMasterProducts,
@@ -204,6 +206,7 @@ type WorkbenchView =
   | "orderFiles"
   | "payouts"
   | "sellIn"
+  | "sellOut"
   | "history"
   | "storeIntroductions";
 type OrderPeriodFilter = "all" | "thisMonth" | "lastMonth" | "custom";
@@ -808,6 +811,7 @@ export function OrderWorkbench({
   initialClientId,
   initialStoreChain,
   initialStoreIntroductionClientId,
+  initialSelloutClientId,
   basePath = "",
   isDemoMode = false,
 }: {
@@ -816,6 +820,7 @@ export function OrderWorkbench({
   initialClientId?: string;
   initialStoreChain?: string;
   initialStoreIntroductionClientId?: string;
+  initialSelloutClientId?: string;
   basePath?: string;
   isDemoMode?: boolean;
 }) {
@@ -839,6 +844,7 @@ export function OrderWorkbench({
     initialData.storeLocations ?? [],
   );
   const [selectedStoreChain, setSelectedStoreChain] = useState(initialStoreChain ?? "");
+  const [storeChainFilter, setStoreChainFilter] = useState("");
   const [storeLocationSearch, setStoreLocationSearch] = useState("");
   const [isSyncingStoreLocations, setIsSyncingStoreLocations] = useState(false);
   const [pendingImport, setPendingImport] = useState<PendingImport | null>(null);
@@ -1212,6 +1218,26 @@ export function OrderWorkbench({
     () => groupStoreLocationsByChain(storeLocations),
     [storeLocations],
   );
+  const filteredStoreChains = useMemo(() => {
+    const query = storeChainFilter.trim().toLowerCase();
+    const filtered = !query
+      ? stores
+      : stores.filter(
+          (store) =>
+            store.name.toLowerCase().includes(query) ||
+            store.aliases.some((alias) => alias.toLowerCase().includes(query)),
+        );
+
+    return [...filtered].sort((left, right) => left.name.localeCompare(right.name, "ja"));
+  }, [storeChainFilter, stores]);
+  const syncedStoreChains = useMemo(
+    () =>
+      [...stores]
+        .filter((store) => (storeLocationsByChain.get(store.name)?.length ?? 0) > 0)
+        .sort((left, right) => left.name.localeCompare(right.name, "ja")),
+    [storeLocationsByChain, stores],
+  );
+  const hasSyncedStoreChains = syncedStoreChains.length > 0;
   const selectedChainStoreLocations = useMemo(() => {
     if (!selectedStoreChain) {
       return [];
@@ -1268,18 +1294,18 @@ export function OrderWorkbench({
     }
 
     const preferredChain =
-      (initialStoreChain && stores.some((store) => store.name === initialStoreChain)
+      (initialStoreChain &&
+      stores.some((store) => store.name === initialStoreChain) &&
+      (storeLocationsByChain.get(initialStoreChain)?.length ?? 0) > 0
         ? initialStoreChain
         : undefined) ??
-      (stores.some((store) => store.name === "ロフト") &&
-      (storeLocationsByChain.get("ロフト")?.length ?? 0) > 0
-        ? "ロフト"
-        : "");
+      syncedStoreChains[0]?.name ??
+      "";
 
     if (preferredChain) {
       setSelectedStoreChain(preferredChain);
     }
-  }, [initialStoreChain, selectedStoreChain, storeLocationsByChain, stores, view]);
+  }, [initialStoreChain, selectedStoreChain, storeLocationsByChain, stores, syncedStoreChains, view]);
 
   useEffect(() => {
     if (view !== "stores" || selectedStoreChain !== "ハンズ") {
@@ -4114,33 +4140,15 @@ export function OrderWorkbench({
         ) : null}
 
         {view === "stores" ? (
-          <section className="grid gap-4 xl:grid-cols-[360px_1fr]">
-            <Panel title="店舗マスタ登録" titleSize="lg">
-              <form className="grid gap-4" onSubmit={registerStore}>
-                <TextInput
-                  label="店舗名"
-                  value={storeForm.name}
-                  required
-                  onChange={(name) => setStoreForm({ ...storeForm, name })}
-                />
-                <TextInput
-                  label="別名・OCR候補"
-                  value={storeForm.aliases}
-                  description="発注書の備考欄に出る表記ゆれを、改行またはカンマ区切りで入力します。"
-                  onChange={(aliases) => setStoreForm({ ...storeForm, aliases })}
-                />
-                {storeNotice ? <p className="text-sm text-muted-foreground">{storeNotice}</p> : null}
-                <Button type="submit" disabled={isSavingStore}>
-                  {isSavingStore ? "登録中..." : "店舗を登録"}
-                </Button>
-              </form>
-            </Panel>
-
+          <section className="grid min-h-[calc(100vh-14rem)] gap-4 xl:grid-cols-[280px_minmax(0,1fr)] xl:items-stretch">
             <Panel
-              title="店舗マスタ"
+              title="小売企業リスト"
               titleSize="lg"
-              action={
-                isEditingStoreMaster ? (
+              className="flex min-h-0 flex-col"
+              contentClassName="flex min-h-0 flex-1 flex-col gap-4"
+            >
+              {isEditingStoreMaster ? (
+                <>
                   <div className="flex gap-2">
                     <Button
                       type="button"
@@ -4160,212 +4168,204 @@ export function OrderWorkbench({
                       キャンセル
                     </Button>
                   </div>
-                ) : (
+                  <p className="text-sm text-muted-foreground">
+                    右の表で小売企業名と別名を編集できます。
+                  </p>
+                </>
+              ) : (
+                <>
                   <Button
                     type="button"
                     size="sm"
                     variant="outline"
+                    className="w-fit"
                     disabled={stores.length === 0}
                     onClick={startStoreMasterEdit}
                   >
-                    チェーン編集
+                    小売企業編集
                   </Button>
-                )
+                  <Input
+                    value={storeChainFilter}
+                    placeholder="企業名で検索"
+                    onChange={(event) => setStoreChainFilter(event.target.value)}
+                  />
+                  <div className="min-h-0 flex-1 overflow-y-auto rounded-lg border">
+                    {stores.length === 0 ? (
+                      <p className="px-3 py-4 text-sm text-muted-foreground">
+                        小売企業がありません。
+                      </p>
+                    ) : filteredStoreChains.length === 0 ? (
+                      <p className="px-3 py-4 text-sm text-muted-foreground">
+                        条件に一致する企業がありません。
+                      </p>
+                    ) : (
+                      filteredStoreChains.map((store) => {
+                        const locationCount = storeLocationsByChain.get(store.name)?.length ?? 0;
+                        const isSelected = selectedStoreChain === store.name;
+
+                        return (
+                          <button
+                            key={store.id}
+                            type="button"
+                            onClick={() => handleStoreChainSelect(store.name)}
+                            className={`flex w-full items-center justify-between gap-2 border-b px-3 py-3 text-left text-sm transition-colors last:border-b-0 ${
+                              isSelected
+                                ? "bg-primary/10 font-medium text-primary"
+                                : "hover:bg-muted/50"
+                            }`}
+                          >
+                            <span>{store.name}</span>
+                            <Badge variant={locationCount > 0 ? "secondary" : "outline"}>
+                              {locationCount > 0 ? `${locationCount}店` : "未連携"}
+                            </Badge>
+                          </button>
+                        );
+                      })
+                    )}
+                  </div>
+                </>
+              )}
+            </Panel>
+
+            <Panel
+              title={
+                isEditingStoreMaster
+                  ? "小売企業編集"
+                  : selectedStoreChain
+                    ? `${selectedStoreChain} 店舗一覧`
+                    : "店舗一覧"
+              }
+              titleSize="lg"
+              className="flex min-h-0 flex-col"
+              contentClassName="flex min-h-0 flex-1 flex-col gap-4"
+              action={
+                !isEditingStoreMaster && isOfficialStoreChainName(selectedStoreChain) ? (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    disabled={isSyncingStoreLocations}
+                    onClick={() => void handleOfficialStoreSync(selectedStoreChain)}
+                  >
+                    {isSyncingStoreLocations ? "取得中..." : "公式サイトから更新"}
+                  </Button>
+                ) : undefined
               }
             >
               {isEditingStoreMaster ? (
-                <p className="mb-4 text-sm text-muted-foreground">
-                  チェーン名と、備考欄/OCRで拾った別名候補をまとめて編集できます。
-                </p>
-              ) : (
-                <p className="mb-4 text-sm text-muted-foreground">
-                  左のチェーンを選ぶと、個別店舗の一覧と住所が表示されます。
-                </p>
-              )}
-
-              {isEditingStoreMaster ? (
-                stores.length === 0 ? (
-                  <p className="text-sm text-muted-foreground">店舗マスタはまだありません。</p>
-                ) : (
-                  <div className="overflow-x-auto">
-                    <Table className="min-w-[760px]">
-                      <TableHeader>
-                        <TableRow>
-                          <TableHead className="w-[240px]">チェーン名</TableHead>
-                          <TableHead>別名・OCR候補</TableHead>
-                        </TableRow>
-                      </TableHeader>
-                      <TableBody>
-                        {storeMasterDrafts.map((draft, index) => (
-                          <TableRow key={draft.id}>
-                            <TableCell>
-                              <Input
-                                value={draft.name}
-                                onChange={(event) =>
-                                  updateStoreMasterDraft(index, { name: event.target.value })
-                                }
-                              />
-                            </TableCell>
-                            <TableCell>
-                              <Input
-                                value={draft.aliases}
-                                onChange={(event) =>
-                                  updateStoreMasterDraft(index, { aliases: event.target.value })
-                                }
-                              />
-                            </TableCell>
+                <>
+                  <p className="text-sm text-muted-foreground">
+                    小売企業名と、備考欄/OCRで拾った別名候補をまとめて編集できます。
+                  </p>
+                  {stores.length === 0 ? (
+                    <p className="text-sm text-muted-foreground">小売企業はまだありません。</p>
+                  ) : (
+                    <div className="overflow-x-auto">
+                      <Table className="min-w-[760px]">
+                        <TableHeader>
+                          <TableRow>
+                            <TableHead className="w-[240px]">小売企業名</TableHead>
+                            <TableHead>別名・OCR候補</TableHead>
                           </TableRow>
-                        ))}
-                      </TableBody>
-                    </Table>
-                  </div>
-                )
+                        </TableHeader>
+                        <TableBody>
+                          {storeMasterDrafts.map((draft, index) => (
+                            <TableRow key={draft.id}>
+                              <TableCell>
+                                <Input
+                                  value={draft.name}
+                                  onChange={(event) =>
+                                    updateStoreMasterDraft(index, { name: event.target.value })
+                                  }
+                                />
+                              </TableCell>
+                              <TableCell>
+                                <Input
+                                  value={draft.aliases}
+                                  onChange={(event) =>
+                                    updateStoreMasterDraft(index, { aliases: event.target.value })
+                                  }
+                                />
+                              </TableCell>
+                            </TableRow>
+                          ))}
+                        </TableBody>
+                      </Table>
+                    </div>
+                  )}
+                </>
+              ) : !hasSyncedStoreChains ? (
+                <p className="text-sm text-muted-foreground">
+                  店舗導入して同期した後に、個別店舗の一覧と住所が表示されます。
+                </p>
+              ) : selectedStoreChain ? (
+                <>
+                  <p className="text-sm text-muted-foreground">
+                    {selectedChainStoreLocations.length.toLocaleString()}店を表示
+                  </p>
+
+                  {storeLocationSyncNotice ? (
+                    <p
+                      className={`text-sm ${
+                        storeLocationSyncNotice.includes("失敗") ||
+                        storeLocationSyncNotice.includes("確認できません") ||
+                        storeLocationSyncNotice.includes("未設定")
+                          ? "text-destructive"
+                          : "text-muted-foreground"
+                      }`}
+                    >
+                      {storeLocationSyncNotice}
+                    </p>
+                  ) : null}
+
+                  <Input
+                    value={storeLocationSearch}
+                    placeholder="店舗名・店舗コード・住所で検索"
+                    onChange={(event) => setStoreLocationSearch(event.target.value)}
+                  />
+                  {selectedChainStoreLocations.length === 0 ? (
+                    <p className="rounded-lg border px-4 py-8 text-center text-sm text-muted-foreground">
+                      {storeLocationSearch.trim()
+                        ? "条件に一致する店舗がありません。"
+                        : isOfficialStoreChainName(selectedStoreChain)
+                          ? `${selectedStoreChain}店舗が未登録です。「公式サイトから更新」を押してください。`
+                          : "この小売企業の個別店舗データはまだありません。"}
+                    </p>
+                  ) : (
+                    <div className="min-h-0 flex-1 overflow-y-auto rounded-lg border">
+                      <Table className="w-full table-fixed">
+                        <TableHeader>
+                          <TableRow>
+                            <TableHead className="w-[11%]">店舗コード</TableHead>
+                            <TableHead className="w-[22%]">店舗名</TableHead>
+                            <TableHead className="w-[9%]">郵便番号</TableHead>
+                            <TableHead className="w-[44%]">住所</TableHead>
+                            <TableHead className="w-[14%]">電話</TableHead>
+                          </TableRow>
+                        </TableHeader>
+                        <TableBody>
+                          {selectedChainStoreLocations.map((location) => (
+                            <TableRow key={location.storeCode}>
+                              <TableCell className="font-mono text-xs">
+                                {location.storeCode}
+                              </TableCell>
+                              <TableCell className="font-medium">{location.storeName}</TableCell>
+                              <TableCell>{location.postalCode || "-"}</TableCell>
+                              <TableCell className="whitespace-normal break-words">
+                                {location.address || "-"}
+                              </TableCell>
+                              <TableCell>{location.tel || "-"}</TableCell>
+                            </TableRow>
+                          ))}
+                        </TableBody>
+                      </Table>
+                    </div>
+                  )}
+                </>
               ) : (
-                <div className="grid gap-4 xl:grid-cols-[240px_minmax(0,1fr)]">
-                  <div className="overflow-hidden rounded-lg border">
-                    <div className="border-b bg-muted/40 px-3 py-2 text-sm font-medium">チェーン</div>
-                    <div className="max-h-[560px] overflow-y-auto">
-                      {stores.length === 0 ? (
-                        <p className="px-3 py-4 text-sm text-muted-foreground">チェーンがありません。</p>
-                      ) : (
-                        stores.map((store) => {
-                          const locationCount = storeLocationsByChain.get(store.name)?.length ?? 0;
-                          const isSelected = selectedStoreChain === store.name;
-
-                          return (
-                            <button
-                              key={store.id}
-                              type="button"
-                              onClick={() => handleStoreChainSelect(store.name)}
-                              className={`flex w-full items-center justify-between gap-2 border-b px-3 py-3 text-left text-sm transition-colors last:border-b-0 ${
-                                isSelected
-                                  ? "bg-primary/10 font-medium text-primary"
-                                  : "hover:bg-muted/50"
-                              }`}
-                            >
-                              <span>{store.name}</span>
-                              <Badge variant={locationCount > 0 ? "secondary" : "outline"}>
-                                {locationCount > 0 ? `${locationCount}店` : "未連携"}
-                              </Badge>
-                            </button>
-                          );
-                        })
-                      )}
-                    </div>
-                  </div>
-
-                  <div className="grid gap-3">
-                    <div className="flex flex-wrap items-center justify-between gap-3">
-                      <div>
-                        <h3 className="text-base font-semibold">
-                          {selectedStoreChain ? `${selectedStoreChain} 店舗一覧` : "店舗一覧"}
-                        </h3>
-                        <p className="text-sm text-muted-foreground">
-                          {selectedStoreChain
-                            ? `${selectedChainStoreLocations.length.toLocaleString()}店を表示`
-                            : "チェーンを選択してください"}
-                        </p>
-                      </div>
-                      {selectedStoreChain === "ロフト" ? (
-                        <Button
-                          type="button"
-                          variant="outline"
-                          size="sm"
-                          disabled={isSyncingStoreLocations}
-                          onClick={() => void handleOfficialStoreSync("ロフト")}
-                        >
-                          {isSyncingStoreLocations ? "取得中..." : "公式サイトから更新"}
-                        </Button>
-                      ) : selectedStoreChain === "ハンズ" ? (
-                        <Button
-                          type="button"
-                          variant="outline"
-                          size="sm"
-                          disabled={isSyncingStoreLocations}
-                          onClick={() => void handleOfficialStoreSync("ハンズ")}
-                        >
-                          {isSyncingStoreLocations ? "取得中..." : "公式サイトから更新"}
-                        </Button>
-                      ) : selectedStoreChain === "@cosme STORE" ? (
-                        <Button
-                          type="button"
-                          variant="outline"
-                          size="sm"
-                          disabled={isSyncingStoreLocations}
-                          onClick={() => void handleOfficialStoreSync("@cosme STORE")}
-                        >
-                          {isSyncingStoreLocations ? "取得中..." : "公式サイトから更新"}
-                        </Button>
-                      ) : null}
-                    </div>
-
-                    {storeLocationSyncNotice ? (
-                      <p
-                        className={`text-sm ${
-                          storeLocationSyncNotice.includes("失敗") ||
-                          storeLocationSyncNotice.includes("確認できません") ||
-                          storeLocationSyncNotice.includes("未設定")
-                            ? "text-destructive"
-                            : "text-muted-foreground"
-                        }`}
-                      >
-                        {storeLocationSyncNotice}
-                      </p>
-                    ) : null}
-
-                    {selectedStoreChain ? (
-                      <>
-                        <Input
-                          value={storeLocationSearch}
-                          placeholder="店舗名・店舗コード・住所で検索"
-                          onChange={(event) => setStoreLocationSearch(event.target.value)}
-                        />
-                        {selectedChainStoreLocations.length === 0 ? (
-                          <p className="rounded-lg border px-4 py-8 text-center text-sm text-muted-foreground">
-                            {storeLocationSearch.trim()
-                              ? "条件に一致する店舗がありません。"
-                                : selectedStoreChain === "ロフト"
-                                ? "ロフト店舗が未登録です。「公式サイトから更新」を押してください。"
-                                : selectedStoreChain === "ハンズ"
-                                  ? "ハンズ店舗が未登録です。「公式サイトから更新」を押してください。"
-                                  : selectedStoreChain === "@cosme STORE"
-                                    ? "@cosme STORE店舗が未登録です。「公式サイトから更新」を押してください。"
-                                    : "このチェーンの個別店舗データはまだありません。"}
-                          </p>
-                        ) : (
-                          <div className="overflow-x-auto rounded-lg border">
-                            <Table className="min-w-[920px]">
-                              <TableHeader>
-                                <TableRow>
-                                  <TableHead>店舗コード</TableHead>
-                                  <TableHead>店舗名</TableHead>
-                                  <TableHead>郵便番号</TableHead>
-                                  <TableHead>住所</TableHead>
-                                  <TableHead>電話</TableHead>
-                                </TableRow>
-                              </TableHeader>
-                              <TableBody>
-                                {selectedChainStoreLocations.map((location) => (
-                                  <TableRow key={location.storeCode}>
-                                    <TableCell className="font-mono text-xs">{location.storeCode}</TableCell>
-                                    <TableCell className="font-medium">{location.storeName}</TableCell>
-                                    <TableCell>{location.postalCode || "-"}</TableCell>
-                                    <TableCell>{location.address || "-"}</TableCell>
-                                    <TableCell>{location.tel || "-"}</TableCell>
-                                  </TableRow>
-                                ))}
-                              </TableBody>
-                            </Table>
-                          </div>
-                        )}
-                      </>
-                    ) : (
-                      <p className="rounded-lg border px-4 py-8 text-center text-sm text-muted-foreground">
-                        左のチェーン一覧から店舗を表示したいチェーンを選んでください。
-                      </p>
-                    )}
-                  </div>
-                </div>
+                <p className="text-sm text-muted-foreground">
+                  店舗導入して同期した後に、個別店舗の一覧と住所が表示されます。
+                </p>
               )}
             </Panel>
           </section>
@@ -4386,6 +4386,17 @@ export function OrderWorkbench({
               const locations = await readStoreLocationRecords();
               setStoreLocations(locations);
             }}
+          />
+        ) : null}
+
+        {view === "sellOut" ? (
+          <SelloutPanel
+            clientId={selectedClientId}
+            initialDataClientId={initialSelloutClientId}
+            clients={clients}
+            onClientChange={handleClientChange}
+            initialImports={initialData.selloutImports}
+            initialEntries={initialData.selloutEntries}
           />
         ) : null}
 
@@ -5091,6 +5102,10 @@ function getWorkbenchPageTitle(view: WorkbenchView) {
     return "セルインデータ";
   }
 
+  if (view === "sellOut") {
+    return "セルアウト";
+  }
+
   if (view === "history") {
     return "処理履歴";
   }
@@ -5129,6 +5144,10 @@ function getWorkbenchPageDescription(view: WorkbenchView) {
 
   if (view === "sellIn") {
     return "受注を発注日、店舗、商品ごとに集計し、セルインデータとして確認・出力できます。";
+  }
+
+  if (view === "sellOut") {
+    return "小売チェーンから届くセルアウトExcelを取り込み、店舗別の売上実績を確認できます。";
   }
 
   if (view === "history") {
@@ -5208,7 +5227,7 @@ function WorkbenchPageIntro({ view }: { view: WorkbenchView }) {
 
 const sidebarGroupViews: Record<string, WorkbenchView[]> = {
   master: ["clients", "products", "deliveryDestinations", "stores"],
-  retail: ["storeIntroductions", "sellIn"],
+  retail: ["storeIntroductions", "sellIn", "sellOut"],
   orders: ["orderFiles", "history"],
 };
 
@@ -5272,6 +5291,7 @@ function MasterSidebar({
           view: "storeIntroductions" as const,
         },
         { href: withBasePath(basePath, "/sell-in"), label: "セルイン", view: "sellIn" as const },
+        { href: withBasePath(basePath, "/sell-out"), label: "セルアウト", view: "sellOut" as const },
       ],
     },
     {
@@ -5614,18 +5634,22 @@ function Panel({
   title,
   titleSize = "default",
   action,
+  className,
+  contentClassName,
   children,
 }: {
   title?: string;
   titleSize?: "default" | "lg";
   action?: React.ReactNode;
+  className?: string;
+  contentClassName?: string;
   children: React.ReactNode;
 }) {
   const titleClassName =
     titleSize === "lg" ? "text-2xl leading-tight" : "text-xl leading-tight";
 
   return (
-    <Card>
+    <Card className={className}>
       {title || action ? (
         <CardHeader>
           {title ? (
@@ -5636,7 +5660,11 @@ function Panel({
           {action ? <CardAction>{action}</CardAction> : null}
         </CardHeader>
       ) : null}
-      <CardContent className="flex flex-col gap-4">{children}</CardContent>
+      <CardContent
+        className={`flex flex-col gap-4${contentClassName ? ` ${contentClassName}` : ""}`}
+      >
+        {children}
+      </CardContent>
     </Card>
   );
 }

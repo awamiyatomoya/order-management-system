@@ -31,7 +31,14 @@ import {
   isLoftSeriesIntroductionSheet,
 } from "@/lib/store-matching";
 import { summarizeIntroducedStoresByChannel } from "@/lib/store-channel";
-import { summarizeProductChainKpis, enrichProductChainKpisWithStoreMaster, aggregateProductChainKpis, shouldShowProductChainKpi } from "@/lib/store-introduction-kpi";
+import {
+  summarizeProductChainKpis,
+  enrichProductChainKpisWithStoreMaster,
+  aggregateProductChainKpis,
+  shouldShowProductChainKpi,
+  resolveIntroductionFormatKey,
+  sumUniqueChainTotalStores,
+} from "@/lib/store-introduction-kpi";
 import {
   buildStoreIntroductionMatrix,
   type IntroductionMatrixProduct,
@@ -424,7 +431,10 @@ export function StoreIntroductionPanel({
           }));
 
         return enrichProductChainKpisWithStoreMaster(
-          summarizeProductChainKpis(importEntries, importBatch.formatKey).map((kpi) => ({
+          summarizeProductChainKpis(
+            importEntries,
+            resolveIntroductionFormatKey(importBatch.formatKey, importBatch.fileName),
+          ).map((kpi) => ({
             ...kpi,
             fileName: importBatch.fileName,
             importedAt: importBatch.importedAt,
@@ -465,7 +475,10 @@ export function StoreIntroductionPanel({
     return aggregateProductChainKpis(matches);
   }, [productChainKpis, selectedProductKey, selectedRetailChainFilter]);
 
-  const selectedProductKpi = companyDetailKpi;
+  const isMultiChainProductView =
+    selectedProductKey !== "all" &&
+    selectedRetailChainFilter === "all" &&
+    productChainKpis.filter((kpi) => kpi.productKey === selectedProductKey).length > 1;
 
   const summary = useMemo(() => {
     const filtered = latestEntriesPerChain.filter((entry) => {
@@ -498,6 +511,41 @@ export function StoreIntroductionPanel({
     selectedRetailChainFilter,
     stores,
   ]);
+
+  const scopedProductChainKpis = useMemo(() => {
+    return productChainKpis.filter((kpi) => {
+      if (selectedProductKey !== "all" && kpi.productKey !== selectedProductKey) {
+        return false;
+      }
+
+      if (selectedRetailChainFilter !== "all" && kpi.chainName !== selectedRetailChainFilter) {
+        return false;
+      }
+
+      return true;
+    });
+  }, [productChainKpis, selectedProductKey, selectedRetailChainFilter]);
+
+  const companyOverview = useMemo(() => {
+    const introducedCount =
+      selectedProductKey === "all"
+        ? summary.introduced
+        : scopedProductChainKpis.reduce((sum, kpi) => sum + kpi.introducedCount, 0);
+    const totalStoreCount = sumUniqueChainTotalStores(scopedProductChainKpis);
+
+    return {
+      introducedCount,
+      totalStoreCount,
+      penetrationRate:
+        totalStoreCount > 0
+          ? Math.round((introducedCount / totalStoreCount) * 1000) / 10
+          : null,
+    };
+  }, [scopedProductChainKpis, selectedProductKey, summary.introduced]);
+
+  const showChannelBreakdown =
+    selectedRetailChainFilter === "all" ||
+    !companyDetailKpi?.hasFullStoreList;
 
   async function handleFileChange(file: File | null) {
     if (!file || !clientId) {
@@ -542,7 +590,12 @@ export function StoreIntroductionPanel({
       setNotice(result.message);
       await onStoreLocationsRefresh?.();
     } catch (error) {
-      setNotice(error instanceof Error ? error.message : "導入店舗ファイルの取込に失敗しました。");
+      const message = error instanceof Error ? error.message : "導入店舗ファイルの取込に失敗しました。";
+      setNotice(
+        message.includes("unexpected response")
+          ? "サーバーから不正な応答がありました。ファイルサイズが大きい場合は時間をおいて再試行するか、管理者に連絡してください。"
+          : message,
+      );
     } finally {
       setIsUploading(false);
       setFileInputKey((current) => current + 1);
@@ -589,11 +642,11 @@ export function StoreIntroductionPanel({
             <FieldLabel>導入店舗ファイル</FieldLabel>
             <FileUploadButton
               key={fileInputKey}
-              accept=".xlsx,.xls,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+              accept=".xlsx,.xls,.xlsm,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel.sheet.macroEnabled.12"
               disabled={isUploading || !clientId}
               fullWidth
               label="導入店舗ファイルをアップロード"
-              description="Excelファイル（.xlsx / .xls）を選択できます。"
+              description="Excelファイル（.xlsx / .xls / .xlsm）を選択できます。"
               onFileChange={(file) => void handleFileChange(file)}
             />
             {isUploading ? <UploadStatus isProcessing message="読み取り中" /> : null}
@@ -614,27 +667,37 @@ export function StoreIntroductionPanel({
               <h3 className="text-base font-semibold">企業詳細</h3>
               <div className="grid grid-cols-2 gap-2.5">
               <FeaturedSummaryCard
-                label={selectedProductKey !== "all" ? "導入店舗" : "導入店舗合計"}
-                value={summary.introduced}
-                unit="店舗"
+                introducedLabel={
+                  selectedProductKey !== "all"
+                    ? isMultiChainProductView
+                      ? "導入店舗（全チェーン合計）"
+                      : "導入店舗"
+                    : "導入店舗合計"
+                }
+                totalLabel={
+                  selectedRetailChainFilter === "all" ? "全導入企業店舗数" : "全店舗"
+                }
+                introduced={companyOverview.introducedCount}
+                totalStores={companyOverview.totalStoreCount}
+                penetrationRate={companyOverview.penetrationRate}
               />
               <div className="grid grid-cols-2 gap-1">
-                {companyDetailKpi?.hasFullStoreList ? (
-                  <>
-                    <SummaryCard label="全店舗" value={companyDetailKpi.totalStoreCount} />
-                    <SummaryCard
-                      label="導入率"
-                      value={companyDetailKpi.penetrationRate ?? 0}
-                      suffix="%"
-                    />
-                  </>
-                ) : (
+                {showChannelBreakdown ? (
                   <>
                     <SummaryCard label="バラエティ" value={summary.variety} />
                     <SummaryCard label="ドラッグストア" value={summary.drugstore} />
                     <SummaryCard label="ディスカウント" value={summary.discount} />
                     <SummaryCard label="GMS" value={summary.gms} />
                     <SummaryCard label="CVS" value={summary.cvs} className="col-span-2" />
+                  </>
+                ) : (
+                  <>
+                    <SummaryCard label="全店舗" value={companyDetailKpi?.totalStoreCount ?? 0} />
+                    <SummaryCard
+                      label="導入率"
+                      value={companyDetailKpi?.penetrationRate ?? 0}
+                      suffix="%"
+                    />
                   </>
                 )}
               </div>
@@ -645,7 +708,7 @@ export function StoreIntroductionPanel({
               <div className="grid gap-3">
                 <h3 className="text-base font-semibold">チェーン別KPI</h3>
                 <p className="text-sm text-muted-foreground">
-                  ハンズ・ロフト・@cosme STOREの「全店舗」「導入率」は店舗マスタ（公式サイト）基準です。導入店舗数のみ取込Excelから集計します。
+                  全小売チェーン共通: 店舗マスタ（全店舗）は公式サイト基準、導入店舗数は取込Excelから集計します。全店舗合計はチェーンごとの店舗数を合算しています。
                 </p>
                 <div className="overflow-x-auto rounded-lg border">
                   <Table className="min-w-[820px]">
@@ -757,8 +820,9 @@ export function StoreIntroductionPanel({
               <Table className="min-w-[720px]">
                 <TableHeader>
                   <TableRow>
-                    <TableHead className="sticky left-0 z-10 min-w-[96px] bg-background">小売企業</TableHead>
-                    <TableHead className="sticky left-[96px] z-10 bg-background">店舗名</TableHead>
+                    <TableHead className="sticky left-0 z-10 w-12 min-w-12 bg-background text-center">No.</TableHead>
+                    <TableHead className="sticky left-12 z-10 min-w-[96px] bg-background">小売企業</TableHead>
+                    <TableHead className="sticky left-[144px] z-10 bg-background">店舗名</TableHead>
                     <TableHead className="min-w-[240px]">住所</TableHead>
                     {introductionMatrix.products.map((product) => (
                       <TableHead
@@ -775,19 +839,22 @@ export function StoreIntroductionPanel({
                   {introductionMatrix.rows.length === 0 ? (
                     <TableRow>
                       <TableCell
-                        colSpan={3 + introductionMatrix.products.length}
+                        colSpan={4 + introductionMatrix.products.length}
                         className="py-8 text-center text-base text-muted-foreground"
                       >
                         表示対象の店舗がありません。
                       </TableCell>
                     </TableRow>
                   ) : (
-                    introductionMatrix.rows.map((row) => (
-                      <TableRow key={row.rowKey}>
-                        <TableCell className="sticky left-0 z-10 bg-background font-medium">
+                    introductionMatrix.rows.map((row, index) => (
+                      <TableRow key={`${row.chainName}-${row.rowKey}`}>
+                        <TableCell className="sticky left-0 z-10 bg-background text-center text-muted-foreground">
+                          {index + 1}
+                        </TableCell>
+                        <TableCell className="sticky left-12 z-10 bg-background font-medium">
                           {row.chainName || "-"}
                         </TableCell>
-                        <TableCell className="sticky left-[96px] z-10 bg-background font-medium">
+                        <TableCell className="sticky left-[144px] z-10 bg-background font-medium">
                           {row.storeName}
                         </TableCell>
                         <TableCell>{row.address || "-"}</TableCell>
@@ -811,21 +878,55 @@ export function StoreIntroductionPanel({
 }
 
 function FeaturedSummaryCard({
-  label,
-  value,
-  unit,
+  introducedLabel,
+  totalLabel,
+  introduced,
+  totalStores,
+  penetrationRate,
 }: {
-  label: string;
-  value: number;
-  unit: string;
+  introducedLabel: string;
+  totalLabel: string;
+  introduced: number;
+  totalStores: number;
+  penetrationRate: number | null;
 }) {
+  const labelClass =
+    "text-[11px] font-medium leading-none tracking-wide text-muted-foreground";
+
   return (
-    <div className="flex min-h-full flex-col justify-center rounded-xl border-2 border-primary/30 bg-primary/5 px-5 py-7 text-center">
-      <p className="text-sm font-medium text-muted-foreground">{label}</p>
-      <p className="mt-1.5 text-5xl font-bold tracking-tight text-primary md:text-6xl">
-        {value.toLocaleString()}
-      </p>
-      <p className="mt-0.5 text-base font-medium text-muted-foreground">{unit}</p>
+    <div className="flex min-h-full items-center justify-center gap-8 rounded-xl border-2 border-primary/30 bg-primary/5 px-8 py-7 md:gap-10 md:px-10">
+      <div className="flex items-end gap-1.5 md:gap-2">
+        <div className="flex flex-col items-start pl-1.5">
+          <p className={`mb-3 min-h-3 ${labelClass}`}>{introducedLabel}</p>
+          <p className="tabular-nums text-[2.75rem] font-bold leading-none tracking-tight text-primary md:text-[3.5rem]">
+            {introduced.toLocaleString()}
+          </p>
+        </div>
+        {totalStores > 0 ? (
+          <>
+            <span className="mb-1 text-xl font-light text-muted-foreground/40 md:mb-1.5 md:text-2xl">
+              /
+            </span>
+            <div className="flex flex-col items-start">
+              <p className={`mb-3 min-h-3 ${labelClass}`}>{totalLabel}</p>
+              <div className="flex items-baseline gap-1">
+                <p className="tabular-nums text-2xl font-semibold leading-none tracking-tight text-muted-foreground md:text-3xl">
+                  {totalStores.toLocaleString()}
+                </p>
+                <span className="text-xs font-medium text-muted-foreground/80 md:text-sm">店舗</span>
+              </div>
+            </div>
+          </>
+        ) : null}
+      </div>
+      {penetrationRate !== null ? (
+        <div className="flex flex-col items-start border-l border-primary/15 pl-8 md:pl-10">
+          <p className={`mb-3 min-h-3 ${labelClass}`}>導入率</p>
+          <p className="tabular-nums text-2xl font-bold leading-none tracking-tight text-foreground md:text-3xl">
+            {penetrationRate}%
+          </p>
+        </div>
+      ) : null}
     </div>
   );
 }
