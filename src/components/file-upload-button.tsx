@@ -8,6 +8,7 @@ export function FileUploadButton({
   accept,
   disabled,
   fullWidth = false,
+  compact = false,
   label = "発注ファイルをアップロード",
   description = "PDFファイルを選択できます。",
   onFileChange,
@@ -15,6 +16,7 @@ export function FileUploadButton({
   accept: string;
   disabled: boolean;
   fullWidth?: boolean;
+  compact?: boolean;
   label?: string;
   description?: string;
   onFileChange: (file: File | null) => void;
@@ -23,14 +25,20 @@ export function FileUploadButton({
   const inputRef = useRef<HTMLInputElement>(null);
 
   return (
-    <div className="flex flex-col gap-2">
+    <div className={`flex flex-col ${description ? "gap-2" : "gap-0"}`}>
       <button
         type="button"
         disabled={disabled}
         onClick={() => inputRef.current?.click()}
-        className={`inline-flex min-h-9 cursor-pointer items-center justify-center rounded-md bg-blue-600 px-3.5 py-2 text-sm font-bold text-white shadow-[0_3px_0_rgb(29,78,216),0_6px_10px_rgba(37,99,235,0.28)] transition-all hover:-translate-y-0.5 hover:bg-blue-500 hover:shadow-[0_5px_0_rgb(29,78,216),0_10px_14px_rgba(37,99,235,0.32)] active:translate-y-1 active:shadow-[0_1px_0_rgb(29,78,216),0_3px_8px_rgba(37,99,235,0.22)] ${
-          fullWidth ? "w-full" : ""
-        } ${disabled ? "cursor-not-allowed opacity-60" : ""}`}
+        className={
+          compact
+            ? `inline-flex min-h-8 cursor-pointer items-center justify-center rounded-md bg-blue-600 px-3 py-1.5 text-sm font-medium text-white shadow-sm transition-colors hover:bg-blue-500 ${
+                fullWidth ? "w-full" : ""
+              } ${disabled ? "cursor-not-allowed opacity-60" : ""}`
+            : `inline-flex min-h-9 cursor-pointer items-center justify-center rounded-md bg-blue-600 px-3.5 py-2 text-sm font-bold text-white shadow-[0_3px_0_rgb(29,78,216),0_6px_10px_rgba(37,99,235,0.28)] transition-all hover:-translate-y-0.5 hover:bg-blue-500 hover:shadow-[0_5px_0_rgb(29,78,216),0_10px_14px_rgba(37,99,235,0.32)] active:translate-y-1 active:shadow-[0_1px_0_rgb(29,78,216),0_3px_8px_rgba(37,99,235,0.22)] ${
+                fullWidth ? "w-full" : ""
+              } ${disabled ? "cursor-not-allowed opacity-60" : ""}`
+        }
       >
         {label}
       </button>

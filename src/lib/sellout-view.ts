@@ -123,12 +123,14 @@ export function buildSelloutMonthlyRows(entries: SelloutEntry[]): SelloutMonthly
   });
 }
 
+const MIN_SELLOUT_CHART_MONTHS = 12;
+
 export function buildSelloutMonthlyChartRows(entries: SelloutEntry[]): SelloutChartRow[] {
   const rowsByMonth = new Map<string, SelloutChartRow>();
 
   entries.forEach((entry) => {
     const monthKey = getSelloutMonthKey(entry);
-    if (!monthKey) {
+    if (!monthKey || !parseSelloutMonthKey(monthKey)) {
       return;
     }
 
@@ -145,7 +147,68 @@ export function buildSelloutMonthlyChartRows(entries: SelloutEntry[]): SelloutCh
     });
   });
 
-  return Array.from(rowsByMonth.values()).sort((a, b) => a.label.localeCompare(b.label));
+  const sortedKeys = Array.from(rowsByMonth.keys()).sort((a, b) => a.localeCompare(b));
+  if (sortedKeys.length === 0) {
+    return [];
+  }
+
+  const firstMonth = parseSelloutMonthKey(sortedKeys[0]);
+  const lastMonth = parseSelloutMonthKey(sortedKeys[sortedKeys.length - 1]);
+  if (!firstMonth || !lastMonth) {
+    return Array.from(rowsByMonth.values()).sort((a, b) => a.label.localeCompare(b.label));
+  }
+
+  let start = firstMonth;
+  const end = lastMonth;
+  const span = monthKeyDiff(start, end) + 1;
+  if (span < MIN_SELLOUT_CHART_MONTHS) {
+    start = addMonthKey(end, -(MIN_SELLOUT_CHART_MONTHS - 1));
+  }
+
+  const rows: SelloutChartRow[] = [];
+  for (let cursor = start; monthKeyDiff(cursor, end) >= 0; cursor = addMonthKey(cursor, 1)) {
+    const label = formatSelloutMonthKey(cursor);
+    rows.push(
+      rowsByMonth.get(label) ?? {
+        label,
+        qty: 0,
+        amount: 0,
+      },
+    );
+  }
+
+  return rows;
+}
+
+function parseSelloutMonthKey(value: string) {
+  const match = /^(\d{4})-(\d{2})$/.exec(value);
+  if (!match) {
+    return null;
+  }
+
+  return {
+    year: Number(match[1]),
+    month: Number(match[2]),
+  };
+}
+
+function formatSelloutMonthKey(value: { year: number; month: number }) {
+  return `${value.year}-${String(value.month).padStart(2, "0")}`;
+}
+
+function addMonthKey(value: { year: number; month: number }, delta: number) {
+  const index = value.year * 12 + (value.month - 1) + delta;
+  return {
+    year: Math.floor(index / 12),
+    month: (index % 12) + 1,
+  };
+}
+
+function monthKeyDiff(
+  start: { year: number; month: number },
+  end: { year: number; month: number },
+) {
+  return (end.year - start.year) * 12 + (end.month - start.month);
 }
 
 export function buildSelloutProductChartRows(entries: SelloutEntry[]): SelloutChartRow[] {

@@ -228,17 +228,17 @@ export function SelloutPanel({
 
   return (
     <section className="grid gap-4">
-      <Card>
-        <CardContent className="grid gap-4 pt-6">
-          <div className="grid gap-4 lg:grid-cols-[minmax(320px,420px)_minmax(280px,1fr)]">
-            <Field>
-              <FieldLabel>クライアント</FieldLabel>
+      <Card size="sm">
+        <CardContent>
+          <div className="grid gap-3 lg:grid-cols-[minmax(280px,360px)_minmax(240px,1fr)] lg:items-end">
+            <Field className="gap-1">
+              <FieldLabel className="text-xs text-muted-foreground">クライアント</FieldLabel>
               <Select
                 items={clients.map((client) => ({ label: client.name, value: client.id }))}
                 value={clientId}
                 onValueChange={(value) => onClientChange(value ?? "")}
               >
-                <SelectTrigger className="w-full">
+                <SelectTrigger className="h-8 w-full">
                   <SelectValue placeholder="クライアントを選択" />
                 </SelectTrigger>
                 <SelectContent>
@@ -253,12 +253,13 @@ export function SelloutPanel({
               </Select>
             </Field>
 
-            <div className="flex flex-col gap-2">
-              <FieldLabel>セルアウトExcel</FieldLabel>
+            <div className="flex flex-col gap-1">
+              <FieldLabel className="text-xs text-muted-foreground">セルアウトExcel</FieldLabel>
               <FileUploadButton
                 key={fileInputKey}
                 label="セルアウトExcelをアップロード"
-                description="ロフト・ハンズなど小売チェーン別のファイルを自動判別して取り込みます。"
+                description=""
+                compact
                 accept=".xlsx,.xls,.xlsm,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
                 disabled={!clientId || isUploading}
                 fullWidth
@@ -274,7 +275,7 @@ export function SelloutPanel({
             </div>
           </div>
 
-          {notice && !isUploading ? <p className="text-sm text-muted-foreground">{notice}</p> : null}
+          {notice && !isUploading ? <p className="mt-2 text-sm text-muted-foreground">{notice}</p> : null}
         </CardContent>
       </Card>
 

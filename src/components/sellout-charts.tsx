@@ -7,9 +7,17 @@ function formatYen(amount: number) {
   return `¥${amount.toLocaleString("ja-JP")}`;
 }
 
-function formatChartMonthLabel(value: string) {
+function formatChartMonthLabel(value: string, { includeYear = false }: { includeYear?: boolean } = {}) {
   const [year, month] = value.split("-");
-  return year && month ? `${year}年${Number(month)}月` : value;
+  if (!year || !month) {
+    return value;
+  }
+
+  if (includeYear) {
+    return `${year.slice(2)}年${Number(month)}月`;
+  }
+
+  return `${Number(month)}月`;
 }
 
 function formatChartAmount(value: number) {
@@ -53,7 +61,7 @@ export function SelloutCharts({
 }) {
   const maxMonthlyAmount = Math.max(...monthlyRows.map((row) => row.amount), 1);
   const monthlyAmountScaleMax = getNiceChartMax(maxMonthlyAmount);
-  const needsScroll = monthlyRows.length > 8;
+  const needsScroll = monthlyRows.length > 14;
 
   return (
     <div className="grid gap-4 xl:grid-cols-2">
@@ -74,25 +82,26 @@ export function SelloutCharts({
               <div className="relative">
                 <div className={needsScroll ? "overflow-x-auto pb-8" : "pb-2"}>
                   <div
-                    className={`relative flex min-h-64 items-end gap-2 border-b pb-8 pt-8 ${
-                      needsScroll ? "min-w-[640px]" : ""
+                    className={`relative flex min-h-64 items-end gap-1.5 border-b pb-8 pt-8 sm:gap-2 ${
+                      needsScroll ? "min-w-[720px]" : ""
                     }`}
                   >
                     <div className="pointer-events-none absolute inset-x-0 top-0 border-t border-dashed border-border" />
                     <div className="pointer-events-none absolute inset-x-0 top-1/2 border-t border-dashed border-border" />
-                    {monthlyRows.map((row) => {
+                    {monthlyRows.map((row, index) => {
                       const height =
                         row.amount > 0
                           ? Math.max((row.amount / monthlyAmountScaleMax) * 144, 48)
                           : 0;
+                      const includeYear = index === 0 || row.label.endsWith("-01");
 
                       return (
                         <div
                           key={row.label}
-                          className="flex min-w-[48px] flex-1 flex-col items-center gap-1 text-xs"
+                          className="flex min-w-0 flex-1 flex-col items-center gap-1 text-xs"
                         >
                           <div
-                            className={`group relative w-full min-w-[32px] rounded-t ${
+                            className={`group relative w-full max-w-12 rounded-t ${
                               row.amount > 0 ? "bg-blue-600 shadow-sm" : "bg-transparent"
                             }`}
                             style={{ height: `${height}px` }}
@@ -104,7 +113,7 @@ export function SelloutCharts({
                             ) : null}
                           </div>
                           <div className="whitespace-nowrap text-[10px] text-muted-foreground">
-                            {formatChartMonthLabel(row.label)}
+                            {formatChartMonthLabel(row.label, { includeYear })}
                           </div>
                         </div>
                       );
