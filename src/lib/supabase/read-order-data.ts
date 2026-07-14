@@ -51,6 +51,7 @@ export type OrderWorkbenchDataScope =
   | "payouts"
   | "sellIn"
   | "sellOut"
+  | "sellOutFiles"
   | "history"
   | "storeIntroductions";
 

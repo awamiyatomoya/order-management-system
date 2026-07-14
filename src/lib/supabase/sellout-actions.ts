@@ -197,7 +197,7 @@ export async function readSelloutData(clientId: string) {
     )
     .eq("client_id", clientId)
     .order("imported_at", { ascending: false })
-    .limit(20);
+    .limit(100);
 
   if (importsError || !imports?.length) {
     return {

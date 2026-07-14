@@ -330,7 +330,7 @@ function getDataRequirements(scope: OrderWorkbenchDataScope) {
   return {
     clients: scope !== "stores",
     suppliers: scope === "orders",
-    products: scope === "orders" || scope === "products" || scope === "payouts" || scope === "sellIn" || scope === "sellOut" || scope === "storeIntroductions",
+    products: scope === "orders" || scope === "products" || scope === "payouts" || scope === "sellIn" || scope === "sellOut" || scope === "sellOutFiles" || scope === "storeIntroductions",
     orders: scope === "orders" || scope === "payouts" || scope === "history" || scope === "sellIn",
     importBatches: scope === "orderFiles" || scope === "history",
     deliveryDestinations: scope === "deliveryDestinations" || scope === "orders",

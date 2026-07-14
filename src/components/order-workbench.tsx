@@ -68,6 +68,7 @@ import {
 } from "@/lib/store-matching";
 import { supplierMappings } from "@/lib/supplier-mappings";
 import { StoreIntroductionPanel } from "@/components/store-introduction-panel";
+import { SelloutFilesPanel } from "@/components/sellout-files-panel";
 import { SelloutPanel } from "@/components/sellout-panel";
 import {
   productMasterExtraFields,
@@ -207,6 +208,7 @@ type WorkbenchView =
   | "payouts"
   | "sellIn"
   | "sellOut"
+  | "sellOutFiles"
   | "history"
   | "storeIntroductions";
 type OrderPeriodFilter = "all" | "thisMonth" | "lastMonth" | "custom";
@@ -4395,8 +4397,17 @@ export function OrderWorkbench({
             initialDataClientId={initialSelloutClientId}
             clients={clients}
             onClientChange={handleClientChange}
-            initialImports={initialData.selloutImports}
             initialEntries={initialData.selloutEntries}
+          />
+        ) : null}
+
+        {view === "sellOutFiles" ? (
+          <SelloutFilesPanel
+            clientId={selectedClientId}
+            initialDataClientId={initialSelloutClientId}
+            clients={clients}
+            onClientChange={handleClientChange}
+            initialImports={initialData.selloutImports}
           />
         ) : null}
 
@@ -5103,7 +5114,11 @@ function getWorkbenchPageTitle(view: WorkbenchView) {
   }
 
   if (view === "sellOut") {
-    return "セルアウト";
+    return "セルアウト 売上実績";
+  }
+
+  if (view === "sellOutFiles") {
+    return "セルアウト 取込ファイル";
   }
 
   if (view === "history") {
@@ -5148,6 +5163,10 @@ function getWorkbenchPageDescription(view: WorkbenchView) {
 
   if (view === "sellOut") {
     return "小売チェーンから届くセルアウトExcelを取り込み、店舗別の売上実績を確認できます。";
+  }
+
+  if (view === "sellOutFiles") {
+    return "取り込んだセルアウトExcelの履歴を確認できます。";
   }
 
   if (view === "history") {
@@ -5227,7 +5246,7 @@ function WorkbenchPageIntro({ view }: { view: WorkbenchView }) {
 
 const sidebarGroupViews: Record<string, WorkbenchView[]> = {
   master: ["clients", "products", "deliveryDestinations", "stores"],
-  retail: ["storeIntroductions", "sellIn", "sellOut"],
+  retail: ["storeIntroductions", "sellIn", "sellOut", "sellOutFiles"],
   orders: ["orderFiles", "history"],
 };
 
@@ -5270,14 +5289,30 @@ function MasterSidebar({
       id: "master",
       title: "マスタ",
       links: [
-        { href: withBasePath(basePath, "/clients"), label: "クライアント", view: "clients" as const },
-        { href: withBasePath(basePath, "/products"), label: "商品", view: "products" as const },
         {
+          type: "link" as const,
+          href: withBasePath(basePath, "/clients"),
+          label: "クライアント",
+          view: "clients" as const,
+        },
+        {
+          type: "link" as const,
+          href: withBasePath(basePath, "/products"),
+          label: "商品",
+          view: "products" as const,
+        },
+        {
+          type: "link" as const,
           href: withBasePath(basePath, "/delivery-destinations"),
           label: "配送先",
           view: "deliveryDestinations" as const,
         },
-        { href: withBasePath(basePath, "/stores"), label: "店舗", view: "stores" as const },
+        {
+          type: "link" as const,
+          href: withBasePath(basePath, "/stores"),
+          label: "店舗",
+          view: "stores" as const,
+        },
       ],
     },
     {
@@ -5286,12 +5321,34 @@ function MasterSidebar({
       title: "小売情報",
       links: [
         {
+          type: "link" as const,
           href: withBasePath(basePath, "/store-introductions"),
           label: "導入店舗",
           view: "storeIntroductions" as const,
         },
-        { href: withBasePath(basePath, "/sell-in"), label: "セルイン", view: "sellIn" as const },
-        { href: withBasePath(basePath, "/sell-out"), label: "セルアウト", view: "sellOut" as const },
+        {
+          type: "link" as const,
+          href: withBasePath(basePath, "/sell-in"),
+          label: "セルイン",
+          view: "sellIn" as const,
+        },
+        {
+          type: "subgroup" as const,
+          id: "sellOut",
+          title: "セルアウト",
+          links: [
+            {
+              href: withBasePath(basePath, "/sell-out"),
+              label: "売上実績",
+              view: "sellOut" as const,
+            },
+            {
+              href: withBasePath(basePath, "/sell-out/files"),
+              label: "取込ファイル",
+              view: "sellOutFiles" as const,
+            },
+          ],
+        },
       ],
     },
     {
@@ -5299,8 +5356,18 @@ function MasterSidebar({
       id: "orders",
       title: "発注管理",
       links: [
-        { href: withBasePath(basePath, "/order-files"), label: "発注書一覧", view: "orderFiles" as const },
-        { href: withBasePath(basePath, "/history"), label: "処理履歴", view: "history" as const },
+        {
+          type: "link" as const,
+          href: withBasePath(basePath, "/order-files"),
+          label: "発注書一覧",
+          view: "orderFiles" as const,
+        },
+        {
+          type: "link" as const,
+          href: withBasePath(basePath, "/history"),
+          label: "処理履歴",
+          view: "history" as const,
+        },
       ],
     },
   ];
@@ -5355,7 +5422,11 @@ function MasterSidebar({
           }
 
           const isOpen = openGroups[item.id] ?? false;
-          const hasActiveChild = item.links.some((link) => link.view === currentView);
+          const hasActiveChild = item.links.some((link) =>
+            link.type === "subgroup"
+              ? link.links.some((child) => child.view === currentView)
+              : link.view === currentView,
+          );
 
           return (
             <div key={item.id} className="flex flex-col gap-1">
@@ -5377,16 +5448,50 @@ function MasterSidebar({
               </button>
               {isOpen ? (
                 <div className="flex flex-col gap-1 border-l border-sidebar-border/70 pl-2">
-                  {item.links.map((link) => (
-                    <SidebarLink
-                      key={link.href}
-                      href={link.href}
-                      label={link.label}
-                      isActive={currentView === link.view}
-                      selectedClientId={selectedClientId}
-                      nested
-                    />
-                  ))}
+                  {item.links.map((link) => {
+                    if (link.type === "subgroup") {
+                      const hasActiveSubChild = link.links.some(
+                        (child) => child.view === currentView,
+                      );
+
+                      return (
+                        <div key={link.id} className="flex flex-col gap-1">
+                          <div
+                            className={`px-3 py-1.5 text-xs font-medium ${
+                              hasActiveSubChild
+                                ? "text-sidebar-accent-foreground"
+                                : "text-sidebar-foreground/60"
+                            }`}
+                          >
+                            {link.title}
+                          </div>
+                          <div className="flex flex-col gap-1 border-l border-sidebar-border/50 pl-2">
+                            {link.links.map((child) => (
+                              <SidebarLink
+                                key={child.href}
+                                href={child.href}
+                                label={child.label}
+                                isActive={currentView === child.view}
+                                selectedClientId={selectedClientId}
+                                nested
+                              />
+                            ))}
+                          </div>
+                        </div>
+                      );
+                    }
+
+                    return (
+                      <SidebarLink
+                        key={link.href}
+                        href={link.href}
+                        label={link.label}
+                        isActive={currentView === link.view}
+                        selectedClientId={selectedClientId}
+                        nested
+                      />
+                    );
+                  })}
                 </div>
               ) : null}
             </div>

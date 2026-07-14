@@ -31,22 +31,10 @@ import {
   type SelloutFilters,
 } from "@/lib/sellout-view";
 import { importSelloutWorkbook, readSelloutData } from "@/lib/supabase/sellout-actions";
-import type { Client, SelloutEntry, SelloutImport } from "@/lib/types";
+import type { Client, SelloutEntry } from "@/lib/types";
 
 function formatYen(amount: number) {
   return `¥${amount.toLocaleString("ja-JP")}`;
-}
-
-function formatPeriod(start: string, end: string) {
-  if (!start && !end) {
-    return "期間不明";
-  }
-
-  if (start === end || !end) {
-    return start;
-  }
-
-  return `${start} 〜 ${end}`;
 }
 
 const defaultFilters: SelloutFilters = {
@@ -61,17 +49,14 @@ export function SelloutPanel({
   initialDataClientId,
   clients,
   onClientChange,
-  initialImports,
   initialEntries,
 }: {
   clientId: string;
   initialDataClientId?: string;
   clients: Client[];
   onClientChange: (clientId: string) => void;
-  initialImports: SelloutImport[];
   initialEntries: SelloutEntry[];
 }) {
-  const [imports, setImports] = useState(initialImports);
   const [entries, setEntries] = useState(initialEntries);
   const [filters, setFilters] = useState<SelloutFilters>(defaultFilters);
   const [isUploading, setIsUploading] = useState(false);
@@ -82,7 +67,6 @@ export function SelloutPanel({
 
   useEffect(() => {
     if (!clientId) {
-      setImports([]);
       setEntries([]);
       setFilters(defaultFilters);
       setIsLoading(false);
@@ -95,7 +79,6 @@ export function SelloutPanel({
       initialDataClientId
     ) {
       skipInitialServerLoadRef.current = false;
-      setImports(initialImports);
       setEntries(initialEntries);
       setIsLoading(false);
       return;
@@ -112,7 +95,6 @@ export function SelloutPanel({
         return;
       }
 
-      setImports(data.imports);
       setEntries(data.entries);
       setIsLoading(false);
     }
@@ -122,7 +104,7 @@ export function SelloutPanel({
     return () => {
       cancelled = true;
     };
-  }, [clientId, initialDataClientId, initialEntries, initialImports]);
+  }, [clientId, initialDataClientId, initialEntries]);
 
   const filterOptions = useMemo(
     () => buildSelloutFilterOptions(entries, filters),
@@ -148,17 +130,6 @@ export function SelloutPanel({
     () => buildSelloutProductChartRows(filteredEntries),
     [filteredEntries],
   );
-
-  const latestImportsByRetailer = useMemo(() => {
-    const map = new Map<string, SelloutImport>();
-    imports.forEach((importBatch) => {
-      const retailer = importBatch.retailer.trim();
-      if (retailer && !map.has(retailer)) {
-        map.set(retailer, importBatch);
-      }
-    });
-    return Array.from(map.values());
-  }, [imports]);
 
   const summary = useMemo(() => {
     const storeKeys = new Set(monthlyRows.map((row) => row.storeName));
@@ -218,7 +189,6 @@ export function SelloutPanel({
 
     setNotice(result.message);
     const data = await readSelloutData(clientId);
-    setImports(data.imports);
     setEntries(data.entries);
     setFilters({
       ...defaultFilters,
@@ -285,34 +255,6 @@ export function SelloutPanel({
         <SummaryCard label="売上数量" value={`${summary.totalQty.toLocaleString("ja-JP")}個`} />
         <SummaryCard label="売上金額" value={formatYen(summary.totalAmount)} />
       </div>
-
-      {latestImportsByRetailer.length > 0 ? (
-        <Card>
-          <CardContent className="grid gap-3 pt-6">
-            <h3 className="text-sm font-medium">小売チェーン別 最新取込</h3>
-            <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-3">
-              {latestImportsByRetailer.map((importBatch) => (
-                <div
-                  key={importBatch.id}
-                  className="rounded-lg border border-border/70 px-4 py-3 text-sm"
-                >
-                  <p className="font-medium">{importBatch.retailer}</p>
-                  <p className="text-muted-foreground">
-                    {formatPeriod(importBatch.periodStart, importBatch.periodEnd)}
-                  </p>
-                  <p className="text-muted-foreground">
-                    {importBatch.entryCount}件 / {importBatch.storeCount}店舗 /{" "}
-                    {formatYen(importBatch.totalAmount)}
-                  </p>
-                  <p className="text-xs text-muted-foreground">
-                    {importBatch.fileName}（{importBatch.profileKey}）
-                  </p>
-                </div>
-              ))}
-            </div>
-          </CardContent>
-        </Card>
-      ) : null}
 
       <Card>
         <CardContent className="grid gap-4 pt-6">
