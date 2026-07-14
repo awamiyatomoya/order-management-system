@@ -4009,8 +4009,6 @@ export function OrderWorkbench({
             </div>
 
             <Panel
-              title="セルインデータ"
-              titleSize="lg"
               action={
                 <div className="flex flex-wrap gap-2">
                   <Button type="button" variant="outline" onClick={exportSellInCsv}>
@@ -4022,11 +4020,6 @@ export function OrderWorkbench({
                 </div>
               }
             >
-              <p className="text-sm text-muted-foreground">
-                受注を発注日ベースで、日付・JAN・商品ごとに集計します。
-                店舗フィルターで店舗を選んだ場合だけ、その店舗に絞って表示します。
-                発注がない日は、期間内に一度でも出た商品を0件として表示します。
-              </p>
               <div className="grid gap-3 md:grid-cols-[1.2fr_1fr_1fr_1fr_1.5fr]">
                 <ClientSelectField
                   clients={clients}
@@ -5110,7 +5103,7 @@ function getWorkbenchPageTitle(view: WorkbenchView) {
   }
 
   if (view === "sellIn") {
-    return "セルインデータ";
+    return "セルイン";
   }
 
   if (view === "sellOut") {
@@ -5158,7 +5151,7 @@ function getWorkbenchPageDescription(view: WorkbenchView) {
   }
 
   if (view === "sellIn") {
-    return "受注を発注日、店舗、商品ごとに集計し、セルインデータとして確認・出力できます。";
+    return "受注を発注日ベースで、日付・JAN・商品ごとに集計します。店舗フィルターで店舗を選んだ場合だけ、その店舗に絞って表示します。発注がない日は、期間内に一度でも出た商品を0件として表示します。";
   }
 
   if (view === "sellOut") {
