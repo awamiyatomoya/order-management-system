@@ -4,8 +4,8 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { FileUploadButton, UploadStatus } from "@/components/file-upload-button";
+import { SelloutCharts } from "@/components/sellout-charts";
 import { Field, FieldLabel } from "@/components/ui/field";
-import { Input } from "@/components/ui/input";
 import {
   Select,
   SelectContent,
@@ -22,6 +22,14 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import {
+  buildSelloutFilterOptions,
+  buildSelloutMonthlyChartRows,
+  buildSelloutMonthlyRows,
+  buildSelloutProductChartRows,
+  filterSelloutEntries,
+  type SelloutFilters,
+} from "@/lib/sellout-view";
 import { importSelloutWorkbook, readSelloutData } from "@/lib/supabase/sellout-actions";
 import type { Client, SelloutEntry, SelloutImport } from "@/lib/types";
 
@@ -41,6 +49,13 @@ function formatPeriod(start: string, end: string) {
   return `${start} 〜 ${end}`;
 }
 
+const defaultFilters: SelloutFilters = {
+  retailer: "all",
+  storeName: "all",
+  productName: "all",
+  jan: "all",
+};
+
 export function SelloutPanel({
   clientId,
   initialDataClientId,
@@ -58,8 +73,7 @@ export function SelloutPanel({
 }) {
   const [imports, setImports] = useState(initialImports);
   const [entries, setEntries] = useState(initialEntries);
-  const [selectedRetailerFilter, setSelectedRetailerFilter] = useState("all");
-  const [searchQuery, setSearchQuery] = useState("");
+  const [filters, setFilters] = useState<SelloutFilters>(defaultFilters);
   const [isUploading, setIsUploading] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [notice, setNotice] = useState("");
@@ -70,7 +84,7 @@ export function SelloutPanel({
     if (!clientId) {
       setImports([]);
       setEntries([]);
-      setSelectedRetailerFilter("all");
+      setFilters(defaultFilters);
       setIsLoading(false);
       return;
     }
@@ -110,6 +124,31 @@ export function SelloutPanel({
     };
   }, [clientId, initialDataClientId, initialEntries, initialImports]);
 
+  const filterOptions = useMemo(
+    () => buildSelloutFilterOptions(entries, filters),
+    [entries, filters],
+  );
+
+  const filteredEntries = useMemo(
+    () => filterSelloutEntries(entries, filters),
+    [entries, filters],
+  );
+
+  const monthlyRows = useMemo(
+    () => buildSelloutMonthlyRows(filteredEntries),
+    [filteredEntries],
+  );
+
+  const monthlyChartRows = useMemo(
+    () => buildSelloutMonthlyChartRows(filteredEntries),
+    [filteredEntries],
+  );
+
+  const productChartRows = useMemo(
+    () => buildSelloutProductChartRows(filteredEntries),
+    [filteredEntries],
+  );
+
   const latestImportsByRetailer = useMemo(() => {
     const map = new Map<string, SelloutImport>();
     imports.forEach((importBatch) => {
@@ -121,49 +160,39 @@ export function SelloutPanel({
     return Array.from(map.values());
   }, [imports]);
 
-  const retailerOptions = useMemo(
-    () => [...new Set(entries.map((entry) => entry.retailer).filter(Boolean))].sort(),
-    [entries],
-  );
-
-  const filteredEntries = useMemo(() => {
-    const query = searchQuery.trim().toLowerCase();
-
-    return entries.filter((entry) => {
-      if (selectedRetailerFilter !== "all" && entry.retailer !== selectedRetailerFilter) {
-        return false;
-      }
-
-      if (!query) {
-        return true;
-      }
-
-      const haystack = [
-        entry.storeName,
-        entry.matchedStoreName,
-        entry.jan,
-        entry.productName,
-        entry.retailer,
-      ]
-        .join(" ")
-        .toLowerCase();
-
-      return haystack.includes(query);
-    });
-  }, [entries, searchQuery, selectedRetailerFilter]);
-
   const summary = useMemo(() => {
-    const storeKeys = new Set(
-      filteredEntries.map((entry) => entry.matchedStoreCode || entry.storeCode || entry.storeName),
-    );
+    const storeKeys = new Set(monthlyRows.map((row) => row.storeName));
 
     return {
-      entryCount: filteredEntries.length,
+      entryCount: monthlyRows.length,
       storeCount: storeKeys.size,
-      totalQty: filteredEntries.reduce((sum, entry) => sum + entry.qty, 0),
-      totalAmount: filteredEntries.reduce((sum, entry) => sum + entry.amount, 0),
+      totalQty: monthlyRows.reduce((sum, row) => sum + row.qty, 0),
+      totalAmount: monthlyRows.reduce((sum, row) => sum + row.amount, 0),
     };
-  }, [filteredEntries]);
+  }, [monthlyRows]);
+
+  function updateFilter<K extends keyof SelloutFilters>(key: K, value: SelloutFilters[K]) {
+    setFilters((current) => {
+      const next = { ...current, [key]: value };
+
+      if (key === "retailer") {
+        next.storeName = "all";
+        next.productName = "all";
+        next.jan = "all";
+      }
+
+      if (key === "storeName") {
+        next.productName = "all";
+        next.jan = "all";
+      }
+
+      if (key === "productName") {
+        next.jan = "all";
+      }
+
+      return next;
+    });
+  }
 
   async function handleUpload(file: File) {
     if (!clientId) {
@@ -191,14 +220,17 @@ export function SelloutPanel({
     const data = await readSelloutData(clientId);
     setImports(data.imports);
     setEntries(data.entries);
-    setSelectedRetailerFilter(result.importBatch.retailer || "all");
+    setFilters({
+      ...defaultFilters,
+      retailer: result.importBatch.retailer || "all",
+    });
   }
 
   return (
     <section className="grid gap-4">
-      <div className="grid gap-4 xl:grid-cols-[320px_1fr]">
-        <Card>
-          <CardContent className="grid gap-4 pt-6">
+      <Card>
+        <CardContent className="grid gap-4 pt-6">
+          <div className="grid gap-4 lg:grid-cols-[minmax(320px,420px)_minmax(280px,1fr)]">
             <Field>
               <FieldLabel>クライアント</FieldLabel>
               <Select
@@ -206,7 +238,7 @@ export function SelloutPanel({
                 value={clientId}
                 onValueChange={(value) => onClientChange(value ?? "")}
               >
-                <SelectTrigger>
+                <SelectTrigger className="w-full">
                   <SelectValue placeholder="クライアントを選択" />
                 </SelectTrigger>
                 <SelectContent>
@@ -221,37 +253,36 @@ export function SelloutPanel({
               </Select>
             </Field>
 
-            <FileUploadButton
-              key={fileInputKey}
-              label="セルアウトExcelをアップロード"
-              description="ロフト・ハンズなど小売チェーン別のファイルを自動判別して取り込みます。"
-              accept=".xlsx,.xls,.xlsm,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-              disabled={!clientId || isUploading}
-              fullWidth
-              onFileChange={(file) => {
-                if (file) {
-                  void handleUpload(file);
-                }
-              }}
-            />
+            <div className="flex flex-col gap-2">
+              <FieldLabel>セルアウトExcel</FieldLabel>
+              <FileUploadButton
+                key={fileInputKey}
+                label="セルアウトExcelをアップロード"
+                description="ロフト・ハンズなど小売チェーン別のファイルを自動判別して取り込みます。"
+                accept=".xlsx,.xls,.xlsm,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                disabled={!clientId || isUploading}
+                fullWidth
+                onFileChange={(file) => {
+                  if (file) {
+                    void handleUpload(file);
+                  }
+                }}
+              />
+              {isUploading ? (
+                <UploadStatus isProcessing message="セルアウトファイルを取り込み中..." />
+              ) : null}
+            </div>
+          </div>
 
-            {isUploading ? (
-              <UploadStatus isProcessing message="セルアウトファイルを取り込み中..." />
-            ) : null}
-            {notice ? <p className="text-sm text-muted-foreground">{notice}</p> : null}
+          {notice && !isUploading ? <p className="text-sm text-muted-foreground">{notice}</p> : null}
+        </CardContent>
+      </Card>
 
-            <p className="text-xs text-muted-foreground">
-              新しい小売チェーンを追加するときは、専用パーサーではなく「レイアウト型 + プロファイル設定」を1件追加するだけで対応できます。
-            </p>
-          </CardContent>
-        </Card>
-
-        <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
-          <SummaryCard label="明細件数" value={`${summary.entryCount.toLocaleString("ja-JP")}件`} />
-          <SummaryCard label="店舗数" value={`${summary.storeCount.toLocaleString("ja-JP")}店`} />
-          <SummaryCard label="売上数量" value={`${summary.totalQty.toLocaleString("ja-JP")}個`} />
-          <SummaryCard label="売上金額" value={formatYen(summary.totalAmount)} />
-        </div>
+      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+        <SummaryCard label="月次明細" value={`${summary.entryCount.toLocaleString("ja-JP")}件`} />
+        <SummaryCard label="店舗数" value={`${summary.storeCount.toLocaleString("ja-JP")}店`} />
+        <SummaryCard label="売上数量" value={`${summary.totalQty.toLocaleString("ja-JP")}個`} />
+        <SummaryCard label="売上金額" value={formatYen(summary.totalAmount)} />
       </div>
 
       {latestImportsByRetailer.length > 0 ? (
@@ -284,57 +315,44 @@ export function SelloutPanel({
 
       <Card>
         <CardContent className="grid gap-4 pt-6">
-          <div className="flex flex-wrap items-end gap-3">
-            <Field className="min-w-40">
-              <FieldLabel>小売チェーン</FieldLabel>
-              <Select
-                items={[
-                  { label: "すべて", value: "all" },
-                  ...retailerOptions.map((retailer) => ({ label: retailer, value: retailer })),
-                ]}
-                value={selectedRetailerFilter}
-                onValueChange={(value) => setSelectedRetailerFilter(value ?? "all")}
-              >
-                <SelectTrigger>
-                  <SelectValue placeholder="すべて" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectGroup>
-                    <SelectItem value="all">すべて</SelectItem>
-                    {retailerOptions.map((retailer) => (
-                      <SelectItem key={retailer} value={retailer}>
-                        {retailer}
-                      </SelectItem>
-                    ))}
-                  </SelectGroup>
-                </SelectContent>
-              </Select>
-            </Field>
+          <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+            <FilterSelect
+              label="企業"
+              value={filters.retailer}
+              options={filterOptions.retailers}
+              onChange={(value) => updateFilter("retailer", value)}
+            />
+            <FilterSelect
+              label="店舗"
+              value={filters.storeName}
+              options={filterOptions.stores}
+              onChange={(value) => updateFilter("storeName", value)}
+            />
+            <FilterSelect
+              label="商品"
+              value={filters.productName}
+              options={filterOptions.products}
+              onChange={(value) => updateFilter("productName", value)}
+            />
+            <FilterSelect
+              label="JAN"
+              value={filters.jan}
+              options={filterOptions.jans}
+              onChange={(value) => updateFilter("jan", value)}
+            />
+          </div>
 
-            <Field className="min-w-56 flex-1">
-              <FieldLabel>検索</FieldLabel>
-              <Input
-                value={searchQuery}
-                onChange={(event) => setSearchQuery(event.target.value)}
-                placeholder="店舗名・JAN・商品名"
-              />
-            </Field>
-
-            <Button
-              type="button"
-              variant="outline"
-              onClick={() => {
-                setSelectedRetailerFilter("all");
-                setSearchQuery("");
-              }}
-            >
+          <div className="flex justify-end">
+            <Button type="button" variant="outline" onClick={() => setFilters(defaultFilters)}>
               絞り込み解除
             </Button>
           </div>
 
+          <SelloutCharts monthlyRows={monthlyChartRows} productRows={productChartRows} />
+
           {isLoading ? (
             <p className="text-sm text-muted-foreground">セルアウトデータを読み込み中...</p>
-          ) : filteredEntries.length === 0 ? (
+          ) : monthlyRows.length === 0 ? (
             <p className="text-sm text-muted-foreground">
               セルアウトデータがありません。小売チェーンから届いたExcelをアップロードしてください。
             </p>
@@ -343,34 +361,25 @@ export function SelloutPanel({
               <Table>
                 <TableHeader>
                   <TableRow>
-                    <TableHead>期間</TableHead>
-                    <TableHead>小売</TableHead>
+                    <TableHead>月</TableHead>
+                    <TableHead>企業</TableHead>
                     <TableHead>店舗</TableHead>
                     <TableHead>JAN</TableHead>
-                    <TableHead>商品</TableHead>
+                    <TableHead>商品名</TableHead>
                     <TableHead className="text-right">数量</TableHead>
                     <TableHead className="text-right">金額</TableHead>
-                    <TableHead className="text-right">在庫</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {filteredEntries.map((entry) => (
-                    <TableRow key={entry.id}>
-                      <TableCell>{formatPeriod(entry.periodStart, entry.periodEnd)}</TableCell>
-                      <TableCell>{entry.retailer}</TableCell>
-                      <TableCell>
-                        <div>{entry.matchedStoreName || entry.storeName}</div>
-                        {entry.matchedStoreName && entry.matchedStoreName !== entry.storeName ? (
-                          <div className="text-xs text-muted-foreground">{entry.storeName}</div>
-                        ) : null}
-                      </TableCell>
-                      <TableCell className="font-mono text-xs">{entry.jan}</TableCell>
-                      <TableCell>{entry.productName}</TableCell>
-                      <TableCell className="text-right">{entry.qty.toLocaleString("ja-JP")}</TableCell>
-                      <TableCell className="text-right">{formatYen(entry.amount)}</TableCell>
-                      <TableCell className="text-right">
-                        {entry.stock === null ? "-" : entry.stock.toLocaleString("ja-JP")}
-                      </TableCell>
+                  {monthlyRows.map((row) => (
+                    <TableRow key={`${row.month}-${row.retailer}-${row.storeName}-${row.jan}`}>
+                      <TableCell>{row.month}</TableCell>
+                      <TableCell>{row.retailer}</TableCell>
+                      <TableCell>{row.storeName}</TableCell>
+                      <TableCell className="font-mono text-xs">{row.jan}</TableCell>
+                      <TableCell>{row.productName}</TableCell>
+                      <TableCell className="text-right">{row.qty.toLocaleString("ja-JP")}</TableCell>
+                      <TableCell className="text-right">{formatYen(row.amount)}</TableCell>
                     </TableRow>
                   ))}
                 </TableBody>
@@ -380,6 +389,46 @@ export function SelloutPanel({
         </CardContent>
       </Card>
     </section>
+  );
+}
+
+function FilterSelect({
+  label,
+  value,
+  options,
+  onChange,
+}: {
+  label: string;
+  value: string;
+  options: string[];
+  onChange: (value: string) => void;
+}) {
+  return (
+    <Field>
+      <FieldLabel>{label}</FieldLabel>
+      <Select
+        items={[
+          { label: "すべて", value: "all" },
+          ...options.map((option) => ({ label: option, value: option })),
+        ]}
+        value={value}
+        onValueChange={(nextValue) => onChange(nextValue ?? "all")}
+      >
+        <SelectTrigger>
+          <SelectValue placeholder="すべて" />
+        </SelectTrigger>
+        <SelectContent>
+          <SelectGroup>
+            <SelectItem value="all">すべて</SelectItem>
+            {options.map((option) => (
+              <SelectItem key={option} value={option}>
+                {option}
+              </SelectItem>
+            ))}
+          </SelectGroup>
+        </SelectContent>
+      </Select>
+    </Field>
   );
 }
 
