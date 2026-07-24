@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import * as XLSX from "xlsx";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { FileUploadButton, UploadStatus } from "@/components/file-upload-button";
@@ -43,6 +44,10 @@ import {
   buildStoreIntroductionMatrix,
   type IntroductionMatrixProduct,
 } from "@/lib/store-introduction-matrix";
+import {
+  buildStoreIntroductionExportFileName,
+  buildStoreIntroductionExportRows,
+} from "@/lib/store-introduction-export";
 import type { StoreLocationRecord } from "@/lib/store-location-groups";
 import {
   importStoreIntroductionWorkbook,
@@ -610,6 +615,29 @@ export function StoreIntroductionPanel({
     return `${option.productName} (${option.jan})`;
   }
 
+  function exportIntroductionMatrixExcel() {
+    if (introductionMatrix.rows.length === 0) {
+      setNotice("出力対象の店舗がありません。");
+      return;
+    }
+
+    const selectedProduct = productOptions.find((option) => option.key === selectedProductKey);
+    const worksheet = XLSX.utils.json_to_sheet(
+      buildStoreIntroductionExportRows(introductionMatrix.rows, introductionMatrix.products),
+    );
+    const workbook = XLSX.utils.book_new();
+
+    XLSX.utils.book_append_sheet(workbook, worksheet, "導入店舗表");
+    XLSX.writeFile(
+      workbook,
+      buildStoreIntroductionExportFileName({
+        chainFilter: selectedRetailChainFilter,
+        productLabel: selectedProduct ? selectedProduct.productName : undefined,
+      }),
+    );
+    setNotice(`導入店舗表Excelを出力しました（${introductionMatrix.rows.length.toLocaleString()}店舗）。`);
+  }
+
   return (
     <Card>
       <CardContent className="flex flex-col gap-6 pt-6">
@@ -756,7 +784,17 @@ export function StoreIntroductionPanel({
             ) : null}
 
             <div className="grid gap-3">
-              <h3 className="text-base font-semibold">店舗詳細</h3>
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <h3 className="text-base font-semibold">店舗詳細</h3>
+                <Button
+                  type="button"
+                  variant="outline"
+                  disabled={introductionMatrix.rows.length === 0}
+                  onClick={exportIntroductionMatrixExcel}
+                >
+                  Excel出力
+                </Button>
+              </div>
               <div className="grid gap-3 md:grid-cols-[minmax(220px,1fr)_minmax(220px,1fr)_minmax(220px,1fr)_auto]">
               <Field>
                 <FieldLabel>小売企業</FieldLabel>
