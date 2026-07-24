@@ -398,12 +398,21 @@ function isAinzShipmentStoreRow(storeCode: string, storeName: string) {
     return false;
   }
 
+  if (isAinzNonPhysicalStoreName(storeName)) {
+    return false;
+  }
+
   return true;
+}
+
+function isAinzNonPhysicalStoreName(storeName: string) {
+  const normalized = normalizeStoreLocationName(storeName);
+  return /webstore|ウェブストア|通販|オンライン/.test(normalized);
 }
 
 function buildAinzShipmentStatusMap(rows: unknown[][]) {
   const storeHeaderIndex = findAinzShipmentStoreHeaderIndex(rows);
-  const statusMap = new Map<string, { isIntroduced: boolean; storeName: string }>();
+  const statusMap = new Map<string, AinzIntroductionStatus>();
   let sawStoreRow = false;
 
   for (const row of rows.slice(storeHeaderIndex + 1)) {
@@ -422,9 +431,10 @@ function buildAinzShipmentStatusMap(rows: unknown[][]) {
     }
 
     sawStoreRow = true;
-    const shipmentStatus = {
+    const shipmentStatus: AinzIntroductionStatus = {
       isIntroduced: isAinzShipmentIntroduced(row),
       storeName,
+      storeCode,
     };
 
     buildAinzStoreCodeAliases(storeCode).forEach((alias) => {
@@ -435,19 +445,25 @@ function buildAinzShipmentStatusMap(rows: unknown[][]) {
   return statusMap;
 }
 
+type AinzIntroductionStatus = {
+  isIntroduced: boolean;
+  storeName: string;
+  storeCode: string;
+};
+
 function registerAinzIntroductionStatus(
-  statusByCode: Map<string, { isIntroduced: boolean; storeName: string }>,
-  statusByName: Map<string, { isIntroduced: boolean; storeName: string }>,
+  statusByCode: Map<string, AinzIntroductionStatus>,
+  statusByName: Map<string, AinzIntroductionStatus>,
   storeCode: string,
   storeName: string,
-  status: { isIntroduced: boolean; storeName: string },
+  status: AinzIntroductionStatus,
   addressBook?: Map<string, PromotionalAddressEntry>,
 ) {
   buildAinzStoreCodeAliases(storeCode).forEach((alias) => {
     statusByCode.set(alias, status);
   });
 
-  buildStoreNameMatchKeys(storeName).forEach((key) => {
+  buildAinzStoreNameMatchKeys(storeName).forEach((key) => {
     statusByName.set(key, status);
   });
 
@@ -457,7 +473,7 @@ function registerAinzIntroductionStatus(
 
   const addressEntry = lookupAinzAddressBookEntry(storeCode, addressBook);
   if (addressEntry) {
-    buildStoreNameMatchKeys(addressEntry.storeName).forEach((key) => {
+    buildAinzStoreNameMatchKeys(addressEntry.storeName).forEach((key) => {
       statusByName.set(key, status);
     });
   }
@@ -465,7 +481,7 @@ function registerAinzIntroductionStatus(
 
 function lookupAinzShipmentStatus(
   storeCode: string,
-  statusMap: Map<string, { isIntroduced: boolean; storeName: string }>,
+  statusMap: Map<string, AinzIntroductionStatus>,
 ) {
   for (const alias of buildAinzStoreCodeAliases(storeCode)) {
     const status = statusMap.get(alias);
@@ -486,23 +502,26 @@ export function mergeAinzIntroductionEntriesWithStoreMaster(
   >,
   addressBook?: Map<string, PromotionalAddressEntry>,
 ) {
-  const ainzLocations = locations.filter((location) => location.storeCode.startsWith("ainz-"));
+  const ainzLocations = locations.filter((location) =>
+    Boolean(location.storeCode?.startsWith("ainz-")),
+  );
 
   if (ainzLocations.length < 5) {
     return entries;
   }
 
-  const statusByCode = new Map<string, { isIntroduced: boolean; storeName: string }>();
-  const statusByName = new Map<string, { isIntroduced: boolean; storeName: string }>();
+  const statusByCode = new Map<string, AinzIntroductionStatus>();
+  const statusByName = new Map<string, AinzIntroductionStatus>();
 
   entries.forEach((entry) => {
     if (!isAinzShipmentStoreRow(entry.storeCode, entry.storeName)) {
       return;
     }
 
-    const status = {
+    const status: AinzIntroductionStatus = {
       isIntroduced: entry.isIntroduced,
       storeName: entry.storeName,
+      storeCode: entry.storeCode,
     };
 
     registerAinzIntroductionStatus(
@@ -520,12 +539,19 @@ export function mergeAinzIntroductionEntriesWithStoreMaster(
     productName: entries[0]?.productName ?? "",
   };
 
+  const claimedShipmentCodes = new Set<string>();
   const merged = ainzLocations.map((location) => {
     const shipmentStatus = lookupAinzIntroductionStatusForOfficialStore(
       location,
       statusByCode,
       statusByName,
     );
+
+    if (shipmentStatus?.storeCode) {
+      buildAinzStoreCodeAliases(shipmentStatus.storeCode).forEach((alias) => {
+        claimedShipmentCodes.add(alias);
+      });
+    }
 
     return {
       jan: metadata.jan,
@@ -538,13 +564,34 @@ export function mergeAinzIntroductionEntriesWithStoreMaster(
     };
   });
 
-  return dedupeEntries(merged);
+  const unmatchedIntroduced = entries.filter((entry) => {
+    if (!entry.isIntroduced || !isAinzShipmentStoreRow(entry.storeCode, entry.storeName)) {
+      return false;
+    }
+
+    return !buildAinzStoreCodeAliases(entry.storeCode).some((alias) =>
+      claimedShipmentCodes.has(alias),
+    );
+  });
+
+  return dedupeEntries([
+    ...merged,
+    ...unmatchedIntroduced.map((entry) => ({
+      jan: metadata.jan || entry.jan,
+      productName: metadata.productName || entry.productName,
+      storeName: entry.storeName,
+      storeCode: entry.storeCode,
+      address: entry.address,
+      postalCode: entry.postalCode,
+      isIntroduced: true,
+    })),
+  ]);
 }
 
 function lookupAinzIntroductionStatusForOfficialStore(
   location: Pick<StoreLocation, "storeCode" | "storeName">,
-  statusByCode: Map<string, { isIntroduced: boolean; storeName: string }>,
-  statusByName: Map<string, { isIntroduced: boolean; storeName: string }>,
+  statusByCode: Map<string, AinzIntroductionStatus>,
+  statusByName: Map<string, AinzIntroductionStatus>,
 ) {
   const byCode = lookupAinzShipmentStatus(location.storeCode, statusByCode);
   if (byCode) {
@@ -556,32 +603,60 @@ function lookupAinzIntroductionStatusForOfficialStore(
 
 function lookupAinzIntroductionStatusByName(
   storeName: string,
-  statusByName: Map<string, { isIntroduced: boolean; storeName: string }>,
+  statusByName: Map<string, AinzIntroductionStatus>,
 ) {
-  for (const key of buildStoreNameMatchKeys(storeName)) {
+  for (const key of buildAinzStoreNameMatchKeys(storeName)) {
     const status = statusByName.get(key);
     if (status) {
       return status;
     }
   }
 
-  const normalizedTarget = normalizeStoreLocationName(storeName);
-  if (!normalizedTarget) {
+  const targetKeys = buildAinzStoreNameMatchKeys(storeName).filter((key) => key.length >= 3);
+  if (targetKeys.length === 0) {
     return undefined;
   }
 
   for (const [key, status] of statusByName.entries()) {
+    if (key.length < 3) {
+      continue;
+    }
+
     if (
-      normalizedTarget.includes(key) ||
-      key.includes(normalizedTarget) ||
-      normalizedTarget.endsWith(key) ||
-      key.endsWith(normalizedTarget)
+      targetKeys.some(
+        (target) =>
+          target.includes(key) ||
+          key.includes(target) ||
+          target.endsWith(key) ||
+          key.endsWith(target),
+      )
     ) {
       return status;
     }
   }
 
   return undefined;
+}
+
+function buildAinzStoreNameMatchKeys(storeName: string) {
+  const keys = new Set<string>(buildStoreNameMatchKeys(storeName));
+  const core = normalizeAinzStoreMatchName(storeName);
+
+  if (core.length >= 2) {
+    keys.add(core);
+  }
+
+  return Array.from(keys);
+}
+
+function normalizeAinzStoreMatchName(storeName: string) {
+  return normalizeStoreLocationName(storeName)
+    .replace(/^アインズ(?:アンドトルペ|&トルペ)?/, "")
+    .replace(/店$/, "")
+    .replace(/\d+[fｆ階]$/i, "")
+    .replace(/duo/g, "デュオ")
+    .replace(/新札幌/g, "新さっぽろ")
+    .replace(/parco/g, "パルコ");
 }
 
 function tryParseAinzShipmentListSheet(
@@ -704,15 +779,36 @@ export function buildAinzStoreCodeAliases(storeCode: string) {
   const normalized = storeCode.trim();
   const aliases = new Set<string>([normalized]);
 
+  const ainzMatch = normalized.match(/^ainz-0*(\d+)$/i);
+  if (ainzMatch) {
+    addAinzNumericCodeAliases(aliases, ainzMatch[1]);
+  }
+
   if (/^10\d{3,4}$/.test(normalized)) {
-    aliases.add(String(Number(normalized.slice(1))));
+    addAinzNumericCodeAliases(aliases, normalized.slice(1));
   }
 
   if (/^\d{1,4}$/.test(normalized)) {
-    aliases.add(`10${normalized.padStart(3, "0")}`);
+    addAinzNumericCodeAliases(aliases, normalized);
   }
 
   return Array.from(aliases);
+}
+
+function addAinzNumericCodeAliases(aliases: Set<string>, rawNumeric: string) {
+  const numeric = String(Number(rawNumeric));
+  if (!numeric || numeric === "NaN") {
+    return;
+  }
+
+  const padded4 = numeric.padStart(4, "0");
+  const shipmentCode = `10${numeric.padStart(3, "0")}`;
+
+  aliases.add(numeric);
+  aliases.add(padded4);
+  aliases.add(shipmentCode);
+  aliases.add(`ainz-${padded4}`);
+  aliases.add(`ainz-${numeric}`);
 }
 
 function toAinzAddressStoreCode(shipmentStoreCode: string) {
