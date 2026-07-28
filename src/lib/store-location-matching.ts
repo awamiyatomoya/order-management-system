@@ -208,7 +208,10 @@ export function resolveStoreLocationMatch(
   }
 
   if (entry.storeCode && !isExcelInternalStoreCode(entry.storeCode)) {
-    return lookup.byCode.get(entry.storeCode);
+    const byCode = lookup.byCode.get(entry.storeCode);
+    if (byCode) {
+      return byCode;
+    }
   }
 
   if (entry.storeCode) {
@@ -218,7 +221,69 @@ export function resolveStoreLocationMatch(
     }
   }
 
-  return undefined;
+  return findUniqueStoreLocationCandidate(entry.storeName, listUniqueStoreLocations(lookup));
+}
+
+export function findUniqueStoreLocationCandidate(
+  storeName: string,
+  locations: StoreLocation[],
+): StoreLocation | undefined {
+  const queries = buildUniqueCandidateQueries(storeName);
+  if (queries.length === 0 || locations.length === 0) {
+    return undefined;
+  }
+
+  const matches = new Map<string, StoreLocation>();
+
+  locations.forEach((location) => {
+    const candidate = normalizeStoreLocationName(location.storeName);
+    if (!candidate) {
+      return;
+    }
+
+    const isMatch = queries.some((query) => candidate.includes(query));
+    if (!isMatch) {
+      return;
+    }
+
+    matches.set(location.storeCode || location.storeName, location);
+  });
+
+  if (matches.size !== 1) {
+    return undefined;
+  }
+
+  return Array.from(matches.values())[0];
+}
+
+function buildUniqueCandidateQueries(storeName: string) {
+  const normalized = normalizeStoreLocationName(storeName);
+  if (!normalized || normalized.length < 2) {
+    return [] as string[];
+  }
+
+  const queries = new Set<string>([normalized]);
+
+  if (/sq|エスキュ/.test(normalized)) {
+    queries.add(normalized.replace(/sq|エスキュ/g, "スクエア"));
+    queries.add(normalized.replace(/sq|エスキュ/g, "スクランブルスクエア"));
+  }
+
+  return Array.from(queries).filter((query) => query.length >= 2);
+}
+
+function listUniqueStoreLocations(lookup: ReturnType<typeof buildStoreLocationLookup>) {
+  const locations = new Map<string, StoreLocation>();
+
+  lookup.byName.forEach((location) => {
+    locations.set(location.storeCode || location.storeName, location);
+  });
+
+  lookup.byCode.forEach((location) => {
+    locations.set(location.storeCode || location.storeName, location);
+  });
+
+  return Array.from(locations.values());
 }
 
 export function resolveStoreLocationAddress(

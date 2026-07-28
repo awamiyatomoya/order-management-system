@@ -7,6 +7,10 @@ import {
   resolveStoreLocationMatch,
   type StoreLocation,
 } from "@/lib/store-location-matching";
+import {
+  belongsToStoreLocationChain,
+  hasOfficialChainStoreMaster,
+} from "@/lib/store-location-groups";
 import { ensureOfficialChainStoreLocationsFromOfficialSite } from "@/lib/supabase/store-location-actions";
 import { readStoreLocationRecords } from "@/lib/supabase/store-location-actions";
 import type { SelloutEntry, SelloutImport } from "@/lib/types";
@@ -51,7 +55,7 @@ export async function importSelloutWorkbook(formData: FormData): Promise<ImportS
 
   await ensureStoreLocationsForRetailer(parsed.retailer);
   const storeLocations = await readStoreLocationRecords();
-  const lookup = buildStoreLocationLookup(storeLocations);
+  const lookup = buildSelloutStoreLocationLookup(storeLocations, parsed.retailer);
 
   const enrichedEntries = parsed.entries.map((entry) => {
     const matched = resolveSelloutStoreMatch(entry, lookup, parsed.retailer);
@@ -255,6 +259,22 @@ async function ensureStoreLocationsForRetailer(retailer: string) {
       // 公式サイト取得に失敗しても既存マスタで続行する。
     }
   }
+}
+
+function buildSelloutStoreLocationLookup(
+  storeLocations: Array<StoreLocation & { chainName?: string }>,
+  retailer: string,
+) {
+  if (hasOfficialChainStoreMaster(retailer)) {
+    const scoped = storeLocations.filter((location) =>
+      belongsToStoreLocationChain(location, retailer),
+    );
+    if (scoped.length >= 5) {
+      return buildStoreLocationLookup(scoped);
+    }
+  }
+
+  return buildStoreLocationLookup(storeLocations);
 }
 
 function resolveSelloutStoreMatch(

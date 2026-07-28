@@ -1,0 +1,42 @@
+---
+description: 店舗名・商品名は必ずマスタを表示・参照する
+alwaysApply: true
+---
+
+# 店舗名・商品名はマスタを使う
+
+画面・集計・サジェスト・エクスポートで店舗名・商品名を出すときは、取込Excelの生文字列をそのまま出さない。必ずマスタ解決後の名前を使う。
+
+## 商品名
+
+- 正は `products`（クライアント別 JAN）。
+- 表示: `products.name`。見つからなければ `"未登録"`（セルインと同じ）。
+- Excelの商品名は取込時の補助情報のみ。表示・フィルタ・グラフのラベルに使わない。
+- 参照例: セルインの `product?.name ?? "未登録"`。
+
+```ts
+// ❌ BAD — Excel由来の entry.productName をそのまま表示
+<TableCell>{entry.productName}</TableCell>
+
+// ✅ GOOD — マスタ解決後の名前を表示
+<TableCell>{resolveProductName(entry.jan, clientId, products)}</TableCell>
+```
+
+## 店舗名
+
+- 正は `store_locations`（公式チェーンマスタ含む）。
+- 表示: 照合成功時は `matchedStoreName` / マスタの `storeName`。失敗時は「店舗不明」または明示的な未照合表示。Excel略称（例: `渋谷ＳＱ`, `那覇`, `柏`）をそのまま出さない。
+- セルアウトは `getSelloutDisplayStoreName` を使うが、未照合時に Excel 生値へフォールバックしない方向で直す。
+- 導入店舗も同様にマスタ照合後の店名を使う。
+
+```ts
+// ❌ BAD
+return entry.matchedStoreName || entry.storeName;
+
+// ✅ GOOD
+return entry.matchedStoreName || "店舗不明";
+```
+
+## 適用範囲
+
+受注・セルイン・セルアウト・導入店舗・KPI・フィルタ候補・チャート・Excel/CSV出力など、店舗名・商品名が出るすべての箇所。

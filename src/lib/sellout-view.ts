@@ -135,14 +135,14 @@ export function buildSelloutMonthlyRows(entries: SelloutEntry[]): SelloutMonthly
   });
 
   return Array.from(rowsByKey.values()).sort((a, b) => {
-    const monthCompare = b.month.localeCompare(a.month, "ja");
-    if (monthCompare !== 0) {
-      return monthCompare;
+    const amountCompare = b.amount - a.amount;
+    if (amountCompare !== 0) {
+      return amountCompare;
     }
 
-    const retailerCompare = a.retailer.localeCompare(b.retailer, "ja");
-    if (retailerCompare !== 0) {
-      return retailerCompare;
+    const qtyCompare = b.qty - a.qty;
+    if (qtyCompare !== 0) {
+      return qtyCompare;
     }
 
     const storeCompare = a.storeName.localeCompare(b.storeName, "ja");
