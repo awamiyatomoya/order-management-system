@@ -19,8 +19,9 @@ export type SelloutChartRow = {
 export type SelloutFilters = {
   retailer: string;
   storeName: string;
-  productName: string;
-  jan: string;
+  productSearch: string;
+  year: string;
+  month: string;
 };
 
 export function getSelloutMonthLabel(entry: Pick<SelloutEntry, "periodStart" | "periodEnd">) {
@@ -56,21 +57,34 @@ export function getSelloutMonthKey(entry: Pick<SelloutEntry, "periodStart" | "pe
 }
 
 export function filterSelloutEntries(entries: SelloutEntry[], filters: SelloutFilters) {
+  const storeQuery = filters.storeName.trim().toLowerCase();
+  const productQuery = filters.productSearch.trim().toLowerCase();
+  const monthFilter = filters.month === "all" ? "" : filters.month.padStart(2, "0");
+
   return entries.filter((entry) => {
     if (filters.retailer !== "all" && entry.retailer !== filters.retailer) {
       return false;
     }
 
     const storeName = getSelloutDisplayStoreName(entry);
-    if (filters.storeName !== "all" && storeName !== filters.storeName) {
+    if (storeQuery && !storeName.toLowerCase().includes(storeQuery)) {
       return false;
     }
 
-    if (filters.productName !== "all" && entry.productName !== filters.productName) {
+    if (productQuery) {
+      const productName = entry.productName.toLowerCase();
+      const jan = entry.jan.toLowerCase();
+      if (!productName.includes(productQuery) && !jan.includes(productQuery)) {
+        return false;
+      }
+    }
+
+    const monthKey = getSelloutMonthKey(entry);
+    if (filters.year !== "all" && !monthKey.startsWith(`${filters.year}-`)) {
       return false;
     }
 
-    if (filters.jan !== "all" && entry.jan !== filters.jan) {
+    if (monthFilter && !monthKey.endsWith(`-${monthFilter}`)) {
       return false;
     }
 
@@ -237,25 +251,64 @@ export function buildSelloutProductChartRows(entries: SelloutEntry[]): SelloutCh
 export function buildSelloutFilterOptions(entries: SelloutEntry[], filters: SelloutFilters) {
   const retailerScoped = filterSelloutEntries(entries, {
     retailer: filters.retailer,
-    storeName: "all",
-    productName: "all",
-    jan: "all",
-  });
-  const storeScoped = filterSelloutEntries(entries, {
-    ...filters,
-    productName: "all",
-    jan: "all",
+    storeName: "",
+    productSearch: "",
+    year: filters.year,
+    month: filters.month,
   });
   const productScoped = filterSelloutEntries(entries, {
     ...filters,
-    jan: "all",
+    productSearch: "",
   });
+
+  const years = uniqueSorted(
+    entries
+      .map((entry) => getSelloutMonthKey(entry).slice(0, 4))
+      .filter((year) => /^\d{4}$/.test(year)),
+  ).sort((a, b) => b.localeCompare(a));
+
+  const months = uniqueSorted(
+    filterSelloutEntries(entries, {
+      retailer: filters.retailer,
+      storeName: filters.storeName,
+      productSearch: filters.productSearch,
+      year: filters.year,
+      month: "all",
+    })
+      .map((entry) => getSelloutMonthKey(entry))
+      .filter((key) => (filters.year === "all" ? Boolean(key) : key.startsWith(`${filters.year}-`)))
+      .map((key) => String(Number(key.slice(5))))
+      .filter((month) => month !== "NaN"),
+  ).sort((a, b) => Number(a) - Number(b));
+
+  const products = Array.from(
+    new Map(
+      productScoped
+        .filter((entry) => entry.productName || entry.jan)
+        .map((entry) => {
+          const label =
+            entry.productName && entry.jan && entry.productName !== entry.jan
+              ? `${entry.productName} (${entry.jan})`
+              : entry.productName || entry.jan;
+          return [
+            `${entry.jan}::${entry.productName}`,
+            {
+              label,
+              value: entry.productName || entry.jan,
+              jan: entry.jan,
+              productName: entry.productName,
+            },
+          ] as const;
+        }),
+    ).values(),
+  ).sort((left, right) => left.label.localeCompare(right.label, "ja"));
 
   return {
     retailers: uniqueSorted(entries.map((entry) => entry.retailer).filter(Boolean)),
-    stores: uniqueSorted(storeScoped.map((entry) => getSelloutDisplayStoreName(entry))),
-    products: uniqueSorted(productScoped.map((entry) => entry.productName).filter(Boolean)),
-    jans: uniqueSorted(productScoped.map((entry) => entry.jan).filter(Boolean)),
+    stores: uniqueSorted(retailerScoped.map((entry) => getSelloutDisplayStoreName(entry))),
+    products,
+    years,
+    months,
     retailerScopedCount: retailerScoped.length,
   };
 }

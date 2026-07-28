@@ -64,7 +64,7 @@ export function SelloutCharts({
   const needsScroll = monthlyRows.length > 14;
 
   return (
-    <div className="grid gap-4 xl:grid-cols-2">
+    <div className="grid gap-3 xl:grid-cols-2">
       <Card>
         <CardHeader>
           <CardTitle className="text-base">月別売上金額推移</CardTitle>
