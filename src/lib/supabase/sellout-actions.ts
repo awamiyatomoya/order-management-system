@@ -6,6 +6,7 @@ import {
   buildStoreLocationLookup,
   resolveStoreLocationMatch,
   type StoreLocation,
+  type StoreLocationMatchOptions,
 } from "@/lib/store-location-matching";
 import {
   belongsToStoreLocationChain,
@@ -56,9 +57,16 @@ export async function importSelloutWorkbook(formData: FormData): Promise<ImportS
   await ensureStoreLocationsForRetailer(parsed.retailer);
   const storeLocations = await readStoreLocationRecords();
   const lookup = buildSelloutStoreLocationLookup(storeLocations, parsed.retailer);
+  const introducedStoreCodes = await loadIntroducedStoreCodes(
+    clientId,
+    parsed.retailer,
+    storeLocations,
+  );
 
   const enrichedEntries = parsed.entries.map((entry) => {
-    const matched = resolveSelloutStoreMatch(entry, lookup, parsed.retailer);
+    const matched = resolveSelloutStoreMatch(entry, lookup, parsed.retailer, {
+      introducedStoreCodes,
+    });
     return {
       ...entry,
       storeCode: matched?.storeCode || entry.storeCode,
@@ -281,6 +289,7 @@ function resolveSelloutStoreMatch(
   entry: Pick<StoreLocation, "storeCode" | "storeName">,
   lookup: ReturnType<typeof buildStoreLocationLookup>,
   retailer: string,
+  options?: StoreLocationMatchOptions,
 ) {
   if (retailer === "ロフト" && /^\d{2,4}$/.test(entry.storeCode.trim())) {
     const loftMatch = lookup.byCode.get(`loft-${entry.storeCode.trim()}`);
@@ -297,7 +306,103 @@ function resolveSelloutStoreMatch(
       address: "",
     },
     lookup,
+    options,
   );
+}
+
+async function loadIntroducedStoreCodes(
+  clientId: string,
+  retailer: string,
+  storeLocations: Array<StoreLocation & { chainName?: string }>,
+) {
+  const codes = new Set<string>();
+
+  if (!clientId || !hasSupabaseServerEnv()) {
+    return codes;
+  }
+
+  const supabase = createServerSupabaseClient();
+  const { data: imports, error: importsError } = await supabase
+    .from("store_introduction_imports")
+    .select("id, chain_name, imported_at")
+    .eq("client_id", clientId)
+    .order("imported_at", { ascending: false });
+
+  if (importsError || !imports?.length) {
+    return codes;
+  }
+
+  const latestImportIdByChain = new Map<string, string>();
+  imports.forEach((importBatch) => {
+    const chainName = (importBatch.chain_name ?? "").trim();
+    if (!chainName || latestImportIdByChain.has(chainName)) {
+      return;
+    }
+    latestImportIdByChain.set(chainName, importBatch.id);
+  });
+
+  const targetImportIds = retailer && latestImportIdByChain.has(retailer)
+    ? [latestImportIdByChain.get(retailer)!]
+    : Array.from(latestImportIdByChain.values());
+
+  if (targetImportIds.length === 0) {
+    return codes;
+  }
+
+  const { data: entries, error: entriesError } = await supabase
+    .from("store_introduction_entries")
+    .select("store_code, store_name, is_introduced, import_id")
+    .eq("client_id", clientId)
+    .eq("is_introduced", true)
+    .in("import_id", targetImportIds);
+
+  if (entriesError || !entries?.length) {
+    return codes;
+  }
+
+  const scopedLocations = hasOfficialChainStoreMaster(retailer)
+    ? storeLocations.filter(
+        (location) =>
+          location.storeCode && belongsToStoreLocationChain(location, retailer),
+      )
+    : storeLocations;
+  const lookup = buildStoreLocationLookup(
+    (scopedLocations.length >= 5 ? scopedLocations : storeLocations).map((location) => ({
+      storeCode: location.storeCode,
+      storeName: location.storeName,
+      postalCode: location.postalCode,
+      address: location.address,
+      tel: location.tel,
+    })),
+  );
+
+  entries.forEach((entry) => {
+    const matched = resolveStoreLocationMatch(
+      {
+        storeCode: entry.store_code ?? "",
+        storeName: entry.store_name ?? "",
+        postalCode: "",
+        address: "",
+      },
+      lookup,
+    );
+
+    if (matched?.storeCode) {
+      codes.add(matched.storeCode);
+    }
+
+    const rawCode = (entry.store_code ?? "").trim();
+    if (
+      rawCode.startsWith("hands-") ||
+      rawCode.startsWith("loft-") ||
+      rawCode.startsWith("ainz-") ||
+      rawCode.startsWith("atcosme-")
+    ) {
+      codes.add(rawCode);
+    }
+  });
+
+  return codes;
 }
 
 function mapSelloutImport(row: {

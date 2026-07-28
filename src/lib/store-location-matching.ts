@@ -167,6 +167,7 @@ function isExcelInternalStoreCode(storeCode: string) {
 export function resolveStoreLocationMatch(
   entry: Pick<StoreLocation, "storeCode" | "storeName" | "postalCode" | "address">,
   lookup: ReturnType<typeof buildStoreLocationLookup>,
+  options?: StoreLocationMatchOptions,
 ) {
   if (!entry.storeName.trim() && looksLikeStoreAddress(entry.address)) {
     return undefined;
@@ -221,18 +222,29 @@ export function resolveStoreLocationMatch(
     }
   }
 
-  return findUniqueStoreLocationCandidate(entry.storeName, listUniqueStoreLocations(lookup));
+  return findUniqueStoreLocationCandidate(
+    entry.storeName,
+    listUniqueStoreLocations(lookup),
+    options,
+  );
 }
+
+export type StoreLocationMatchOptions = {
+  /** 導入店舗として導入済みの公式店舗コード。複数候補の絞り込みに使う。 */
+  introducedStoreCodes?: Set<string>;
+};
 
 export function findUniqueStoreLocationCandidate(
   storeName: string,
   locations: StoreLocation[],
+  options?: StoreLocationMatchOptions,
 ): StoreLocation | undefined {
   const queries = buildUniqueCandidateQueries(storeName);
   if (queries.length === 0 || locations.length === 0) {
     return undefined;
   }
 
+  const normalizedQuery = normalizeStoreLocationName(storeName);
   const matches = new Map<string, StoreLocation>();
 
   locations.forEach((location) => {
@@ -249,16 +261,76 @@ export function findUniqueStoreLocationCandidate(
     matches.set(location.storeCode || location.storeName, location);
   });
 
-  if (matches.size !== 1) {
-    return undefined;
+  let candidates = Array.from(matches.values());
+
+  // Excelにビー/HBの記載がなければ、ハンズビー店舗は候補から外す
+  if (!queryMentionsHandsBe(normalizedQuery)) {
+    const withoutBe = candidates.filter((location) => !isHandsBeLocation(location));
+    if (withoutBe.length > 0) {
+      candidates = withoutBe;
+    }
   }
 
-  return Array.from(matches.values())[0];
+  if (candidates.length === 1) {
+    return candidates[0];
+  }
+
+  // 複数残る場合は「店名の核がクエリと一致」するものだけに絞る（柏 → ハンズ柏店）
+  const exactPlaceMatches = candidates.filter((location) =>
+    isExactPlaceNameMatch(normalizedQuery, location.storeName),
+  );
+
+  if (exactPlaceMatches.length === 1) {
+    return exactPlaceMatches[0];
+  }
+
+  // 導入済み店舗だけで1件に絞れるならそれを採用
+  const introducedCodes = options?.introducedStoreCodes;
+  if (introducedCodes && introducedCodes.size > 0 && candidates.length > 1) {
+    const introducedMatches = candidates.filter((location) =>
+      introducedCodes.has(location.storeCode),
+    );
+
+    if (introducedMatches.length === 1) {
+      return introducedMatches[0];
+    }
+
+    const introducedExact = introducedMatches.filter((location) =>
+      isExactPlaceNameMatch(normalizedQuery, location.storeName),
+    );
+    if (introducedExact.length === 1) {
+      return introducedExact[0];
+    }
+  }
+
+  return undefined;
+}
+
+function isHandsBeLocation(location: StoreLocation) {
+  const code = location.storeCode.trim().toLowerCase();
+  if (code.startsWith("hands-be_") || code.startsWith("hands-be-") || code === "hands-be") {
+    return true;
+  }
+
+  const normalized = normalizeStoreLocationName(location.storeName);
+  return normalized.includes("ハンズビー") || normalized.startsWith("hb");
+}
+
+function isExactPlaceNameMatch(normalizedQuery: string, storeName: string) {
+  const core = normalizeHandsStoreMatchName(storeName)
+    .replace(/^ハンズビー/, "")
+    .replace(/^ハンズ/, "");
+
+  return core === normalizedQuery;
+}
+
+function queryMentionsHandsBe(normalizedQuery: string) {
+  return /ハンズビー|^hb|ｈｂ/.test(normalizedQuery) || normalizedQuery.includes("ビー");
 }
 
 function buildUniqueCandidateQueries(storeName: string) {
   const normalized = normalizeStoreLocationName(storeName);
-  if (!normalized || normalized.length < 2) {
+  if (!normalized) {
     return [] as string[];
   }
 
@@ -269,7 +341,7 @@ function buildUniqueCandidateQueries(storeName: string) {
     queries.add(normalized.replace(/sq|エスキュ/g, "スクランブルスクエア"));
   }
 
-  return Array.from(queries).filter((query) => query.length >= 2);
+  return Array.from(queries).filter((query) => query.length >= 1);
 }
 
 function listUniqueStoreLocations(lookup: ReturnType<typeof buildStoreLocationLookup>) {
