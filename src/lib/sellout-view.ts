@@ -56,6 +56,23 @@ export function getSelloutMonthKey(entry: Pick<SelloutEntry, "periodStart" | "pe
   return `${year}-${month.padStart(2, "0")}`;
 }
 
+export function getLatestSelloutYearMonth(entries: SelloutEntry[]) {
+  const keys = entries
+    .map((entry) => getSelloutMonthKey(entry))
+    .filter((key) => /^\d{4}-\d{2}$/.test(key))
+    .sort((a, b) => a.localeCompare(b));
+
+  const latest = keys[keys.length - 1];
+  if (!latest) {
+    return null;
+  }
+
+  return {
+    year: latest.slice(0, 4),
+    month: String(Number(latest.slice(5))),
+  };
+}
+
 export function filterSelloutEntries(entries: SelloutEntry[], filters: SelloutFilters) {
   const storeQuery = filters.storeName.trim().toLowerCase();
   const productQuery = filters.productSearch.trim().toLowerCase();

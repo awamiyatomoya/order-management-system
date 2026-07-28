@@ -1,6 +1,8 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import { ChevronLeft, ChevronRight } from "lucide-react";
+import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { FileUploadButton, UploadStatus } from "@/components/file-upload-button";
 import { SelloutCharts } from "@/components/sellout-charts";
@@ -28,13 +30,40 @@ import {
   buildSelloutMonthlyRows,
   buildSelloutProductChartRows,
   filterSelloutEntries,
+  getLatestSelloutYearMonth,
+  getSelloutMonthKey,
   type SelloutFilters,
 } from "@/lib/sellout-view";
 import { importSelloutWorkbook, readSelloutData } from "@/lib/supabase/sellout-actions";
-import type { Client, SelloutEntry } from "@/lib/types";
+import type { Client, Product, SelloutEntry } from "@/lib/types";
 
 function formatYen(amount: number) {
   return `¥${amount.toLocaleString("ja-JP")}`;
+}
+
+function resolveSelloutProductName(
+  jan: string,
+  fallbackName: string,
+  clientId: string,
+  products: Product[],
+) {
+  const product = products.find(
+    (candidate) => candidate.clientId === clientId && candidate.jan === jan,
+  );
+
+  return product?.name || fallbackName || "未登録";
+}
+
+function buildFiltersForEntries(entries: SelloutEntry[], retailer = "all"): SelloutFilters {
+  const latest = getLatestSelloutYearMonth(entries);
+
+  return {
+    retailer,
+    storeName: "",
+    productSearch: "",
+    year: latest?.year ?? "all",
+    month: latest?.month ?? "all",
+  };
 }
 
 const defaultFilters: SelloutFilters = {
@@ -49,17 +78,21 @@ export function SelloutPanel({
   clientId,
   initialDataClientId,
   clients,
+  products,
   onClientChange,
   initialEntries,
 }: {
   clientId: string;
   initialDataClientId?: string;
   clients: Client[];
+  products: Product[];
   onClientChange: (clientId: string) => void;
   initialEntries: SelloutEntry[];
 }) {
   const [entries, setEntries] = useState(initialEntries);
-  const [filters, setFilters] = useState<SelloutFilters>(defaultFilters);
+  const [filters, setFilters] = useState<SelloutFilters>(() =>
+    buildFiltersForEntries(initialEntries),
+  );
   const [isUploading, setIsUploading] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [notice, setNotice] = useState("");
@@ -81,6 +114,7 @@ export function SelloutPanel({
     ) {
       skipInitialServerLoadRef.current = false;
       setEntries(initialEntries);
+      setFilters(buildFiltersForEntries(initialEntries));
       setIsLoading(false);
       return;
     }
@@ -97,6 +131,7 @@ export function SelloutPanel({
       }
 
       setEntries(data.entries);
+      setFilters(buildFiltersForEntries(data.entries));
       setIsLoading(false);
     }
 
@@ -107,14 +142,28 @@ export function SelloutPanel({
     };
   }, [clientId, initialDataClientId, initialEntries]);
 
+  const displayEntries = useMemo(
+    () =>
+      entries.map((entry) => ({
+        ...entry,
+        productName: resolveSelloutProductName(
+          entry.jan,
+          entry.productName,
+          clientId,
+          products,
+        ),
+      })),
+    [clientId, entries, products],
+  );
+
   const filterOptions = useMemo(
-    () => buildSelloutFilterOptions(entries, filters),
-    [entries, filters],
+    () => buildSelloutFilterOptions(displayEntries, filters),
+    [displayEntries, filters],
   );
 
   const filteredEntries = useMemo(
-    () => filterSelloutEntries(entries, filters),
-    [entries, filters],
+    () => filterSelloutEntries(displayEntries, filters),
+    [displayEntries, filters],
   );
 
   const monthlyRows = useMemo(
@@ -143,7 +192,8 @@ export function SelloutPanel({
       totalQty,
       totalAmount,
       averageAmountPerStore: storeCount > 0 ? Math.round(totalAmount / storeCount) : 0,
-      averageQtyPerStore: storeCount > 0 ? Math.round(totalQty / storeCount) : 0,
+      averageQtyPerStore:
+        storeCount > 0 ? Math.round((totalQty / storeCount) * 100) / 100 : 0,
     };
   }, [monthlyRows]);
 
@@ -173,6 +223,18 @@ export function SelloutPanel({
       .map((product) => ({ value: product.value, label: product.label }));
   }, [filterOptions.products, filters.productSearch]);
 
+  const availableMonthKeys = useMemo(() => {
+    const scoped = filterSelloutEntries(displayEntries, {
+      ...filters,
+      year: "all",
+      month: "all",
+    });
+
+    return Array.from(
+      new Set(scoped.map((entry) => getSelloutMonthKey(entry)).filter(Boolean)),
+    ).sort((a, b) => a.localeCompare(b));
+  }, [displayEntries, filters.retailer, filters.storeName, filters.productSearch]);
+
   function updateFilter<K extends keyof SelloutFilters>(key: K, value: SelloutFilters[K]) {
     setFilters((current) => {
       const next = { ...current, [key]: value };
@@ -182,22 +244,16 @@ export function SelloutPanel({
         next.productSearch = "";
       }
 
-      if (key === "year" && value === "all") {
-        next.month = "all";
-      }
-
-      if (key === "year" && value !== "all" && current.month !== "all") {
-        const availableMonths = buildSelloutFilterOptions(entries, {
-          ...next,
-          month: "all",
-        }).months;
-        if (!availableMonths.includes(current.month)) {
-          next.month = "all";
-        }
-      }
-
       return next;
     });
+  }
+
+  function updateYearMonth(year: string, month: string) {
+    setFilters((current) => ({
+      ...current,
+      year,
+      month,
+    }));
   }
 
   async function handleUpload(file: File) {
@@ -225,10 +281,9 @@ export function SelloutPanel({
     setNotice(result.message);
     const data = await readSelloutData(clientId);
     setEntries(data.entries);
-    setFilters({
-      ...defaultFilters,
-      retailer: result.importBatch.retailer || "all",
-    });
+    setFilters(
+      buildFiltersForEntries(data.entries, result.importBatch.retailer || "all"),
+    );
   }
 
   return (
@@ -291,7 +346,10 @@ export function SelloutPanel({
         <SummaryCard label="1店舗平均売上金額" value={formatYen(summary.averageAmountPerStore)} />
         <SummaryCard
           label="1店舗平均個数"
-          value={`${summary.averageQtyPerStore.toLocaleString("ja-JP")}個`}
+          value={`${summary.averageQtyPerStore.toLocaleString("ja-JP", {
+            minimumFractionDigits: 0,
+            maximumFractionDigits: 2,
+          })}個`}
         />
       </div>
 
@@ -318,23 +376,12 @@ export function SelloutPanel({
               suggestions={productSuggestions}
               onChange={(value) => updateFilter("productSearch", value)}
             />
-            <div className="grid grid-cols-2 gap-3">
-              <FilterSelect
-                label="年"
-                value={filters.year}
-                options={filterOptions.years}
-                allLabel="すべての年"
-                onChange={(value) => updateFilter("year", value)}
-              />
-              <FilterSelect
-                label="月"
-                value={filters.month}
-                options={filterOptions.months}
-                optionLabel={(month) => `${month}月`}
-                allLabel="すべての月"
-                onChange={(value) => updateFilter("month", value)}
-              />
-            </div>
+            <MonthYearPicker
+              year={filters.year}
+              month={filters.month}
+              availableMonthKeys={availableMonthKeys}
+              onChange={updateYearMonth}
+            />
           </div>
 
           <SelloutCharts monthlyRows={monthlyChartRows} productRows={productChartRows} />
@@ -350,27 +397,41 @@ export function SelloutPanel({
               <Table>
                 <TableHeader>
                   <TableRow>
-                    <TableHead>月</TableHead>
                     <TableHead>小売企業</TableHead>
                     <TableHead>店舗</TableHead>
                     <TableHead>JAN</TableHead>
                     <TableHead>商品名</TableHead>
                     <TableHead className="text-right">数量</TableHead>
+                    <TableHead className="text-right">平均差</TableHead>
                     <TableHead className="text-right">金額</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {monthlyRows.map((row) => (
-                    <TableRow key={`${row.month}-${row.retailer}-${row.storeName}-${row.jan}`}>
-                      <TableCell>{row.month}</TableCell>
-                      <TableCell>{row.retailer}</TableCell>
-                      <TableCell>{row.storeName}</TableCell>
-                      <TableCell className="font-mono text-xs">{row.jan}</TableCell>
-                      <TableCell>{row.productName}</TableCell>
-                      <TableCell className="text-right">{row.qty.toLocaleString("ja-JP")}</TableCell>
-                      <TableCell className="text-right">{formatYen(row.amount)}</TableCell>
-                    </TableRow>
-                  ))}
+                  {monthlyRows.map((row) => {
+                    const qtyDiff = Math.round(row.qty - summary.averageQtyPerStore);
+
+                    return (
+                      <TableRow key={`${row.month}-${row.retailer}-${row.storeName}-${row.jan}`}>
+                        <TableCell>{row.retailer}</TableCell>
+                        <TableCell>{row.storeName}</TableCell>
+                        <TableCell className="font-mono text-xs">{row.jan}</TableCell>
+                        <TableCell>{row.productName}</TableCell>
+                        <TableCell className="text-right">{row.qty.toLocaleString("ja-JP")}</TableCell>
+                        <TableCell
+                          className={`text-right font-medium ${
+                            qtyDiff > 0
+                              ? "text-emerald-600"
+                              : qtyDiff < 0
+                                ? "text-red-600"
+                                : "text-muted-foreground"
+                          }`}
+                        >
+                          {qtyDiff > 0 ? `+${qtyDiff}` : `${qtyDiff}`}
+                        </TableCell>
+                        <TableCell className="text-right">{formatYen(row.amount)}</TableCell>
+                      </TableRow>
+                    );
+                  })}
                 </TableBody>
               </Table>
             </div>
@@ -491,6 +552,174 @@ function SuggestInput({
                 {suggestion.label}
               </button>
             ))}
+          </div>
+        ) : null}
+      </div>
+    </Field>
+  );
+}
+
+function MonthYearPicker({
+  year,
+  month,
+  availableMonthKeys,
+  onChange,
+}: {
+  year: string;
+  month: string;
+  availableMonthKeys: string[];
+  onChange: (year: string, month: string) => void;
+}) {
+  const availableYears = useMemo(() => {
+    const years = Array.from(
+      new Set(availableMonthKeys.map((key) => key.slice(0, 4)).filter((value) => /^\d{4}$/.test(value))),
+    ).sort((a, b) => Number(a) - Number(b));
+
+    return years;
+  }, [availableMonthKeys]);
+
+  const [isOpen, setIsOpen] = useState(false);
+  const [viewYear, setViewYear] = useState(() => {
+    if (year !== "all") {
+      return year;
+    }
+
+    return availableYears[availableYears.length - 1] ?? String(new Date().getFullYear());
+  });
+  const rootRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (year !== "all") {
+      setViewYear(year);
+      return;
+    }
+
+    setViewYear((current) => {
+      if (availableYears.includes(current)) {
+        return current;
+      }
+
+      return availableYears[availableYears.length - 1] ?? current;
+    });
+  }, [availableYears, year]);
+
+  useEffect(() => {
+    function handlePointerDown(event: MouseEvent) {
+      if (!rootRef.current?.contains(event.target as Node)) {
+        setIsOpen(false);
+      }
+    }
+
+    document.addEventListener("mousedown", handlePointerDown);
+    return () => document.removeEventListener("mousedown", handlePointerDown);
+  }, []);
+
+  const availableMonths = useMemo(() => {
+    return new Set(
+      availableMonthKeys
+        .filter((key) => key.startsWith(`${viewYear}-`))
+        .map((key) => String(Number(key.slice(5)))),
+    );
+  }, [availableMonthKeys, viewYear]);
+
+  const viewYearIndex = availableYears.indexOf(viewYear);
+  const canGoPrev = viewYearIndex > 0;
+  const canGoNext = viewYearIndex >= 0 && viewYearIndex < availableYears.length - 1;
+
+  const label =
+    year !== "all" && month !== "all"
+      ? `${year}年${month}月`
+      : year !== "all"
+        ? `${year}年`
+        : "すべての年月";
+
+  return (
+    <Field className="gap-1">
+      <FieldLabel className="text-xs text-muted-foreground">年月</FieldLabel>
+      <div ref={rootRef} className="relative min-w-[160px]">
+        <Button
+          type="button"
+          variant="outline"
+          className="h-8 w-full justify-between px-2.5 font-normal"
+          onClick={() => setIsOpen((current) => !current)}
+        >
+          <span>{label}</span>
+          <span className="text-muted-foreground">▾</span>
+        </Button>
+
+        {isOpen ? (
+          <div className="absolute right-0 z-20 mt-1 w-[240px] rounded-xl border bg-popover p-3 shadow-md">
+            <div className="mb-3 flex items-center justify-between gap-2">
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon-sm"
+                disabled={!canGoPrev}
+                onClick={() => {
+                  if (canGoPrev) {
+                    setViewYear(availableYears[viewYearIndex - 1]);
+                  }
+                }}
+              >
+                <ChevronLeft />
+              </Button>
+              <p className="text-sm font-medium">{viewYear}年</p>
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon-sm"
+                disabled={!canGoNext}
+                onClick={() => {
+                  if (canGoNext) {
+                    setViewYear(availableYears[viewYearIndex + 1]);
+                  }
+                }}
+              >
+                <ChevronRight />
+              </Button>
+            </div>
+
+            <div className="grid grid-cols-3 gap-1.5">
+              {Array.from({ length: 12 }, (_, index) => {
+                const monthValue = String(index + 1);
+                const isAvailable = availableMonths.has(monthValue);
+                const isSelected = year === viewYear && month === monthValue;
+
+                return (
+                  <button
+                    key={monthValue}
+                    type="button"
+                    disabled={!isAvailable}
+                    className={`rounded-lg px-2 py-2 text-sm transition-colors ${
+                      isSelected
+                        ? "bg-primary text-primary-foreground"
+                        : isAvailable
+                          ? "hover:bg-muted"
+                          : "cursor-not-allowed text-muted-foreground/40"
+                    }`}
+                    onClick={() => {
+                      onChange(viewYear, monthValue);
+                      setIsOpen(false);
+                    }}
+                  >
+                    {monthValue}月
+                  </button>
+                );
+              })}
+            </div>
+
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              className="mt-3 w-full"
+              onClick={() => {
+                onChange("all", "all");
+                setIsOpen(false);
+              }}
+            >
+              すべての年月
+            </Button>
           </div>
         ) : null}
       </div>

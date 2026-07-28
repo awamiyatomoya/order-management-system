@@ -4389,6 +4389,7 @@ export function OrderWorkbench({
             clientId={selectedClientId}
             initialDataClientId={initialSelloutClientId}
             clients={clients}
+            products={products}
             onClientChange={handleClientChange}
             initialEntries={initialData.selloutEntries}
           />
