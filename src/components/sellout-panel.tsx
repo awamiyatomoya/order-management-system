@@ -133,12 +133,16 @@ export function SelloutPanel({
 
   const summary = useMemo(() => {
     const storeKeys = new Set(monthlyRows.map((row) => row.storeName));
+    const storeCount = storeKeys.size;
+    const totalQty = monthlyRows.reduce((sum, row) => sum + row.qty, 0);
+    const totalAmount = monthlyRows.reduce((sum, row) => sum + row.amount, 0);
 
     return {
-      entryCount: monthlyRows.length,
-      storeCount: storeKeys.size,
-      totalQty: monthlyRows.reduce((sum, row) => sum + row.qty, 0),
-      totalAmount: monthlyRows.reduce((sum, row) => sum + row.amount, 0),
+      storeCount,
+      totalQty,
+      totalAmount,
+      averageAmountPerStore: storeCount > 0 ? Math.round(totalAmount / storeCount) : 0,
+      averageQtyPerStore: storeCount > 0 ? Math.round(totalQty / storeCount) : 0,
     };
   }, [monthlyRows]);
 
@@ -249,11 +253,15 @@ export function SelloutPanel({
         </CardContent>
       </Card>
 
-      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
-        <SummaryCard label="月次明細" value={`${summary.entryCount.toLocaleString("ja-JP")}件`} />
+      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-5">
+        <SummaryCard label="売上金額（上代）" value={formatYen(summary.totalAmount)} />
+        <SummaryCard label="販売個数" value={`${summary.totalQty.toLocaleString("ja-JP")}個`} />
         <SummaryCard label="店舗数" value={`${summary.storeCount.toLocaleString("ja-JP")}店`} />
-        <SummaryCard label="売上数量" value={`${summary.totalQty.toLocaleString("ja-JP")}個`} />
-        <SummaryCard label="売上金額" value={formatYen(summary.totalAmount)} />
+        <SummaryCard label="1店舗平均売上金額" value={formatYen(summary.averageAmountPerStore)} />
+        <SummaryCard
+          label="1店舗平均個数"
+          value={`${summary.averageQtyPerStore.toLocaleString("ja-JP")}個`}
+        />
       </div>
 
       <Card>
