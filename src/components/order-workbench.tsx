@@ -1048,6 +1048,10 @@ export function OrderWorkbench({
     [payoutLines],
   );
   const payoutTotal = payoutWholesaleTotal - payoutFbpFeeTotal;
+  const payoutQtyTotal = useMemo(
+    () => payoutLines.reduce((total, row) => total + row.line.qty, 0),
+    [payoutLines],
+  );
   const payoutIssueCount = useMemo(
     () => payoutLines.filter((row) => row.payoutAmount === null).length,
     [payoutLines],
@@ -3880,7 +3884,7 @@ export function OrderWorkbench({
 
         {view === "payouts" ? (
           <section className="grid gap-4">
-            <div className="grid gap-4 md:grid-cols-4">
+            <div className="grid gap-4 md:grid-cols-5">
               <SummaryCard
                 label="下代金額"
                 value={`${payoutWholesaleTotal.toLocaleString()}円`}
@@ -3900,6 +3904,11 @@ export function OrderWorkbench({
                 label="対象明細"
                 value={`${payoutLines.length}件`}
                 description="対象月の発送済み明細数"
+              />
+              <SummaryCard
+                label="数量"
+                value={`${payoutQtyTotal.toLocaleString()}点`}
+                description="対象月の発送済み数量合計"
               />
             </div>
 
@@ -4101,7 +4110,7 @@ export function OrderWorkbench({
                     {sellInRows.length === 0 ? (
                       <TableRow>
                         <TableCell colSpan={9} className="text-muted-foreground">
-                          対象期間のセルインデータはありません。
+                          対象期間に発注日が入る受注がありません。着荷指定日だけが期間内の受注は、発注日の月で確認してください。
                         </TableCell>
                       </TableRow>
                     ) : (
@@ -5152,7 +5161,7 @@ function getWorkbenchPageDescription(view: WorkbenchView) {
   }
 
   if (view === "sellIn") {
-    return "受注を発注日ベースで、日付・JAN・商品ごとに集計します。店舗フィルターで店舗を選んだ場合だけ、その店舗に絞って表示します。発注がない日は、期間内に一度でも出た商品を0件として表示します。";
+    return "発注日で期間を絞り、日付・JAN・商品ごとに数量を集計します。着荷指定日では集計しません。店舗は「すべて」のとき全店舗合算、店舗名を選んだときだけその店舗に絞ります。期間内に一度でも出た商品は、発注のない日も数量0で埋めます。";
   }
 
   if (view === "sellOut") {
@@ -5179,12 +5188,12 @@ function WorkbenchPageIntro({ view }: { view: WorkbenchView }) {
 
   if (view !== "orders") {
     return (
-      <p className="max-w-3xl text-base leading-7 text-muted-foreground">{description}</p>
+      <p className="max-w-5xl text-base leading-7 text-muted-foreground">{description}</p>
     );
   }
 
   return (
-    <div className="max-w-3xl space-y-2 text-base leading-7 text-muted-foreground">
+    <div className="max-w-5xl space-y-2 text-base leading-7 text-muted-foreground">
       <p>{description}</p>
       <details className="group text-sm leading-6">
         <summary className="inline-flex cursor-pointer list-none items-center gap-1 font-medium text-foreground hover:text-primary [&::-webkit-details-marker]:hidden">
