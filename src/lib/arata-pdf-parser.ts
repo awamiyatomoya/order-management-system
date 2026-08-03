@@ -289,7 +289,7 @@ function extractArataPdfName(lines: string[], addressIndex: number) {
 }
 
 function extractArataQtyNearJan(lines: string[], janLineIndex: number) {
-  const detailLines = lines.slice(janLineIndex + 1, janLineIndex + 14);
+  const detailLines = buildArataDetailLinesAfterJan(lines, janLineIndex);
   const qtyFromAmount = extractArataQtyFromAmount(detailLines);
 
   if (qtyFromAmount !== null) {
@@ -302,7 +302,21 @@ function extractArataQtyNearJan(lines: string[], janLineIndex: number) {
     return null;
   }
 
+  // あらたFAXは「入数 / ケース / 有償バラ数」の順。発注数量は有償バラ数（末尾）。
   return numericLines[numericLines.length - 1];
+}
+
+function buildArataDetailLinesAfterJan(lines: string[], janLineIndex: number) {
+  const janLine = lines[janLineIndex] ?? "";
+  const janMatch = [...janLine.matchAll(/(?:\d[\s-]*){13}/g)][0];
+  const sameLineRest = janMatch
+    ? janLine.slice((janMatch.index ?? 0) + janMatch[0].length).trim()
+    : "";
+
+  return [
+    ...(sameLineRest ? [sameLineRest] : []),
+    ...lines.slice(janLineIndex + 1, janLineIndex + 16),
+  ];
 }
 
 function extractArataQtyFromAmount(lines: string[]) {
@@ -330,10 +344,15 @@ function extractArataQtyFromAmount(lines: string[]) {
 
 function extractArataUnitPrice(lines: string[]) {
   for (const line of lines) {
-    const matched = line
-      .replace(/,/g, "")
-      .trim()
-      .match(/(\d{1,6}\.\d{1,2})/);
+    const normalized = line.replace(/,/g, "").trim();
+
+    if (!normalized || isArataDottedDateLine(normalized) || /受付日時|消費税率/.test(normalized)) {
+      continue;
+    }
+
+    // Cloud Vision が明細中に着荷日 (26.08.03) を差し込むと、26.08 を単価と誤認する。
+    const withoutDates = normalized.replace(/\d{2}\.\d{2}\.\d{2}/g, " ");
+    const matched = withoutDates.match(/(\d{1,6}\.\d{1,2})/);
 
     if (!matched) {
       continue;
@@ -352,6 +371,10 @@ function extractArataUnitPrice(lines: string[]) {
 function extractArataLineAmount(lines: string[]) {
   for (const line of lines) {
     const normalized = line.replace(/,/g, "").trim();
+
+    if (isArataDottedDateLine(normalized)) {
+      continue;
+    }
 
     if (!/^\d[\d.]*\|?$/.test(normalized)) {
       continue;
@@ -389,6 +412,10 @@ function collectArataNumericLinesAfterJan(lines: string[]) {
       continue;
     }
 
+    if (isArataColumnHeaderOrLabelLine(trimmed) || isArataDottedDateLine(trimmed)) {
+      continue;
+    }
+
     if (isArataProductNameLine(trimmed) || isArataPriceLine(trimmed)) {
       break;
     }
@@ -409,12 +436,45 @@ function collectArataNumericLinesAfterJan(lines: string[]) {
   return numbers;
 }
 
+function isArataDottedDateLine(line: string) {
+  const trimmed = cleanupArataValue(line);
+
+  return /^\d{2}\.\d{2}\.\d{2}\|?$/.test(trimmed);
+}
+
+function isArataColumnHeaderOrLabelLine(line: string) {
+  const trimmed = cleanupArataValue(line);
+
+  if (
+    /^(?:入数|人数|ケース|有償バラ数|景品バラ数|単価|金額|備考|摘要|条件区分|商品コード\/?品名)$/.test(
+      trimmed,
+    )
+  ) {
+    return true;
+  }
+
+  // Cloud Vision が列見出しを1行にまとめるケース
+  if (/(?:入数|人数)/.test(trimmed) && /ケース/.test(trimmed)) {
+    return true;
+  }
+
+  if (/有償バラ数/.test(trimmed) && /景品バラ数/.test(trimmed)) {
+    return true;
+  }
+
+  return false;
+}
+
 function isArataProductNameLine(line: string) {
-  return /[^\d\s.,|￥¥\\\-/]/.test(line) && !/^\d{2}\.\d{2}\.\d{2}$/.test(line);
+  if (isArataColumnHeaderOrLabelLine(line) || isArataDottedDateLine(line)) {
+    return false;
+  }
+
+  return /[^\d\s.,|￥¥\\\-/]/.test(line);
 }
 
 function isArataPriceLine(line: string) {
-  return /\d+\.\d{2}\|?$/.test(line.replace(/,/g, ""));
+  return /^\d+\.\d{2}\|?$/.test(line.replace(/,/g, "").trim());
 }
 
 function isArataStoreCodeLine(line: string) {
