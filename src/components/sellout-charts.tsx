@@ -52,6 +52,9 @@ function getNiceChartMax(value: number) {
   return 10 * base;
 }
 
+/** この本数まで幅いっぱいに伸ばし、超えたら横スクロール */
+const MAX_VISIBLE_MONTHS = 12;
+
 export function SelloutCharts({
   monthlyRows,
   productRows,
@@ -65,7 +68,7 @@ export function SelloutCharts({
 }) {
   const maxMonthlyAmount = Math.max(...monthlyRows.map((row) => row.amount), 1);
   const monthlyAmountScaleMax = getNiceChartMax(maxMonthlyAmount);
-  const needsScroll = monthlyRows.length > 14;
+  const needsScroll = monthlyRows.length > MAX_VISIBLE_MONTHS;
 
   return (
     <div className="grid gap-3 xl:grid-cols-2">
@@ -85,11 +88,7 @@ export function SelloutCharts({
               </div>
               <div className="relative">
                 <div className={needsScroll ? "overflow-x-auto pb-8" : "pb-2"}>
-                  <div
-                    className={`relative flex min-h-64 items-end gap-1.5 border-b pb-8 pt-8 sm:gap-2 ${
-                      needsScroll ? "min-w-[720px]" : ""
-                    }`}
-                  >
+                  <div className="relative flex min-h-64 items-end gap-1.5 border-b pb-8 pt-8 sm:gap-2">
                     <div className="pointer-events-none absolute inset-x-0 top-0 border-t border-dashed border-border" />
                     <div className="pointer-events-none absolute inset-x-0 top-1/2 border-t border-dashed border-border" />
                     {monthlyRows.map((row, index) => {
@@ -97,14 +96,22 @@ export function SelloutCharts({
                         row.amount > 0
                           ? Math.max((row.amount / monthlyAmountScaleMax) * 144, 48)
                           : 0;
-                      const includeYear = index === 0 || row.label.endsWith("-01");
+                      const previousYear = monthlyRows[index - 1]?.label.slice(0, 4);
+                      const includeYear =
+                        index === 0 ||
+                        row.label.endsWith("-01") ||
+                        row.label.slice(0, 4) !== previousYear;
                       const isSelected = selectedMonthKey === row.label;
                       const isSelectable = row.amount > 0 && Boolean(onMonthSelect);
 
                       return (
                         <div
                           key={row.label}
-                          className="flex min-w-0 flex-1 flex-col items-center gap-1 text-xs"
+                          className={
+                            needsScroll
+                              ? "flex w-12 shrink-0 flex-col items-center gap-1 text-xs"
+                              : "flex min-w-0 flex-1 flex-col items-center gap-1 text-xs"
+                          }
                         >
                           {isSelectable ? (
                             <button
