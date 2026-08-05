@@ -7,17 +7,13 @@ function formatYen(amount: number) {
   return `¥${amount.toLocaleString("ja-JP")}`;
 }
 
-function formatChartMonthLabel(value: string, { includeYear = false }: { includeYear?: boolean } = {}) {
+function formatChartMonthLabel(value: string) {
   const [year, month] = value.split("-");
   if (!year || !month) {
     return value;
   }
 
-  if (includeYear) {
-    return `${year.slice(2)}年${Number(month)}月`;
-  }
-
-  return `${Number(month)}月`;
+  return `${year.slice(2)}年${Number(month)}月`;
 }
 
 function formatChartAmount(value: number) {
@@ -91,16 +87,11 @@ export function SelloutCharts({
                   <div className="relative flex min-h-64 items-end gap-1.5 border-b pb-8 pt-8 sm:gap-2">
                     <div className="pointer-events-none absolute inset-x-0 top-0 border-t border-dashed border-border" />
                     <div className="pointer-events-none absolute inset-x-0 top-1/2 border-t border-dashed border-border" />
-                    {monthlyRows.map((row, index) => {
+                    {monthlyRows.map((row) => {
                       const height =
                         row.amount > 0
                           ? Math.max((row.amount / monthlyAmountScaleMax) * 144, 48)
                           : 0;
-                      const previousYear = monthlyRows[index - 1]?.label.slice(0, 4);
-                      const includeYear =
-                        index === 0 ||
-                        row.label.endsWith("-01") ||
-                        row.label.slice(0, 4) !== previousYear;
                       const isSelected = selectedMonthKey === row.label;
                       const isSelectable = row.amount > 0 && Boolean(onMonthSelect);
 
@@ -116,7 +107,7 @@ export function SelloutCharts({
                           {isSelectable ? (
                             <button
                               type="button"
-                              aria-label={`${formatChartMonthLabel(row.label, { includeYear: true })}の実績を表示`}
+                              aria-label={`${formatChartMonthLabel(row.label)}の実績を表示`}
                               aria-pressed={isSelected}
                               className={`group relative w-full max-w-12 rounded-t transition ${
                                 isSelected
@@ -149,7 +140,7 @@ export function SelloutCharts({
                               isSelected ? "font-semibold text-foreground" : "text-muted-foreground"
                             }`}
                           >
-                            {formatChartMonthLabel(row.label, { includeYear })}
+                            {formatChartMonthLabel(row.label)}
                           </div>
                         </div>
                       );
