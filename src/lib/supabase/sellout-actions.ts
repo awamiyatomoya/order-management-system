@@ -219,13 +219,21 @@ export async function readSelloutData(clientId: string) {
   }
 
   const mappedImports = imports.map(mapSelloutImport);
-  const latestImportIds = getLatestImportIdsByRetailer(mappedImports);
+  // 小売企業×対象期間ごとに最新取込だけ使う（月次ファイルを積み上げて見られるようにする）
+  const activeImportIds = getLatestImportIdsByRetailerAndPeriod(mappedImports);
+  if (activeImportIds.length === 0) {
+    return {
+      imports: mappedImports,
+      entries: [] as SelloutEntry[],
+    };
+  }
+
   const { data: entries, error: entriesError } = await supabase
     .from("sellout_entries")
     .select(
       "id, import_id, client_id, period_start, period_end, retailer, store_code, store_name, matched_store_code, matched_store_name, jan, product_name, qty, amount, stock",
     )
-    .in("import_id", latestImportIds)
+    .in("import_id", activeImportIds)
     .order("store_name");
 
   if (entriesError) {
@@ -241,22 +249,23 @@ export async function readSelloutData(clientId: string) {
   };
 }
 
-function getLatestImportIdsByRetailer(imports: SelloutImport[]) {
-  const latestImportIdByRetailer = new Map<string, string>();
+/** imports は imported_at DESC 前提。同一小売×期間は最新1件だけ残す。 */
+function getLatestImportIdsByRetailerAndPeriod(imports: SelloutImport[]) {
+  const latestImportIdByKey = new Map<string, string>();
 
   imports.forEach((importBatch) => {
     const retailer = importBatch.retailer.trim();
-    if (retailer && !latestImportIdByRetailer.has(retailer)) {
-      latestImportIdByRetailer.set(retailer, importBatch.id);
+    if (!retailer) {
+      return;
+    }
+
+    const key = `${retailer}|${importBatch.periodStart}|${importBatch.periodEnd}`;
+    if (!latestImportIdByKey.has(key)) {
+      latestImportIdByKey.set(key, importBatch.id);
     }
   });
 
-  const importIds = Array.from(latestImportIdByRetailer.values());
-  if (importIds.length > 0) {
-    return importIds;
-  }
-
-  return imports[0] ? [imports[0].id] : [];
+  return Array.from(latestImportIdByKey.values());
 }
 
 async function ensureStoreLocationsForRetailer(retailer: string) {

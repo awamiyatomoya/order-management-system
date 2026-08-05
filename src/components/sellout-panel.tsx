@@ -166,14 +166,25 @@ export function SelloutPanel({
     [displayEntries, filters],
   );
 
+  // 月別推移は年月以外の条件だけで集計し、過去月の棒も見えるようにする
+  const trendScopedEntries = useMemo(
+    () =>
+      filterSelloutEntries(displayEntries, {
+        ...filters,
+        year: "all",
+        month: "all",
+      }),
+    [displayEntries, filters],
+  );
+
   const monthlyRows = useMemo(
     () => buildSelloutMonthlyRows(filteredEntries),
     [filteredEntries],
   );
 
   const monthlyChartRows = useMemo(
-    () => buildSelloutMonthlyChartRows(filteredEntries),
-    [filteredEntries],
+    () => buildSelloutMonthlyChartRows(trendScopedEntries),
+    [trendScopedEntries],
   );
 
   const productChartRows = useMemo(
@@ -254,6 +265,15 @@ export function SelloutPanel({
       year,
       month,
     }));
+  }
+
+  function selectMonthFromChart(monthKey: string) {
+    const [year, month] = monthKey.split("-");
+    if (!year || !month) {
+      return;
+    }
+
+    updateYearMonth(year, String(Number(month)));
   }
 
   async function handleUpload(file: File) {
@@ -384,7 +404,16 @@ export function SelloutPanel({
             />
           </div>
 
-          <SelloutCharts monthlyRows={monthlyChartRows} productRows={productChartRows} />
+          <SelloutCharts
+            monthlyRows={monthlyChartRows}
+            productRows={productChartRows}
+            selectedMonthKey={
+              filters.year !== "all" && filters.month !== "all"
+                ? `${filters.year}-${filters.month.padStart(2, "0")}`
+                : ""
+            }
+            onMonthSelect={selectMonthFromChart}
+          />
 
           {isLoading ? (
             <p className="text-sm text-muted-foreground">セルアウトデータを読み込み中...</p>

@@ -55,9 +55,13 @@ function getNiceChartMax(value: number) {
 export function SelloutCharts({
   monthlyRows,
   productRows,
+  selectedMonthKey = "",
+  onMonthSelect,
 }: {
   monthlyRows: SelloutChartRow[];
   productRows: SelloutChartRow[];
+  selectedMonthKey?: string;
+  onMonthSelect?: (monthKey: string) => void;
 }) {
   const maxMonthlyAmount = Math.max(...monthlyRows.map((row) => row.amount), 1);
   const monthlyAmountScaleMax = getNiceChartMax(maxMonthlyAmount);
@@ -94,25 +98,50 @@ export function SelloutCharts({
                           ? Math.max((row.amount / monthlyAmountScaleMax) * 144, 48)
                           : 0;
                       const includeYear = index === 0 || row.label.endsWith("-01");
+                      const isSelected = selectedMonthKey === row.label;
+                      const isSelectable = row.amount > 0 && Boolean(onMonthSelect);
 
                       return (
                         <div
                           key={row.label}
                           className="flex min-w-0 flex-1 flex-col items-center gap-1 text-xs"
                         >
-                          <div
-                            className={`group relative w-full max-w-12 rounded-t ${
-                              row.amount > 0 ? "bg-blue-600 shadow-sm" : "bg-transparent"
-                            }`}
-                            style={{ height: `${height}px` }}
-                          >
-                            {row.amount > 0 ? (
+                          {isSelectable ? (
+                            <button
+                              type="button"
+                              aria-label={`${formatChartMonthLabel(row.label, { includeYear: true })}の実績を表示`}
+                              aria-pressed={isSelected}
+                              className={`group relative w-full max-w-12 rounded-t transition ${
+                                isSelected
+                                  ? "bg-blue-800 shadow-sm ring-2 ring-blue-300 ring-offset-1"
+                                  : "bg-blue-600 shadow-sm hover:bg-blue-700"
+                              }`}
+                              style={{ height: `${height}px` }}
+                              onClick={() => onMonthSelect?.(row.label)}
+                            >
                               <div className="pointer-events-none absolute bottom-full left-1/2 z-10 mb-1 hidden -translate-x-1/2 whitespace-nowrap rounded border bg-popover px-2 py-1 text-[13px] font-normal text-popover-foreground shadow-md group-hover:block">
                                 {formatYen(row.amount)}
                               </div>
-                            ) : null}
-                          </div>
-                          <div className="whitespace-nowrap text-[10px] text-muted-foreground">
+                            </button>
+                          ) : (
+                            <div
+                              className={`group relative w-full max-w-12 rounded-t ${
+                                row.amount > 0 ? "bg-blue-600 shadow-sm" : "bg-transparent"
+                              }`}
+                              style={{ height: `${height}px` }}
+                            >
+                              {row.amount > 0 ? (
+                                <div className="pointer-events-none absolute bottom-full left-1/2 z-10 mb-1 hidden -translate-x-1/2 whitespace-nowrap rounded border bg-popover px-2 py-1 text-[13px] font-normal text-popover-foreground shadow-md group-hover:block">
+                                  {formatYen(row.amount)}
+                                </div>
+                              ) : null}
+                            </div>
+                          )}
+                          <div
+                            className={`whitespace-nowrap text-[10px] ${
+                              isSelected ? "font-semibold text-foreground" : "text-muted-foreground"
+                            }`}
+                          >
                             {formatChartMonthLabel(row.label, { includeYear })}
                           </div>
                         </div>
