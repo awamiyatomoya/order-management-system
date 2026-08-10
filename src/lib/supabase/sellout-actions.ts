@@ -78,11 +78,24 @@ export async function importSelloutWorkbook(formData: FormData): Promise<ImportS
   const summary = summarizeSelloutEntries(enrichedEntries);
   const importId = createId();
   const importedAt = new Date().toISOString();
+  let fileStoragePath = "";
+
+  if (hasSupabaseServerEnv()) {
+    const uploadResult = await uploadSelloutFileToStorage(clientId, file);
+    if (!uploadResult.ok) {
+      return {
+        ok: false,
+        message: uploadResult.message,
+      };
+    }
+    fileStoragePath = uploadResult.path;
+  }
 
   const importBatch: SelloutImport = {
     id: importId,
     clientId,
     fileName: file.name,
+    fileStoragePath: fileStoragePath || undefined,
     profileKey: parsed.profileKey,
     retailer: parsed.retailer,
     layoutType: parsed.layoutType,
@@ -128,6 +141,7 @@ export async function importSelloutWorkbook(formData: FormData): Promise<ImportS
     id: importBatch.id,
     client_id: importBatch.clientId,
     file_name: importBatch.fileName,
+    file_storage_path: importBatch.fileStoragePath || null,
     profile_key: importBatch.profileKey,
     retailer: importBatch.retailer,
     layout_type: importBatch.layoutType,
@@ -141,6 +155,9 @@ export async function importSelloutWorkbook(formData: FormData): Promise<ImportS
   });
 
   if (importError) {
+    if (fileStoragePath) {
+      await supabase.storage.from("sellout-files").remove([fileStoragePath]);
+    }
     return {
       ok: false,
       message: `セルアウト取込の保存に失敗しました: ${importError.message}`,
@@ -170,6 +187,9 @@ export async function importSelloutWorkbook(formData: FormData): Promise<ImportS
     const { error: entriesError } = await supabase.from("sellout_entries").insert(chunk);
     if (entriesError) {
       await supabase.from("sellout_imports").delete().eq("id", importBatch.id);
+      if (fileStoragePath) {
+        await supabase.storage.from("sellout-files").remove([fileStoragePath]);
+      }
       return {
         ok: false,
         message: `セルアウト明細の保存に失敗しました: ${entriesError.message}`,
@@ -205,7 +225,7 @@ export async function readSelloutData(clientId: string) {
   const { data: imports, error: importsError } = await supabase
     .from("sellout_imports")
     .select(
-      "id, client_id, file_name, profile_key, retailer, layout_type, period_start, period_end, imported_at, entry_count, store_count, total_qty, total_amount",
+      "id, client_id, file_name, file_storage_path, profile_key, retailer, layout_type, period_start, period_end, imported_at, entry_count, store_count, total_qty, total_amount",
     )
     .eq("client_id", clientId)
     .order("imported_at", { ascending: false })
@@ -418,6 +438,7 @@ function mapSelloutImport(row: {
   id: string;
   client_id: string;
   file_name: string;
+  file_storage_path?: string | null;
   profile_key: string;
   retailer: string;
   layout_type: SelloutImport["layoutType"];
@@ -433,6 +454,7 @@ function mapSelloutImport(row: {
     id: row.id,
     clientId: row.client_id,
     fileName: row.file_name,
+    fileStoragePath: row.file_storage_path || undefined,
     profileKey: row.profile_key,
     retailer: row.retailer,
     layoutType: row.layout_type,
@@ -480,4 +502,97 @@ function mapSelloutEntry(row: {
     amount: Number(row.amount),
     stock: row.stock,
   };
+}
+
+type UploadSelloutFileResult =
+  | { ok: true; path: string }
+  | { ok: false; message: string };
+
+export type CreateSelloutFileDownloadUrlResult =
+  | { ok: true; url: string }
+  | { ok: false; message: string };
+
+async function uploadSelloutFileToStorage(
+  clientId: string,
+  file: File,
+): Promise<UploadSelloutFileResult> {
+  const supabase = createServerSupabaseClient();
+  const fileName = sanitizeSelloutStorageFileName(file.name);
+  const path = `${clientId}/${new Date().toISOString().slice(0, 10)}/${crypto.randomUUID()}-${fileName}`;
+  const contentType = resolveSelloutContentType(file);
+
+  const { error } = await supabase.storage.from("sellout-files").upload(path, file, {
+    contentType,
+    upsert: false,
+  });
+
+  if (error) {
+    return {
+      ok: false,
+      message: `セルアウトExcelのStorage保存に失敗しました: ${error.message}`,
+    };
+  }
+
+  return { ok: true, path };
+}
+
+export async function createSelloutFileDownloadUrl(
+  path: string,
+): Promise<CreateSelloutFileDownloadUrlResult> {
+  if (!path) {
+    return {
+      ok: false,
+      message: "セルアウトファイルの保存パスがありません。",
+    };
+  }
+
+  if (!hasSupabaseServerEnv()) {
+    return {
+      ok: false,
+      message: "Supabase環境変数が未設定のため、セルアウトファイルをダウンロードできません。",
+    };
+  }
+
+  const supabase = createServerSupabaseClient();
+  const { data, error } = await supabase.storage
+    .from("sellout-files")
+    .createSignedUrl(path, 60 * 10);
+
+  if (error || !data?.signedUrl) {
+    return {
+      ok: false,
+      message: `セルアウトファイルのダウンロードURL作成に失敗しました: ${error?.message ?? "URLが取得できませんでした。"}`,
+    };
+  }
+
+  return {
+    ok: true,
+    url: data.signedUrl,
+  };
+}
+
+function sanitizeSelloutStorageFileName(fileName: string) {
+  const normalized = fileName
+    .normalize("NFKC")
+    .replace(/[^A-Za-z0-9._-]+/g, "_")
+    .replace(/_+/g, "_")
+    .replace(/^_+|_+$/g, "");
+
+  return normalized || "sellout.xlsx";
+}
+
+function resolveSelloutContentType(file: File) {
+  if (file.type) {
+    return file.type;
+  }
+
+  const lower = file.name.toLowerCase();
+  if (lower.endsWith(".xlsm")) {
+    return "application/vnd.ms-excel.sheet.macroEnabled.12";
+  }
+  if (lower.endsWith(".xls")) {
+    return "application/vnd.ms-excel";
+  }
+
+  return "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
 }

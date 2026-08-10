@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { FileUploadButton, UploadStatus } from "@/components/file-upload-button";
 import { Field, FieldLabel } from "@/components/ui/field";
@@ -21,7 +22,11 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { importSelloutWorkbook, readSelloutData } from "@/lib/supabase/sellout-actions";
+import {
+  createSelloutFileDownloadUrl,
+  importSelloutWorkbook,
+  readSelloutData,
+} from "@/lib/supabase/sellout-actions";
 import type { Client, SelloutImport } from "@/lib/types";
 
 function formatYen(amount: number) {
@@ -38,6 +43,36 @@ function formatPeriod(start: string, end: string) {
   }
 
   return `${start} 〜 ${end}`;
+}
+
+async function downloadSelloutFile(importBatch: SelloutImport) {
+  if (!importBatch.fileStoragePath) {
+    window.alert("この取込分には元ファイルが保存されていません。再アップロード後のファイルからダウンロードできます。");
+    return;
+  }
+
+  const result = await createSelloutFileDownloadUrl(importBatch.fileStoragePath);
+  if (!result.ok) {
+    window.alert(result.message);
+    return;
+  }
+
+  try {
+    const response = await fetch(result.url);
+    if (!response.ok) {
+      throw new Error("ファイルを取得できませんでした。");
+    }
+
+    const blob = await response.blob();
+    const objectUrl = URL.createObjectURL(blob);
+    const anchor = document.createElement("a");
+    anchor.href = objectUrl;
+    anchor.download = importBatch.fileName || "sellout.xlsx";
+    anchor.click();
+    URL.revokeObjectURL(objectUrl);
+  } catch (error) {
+    window.alert(error instanceof Error ? error.message : "ダウンロードに失敗しました。");
+  }
 }
 
 export function SelloutFilesPanel({
@@ -213,7 +248,7 @@ export function SelloutFilesPanel({
           <div>
             <h3 className="text-base font-medium">セルアウト取込ファイル</h3>
             <p className="mt-1 text-sm text-muted-foreground">
-              取り込んだセルアウトExcelの履歴です。売上の確認・分析は「売上実績」で行えます。
+              取り込んだセルアウトExcelの履歴です。保存済みのファイルはダウンロードできます。売上の確認・分析は「売上実績」で行えます。
             </p>
           </div>
 
@@ -238,6 +273,7 @@ export function SelloutFilesPanel({
                     <TableHead className="text-right">件数</TableHead>
                     <TableHead className="text-right">店舗数</TableHead>
                     <TableHead className="text-right">金額</TableHead>
+                    <TableHead>操作</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
@@ -260,6 +296,22 @@ export function SelloutFilesPanel({
                       </TableCell>
                       <TableCell className="text-right">
                         {formatYen(importBatch.totalAmount)}
+                      </TableCell>
+                      <TableCell>
+                        {importBatch.fileStoragePath ? (
+                          <Button
+                            type="button"
+                            variant="outline"
+                            size="sm"
+                            onClick={() => {
+                              void downloadSelloutFile(importBatch);
+                            }}
+                          >
+                            ダウンロード
+                          </Button>
+                        ) : (
+                          <span className="text-muted-foreground text-xs">ファイルなし</span>
+                        )}
                       </TableCell>
                     </TableRow>
                   ))}

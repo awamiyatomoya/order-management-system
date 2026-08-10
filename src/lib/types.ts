@@ -163,6 +163,7 @@ export type SelloutImport = {
   id: string;
   clientId: string;
   fileName: string;
+  fileStoragePath?: string;
   profileKey: string;
   retailer: string;
   layoutType: SelloutLayoutType;
