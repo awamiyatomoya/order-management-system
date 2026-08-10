@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Card, CardContent } from "@/components/ui/card";
+import { FileUploadButton, UploadStatus } from "@/components/file-upload-button";
 import { Field, FieldLabel } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import {
@@ -20,7 +21,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { readSelloutData } from "@/lib/supabase/sellout-actions";
+import { importSelloutWorkbook, readSelloutData } from "@/lib/supabase/sellout-actions";
 import type { Client, SelloutImport } from "@/lib/types";
 
 function formatYen(amount: number) {
@@ -54,6 +55,9 @@ export function SelloutFilesPanel({
 }) {
   const [imports, setImports] = useState(initialImports);
   const [isLoading, setIsLoading] = useState(false);
+  const [isUploading, setIsUploading] = useState(false);
+  const [notice, setNotice] = useState("");
+  const [fileInputKey, setFileInputKey] = useState(0);
   const [search, setSearch] = useState("");
   const skipInitialServerLoadRef = useRef(true);
 
@@ -97,6 +101,33 @@ export function SelloutFilesPanel({
     };
   }, [clientId, initialDataClientId, initialImports]);
 
+  async function handleUpload(file: File) {
+    if (!clientId) {
+      setNotice("クライアントを選択してください。");
+      return;
+    }
+
+    setIsUploading(true);
+    setNotice("");
+
+    const formData = new FormData();
+    formData.set("clientId", clientId);
+    formData.set("file", file);
+
+    const result = await importSelloutWorkbook(formData);
+    setIsUploading(false);
+    setFileInputKey((value) => value + 1);
+
+    if (!result.ok) {
+      setNotice(result.message);
+      return;
+    }
+
+    setNotice(result.message);
+    const data = await readSelloutData(clientId);
+    setImports(data.imports);
+  }
+
   const filteredImports = useMemo(() => {
     const query = search.trim().toLowerCase();
     if (!query) {
@@ -116,7 +147,7 @@ export function SelloutFilesPanel({
     <section className="grid gap-4">
       <Card size="sm">
         <CardContent>
-          <div className="grid gap-3 md:grid-cols-[minmax(240px,320px)_minmax(220px,1fr)] md:items-end">
+          <div className="grid gap-3 lg:grid-cols-[minmax(240px,320px)_minmax(220px,1fr)_minmax(240px,1fr)] lg:items-end">
             <Field className="gap-1">
               <FieldLabel className="text-xs text-muted-foreground">クライアント</FieldLabel>
               <Select
@@ -139,6 +170,27 @@ export function SelloutFilesPanel({
               </Select>
             </Field>
 
+            <div className="flex flex-col gap-1">
+              <FieldLabel className="text-xs text-muted-foreground">セルアウトExcel</FieldLabel>
+              <FileUploadButton
+                key={fileInputKey}
+                label="セルアウトExcelをアップロード"
+                description=""
+                compact
+                accept=".xlsx,.xls,.xlsm,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                disabled={!clientId || isUploading}
+                fullWidth
+                onFileChange={(file) => {
+                  if (file) {
+                    void handleUpload(file);
+                  }
+                }}
+              />
+              {isUploading ? (
+                <UploadStatus isProcessing message="セルアウトファイルを取り込み中..." />
+              ) : null}
+            </div>
+
             <Field className="gap-1">
               <FieldLabel className="text-xs text-muted-foreground">検索</FieldLabel>
               <Input
@@ -149,6 +201,10 @@ export function SelloutFilesPanel({
               />
             </Field>
           </div>
+
+          {notice && !isUploading ? (
+            <p className="mt-3 text-sm text-muted-foreground">{notice}</p>
+          ) : null}
         </CardContent>
       </Card>
 

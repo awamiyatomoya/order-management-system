@@ -296,7 +296,7 @@ export async function importStoreIntroductionWorkbook(
     parsed.formatKey === "row-list"
       ? "店舗一覧表"
       : parsed.formatKey === "promotional-address-list"
-        ? "住所録"
+        ? "住所録・依頼書"
         : parsed.formatKey === "ainz-shipment-list"
           ? "アインズ送り込みリスト"
           : parsed.formatKey === "hands-allocation-list"

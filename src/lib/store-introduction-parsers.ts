@@ -101,7 +101,7 @@ export function parseStoreIntroductionWorkbook(buffer: ArrayBuffer): ParsedStore
 
   if (allEntries.length === 0) {
     throw new Error(
-      "導入店舗シートを読み取れませんでした。フェーズ1対応形式（店舗一覧表・0/1フラグ表・ハンズ按分表・店舗割振表・住所録・アインズ送り込みリスト）か確認してください。",
+      "導入店舗シートを読み取れませんでした。対応形式（店舗一覧表・0/1フラグ表・ハンズ按分表・店舗割振表・住所録・依頼書・アインズ送り込みリスト）か確認してください。",
     );
   }
 
@@ -292,11 +292,13 @@ function tryParsePromotionalAddressListSheet(sheet: XLSX.WorkSheet): ParsedStore
   const headerIndex = rows.findIndex((row) => {
     const normalized = row.map(normalizeHeaderCell);
     return (
-      normalized.some((cell) => ["各店コード", "店舗コード", "店コード"].includes(cell)) &&
+      normalized.some((cell) =>
+        ["各店コード", "各店番号", "店舗コード", "店コード", "回答店番", "店番"].includes(cell),
+      ) &&
       normalized.some((cell) =>
         ["送り先名称①", "送り先名称1", "送り先名称", "店舗名", "店名"].includes(cell),
       ) &&
-      normalized.some((cell) => ["住所①", "住所1", "住所"].includes(cell))
+      normalized.some((cell) => ["住所①", "住所1", "住所", "所在地"].includes(cell))
     );
   });
 
@@ -305,7 +307,14 @@ function tryParsePromotionalAddressListSheet(sheet: XLSX.WorkSheet): ParsedStore
   }
 
   const header = rows[headerIndex].map(normalizeHeaderCell);
-  const storeCodeIndex = findColumnIndex(header, ["各店コード", "店舗コード", "店コード", "回答店番", "店番"]);
+  const storeCodeIndex = findColumnIndex(header, [
+    "各店コード",
+    "各店番号",
+    "店舗コード",
+    "店コード",
+    "回答店番",
+    "店番",
+  ]);
   const storeNameIndex = findColumnIndex(header, [
     "送り先名称①",
     "送り先名称1",
@@ -314,18 +323,29 @@ function tryParsePromotionalAddressListSheet(sheet: XLSX.WorkSheet): ParsedStore
     "店名",
   ]);
   const postalCodeIndex = findColumnIndex(header, ["郵便番号"]);
-  const addressIndex = findColumnIndex(header, ["住所①", "住所1", "住所"]);
+  const addressIndex = findColumnIndex(header, ["住所①", "住所1", "住所", "所在地"]);
   const quantityIndex = findColumnIndex(header, ["個数"]);
   const unitCountIndex = findColumnIndex(header, ["台数"]);
   const panelIndex = findColumnIndex(header, ["パネル"]);
-  const metadata = findPromotionalAddressMetadata(rows.slice(0, headerIndex));
+  const hasIntroductionSignalColumns =
+    quantityIndex >= 0 || unitCountIndex >= 0 || panelIndex >= 0;
+  // 依頼書形式では商品名が表の下に書かれることが多いため、シート全体から拾う
+  const metadata = findPromotionalAddressMetadata(rows);
   const entries: ParsedStoreIntroductionEntry[] = [];
 
   for (const row of rows.slice(headerIndex + 1)) {
     const storeName = stringCell(row[storeNameIndex]);
     const storeCode = stringCell(row[storeCodeIndex]);
+    const rawAddress = stringCell(row[addressIndex]);
+    const addressParts = splitAddressAndPostalCode(rawAddress);
+    const postalFromColumn = normalizePostalCode(stringCell(row[postalCodeIndex]));
 
     if (!storeName) {
+      continue;
+    }
+
+    // 店名ヘッダー行の直後に続く説明文（商品名・納期など）は店舗行ではない
+    if (!storeCode && !rawAddress) {
       continue;
     }
 
@@ -334,13 +354,15 @@ function tryParsePromotionalAddressListSheet(sheet: XLSX.WorkSheet): ParsedStore
       productName: metadata.productName,
       storeName,
       storeCode,
-      address: stringCell(row[addressIndex]),
-      postalCode: normalizePostalCode(stringCell(row[postalCodeIndex])),
-      isIntroduced: isPromotionalAddressIntroduced(row, {
-        quantityIndex,
-        unitCountIndex,
-        panelIndex,
-      }),
+      address: addressParts.address || rawAddress,
+      postalCode: postalFromColumn || addressParts.postalCode,
+      isIntroduced: hasIntroductionSignalColumns
+        ? isPromotionalAddressIntroduced(row, {
+            quantityIndex,
+            unitCountIndex,
+            panelIndex,
+          })
+        : true,
     });
   }
 
@@ -352,6 +374,18 @@ function tryParsePromotionalAddressListSheet(sheet: XLSX.WorkSheet): ParsedStore
     formatKey: "promotional-address-list",
     entries: dedupeEntries(entries),
     sheetCount: 0,
+  };
+}
+
+function splitAddressAndPostalCode(value: string) {
+  const match = value.match(/〒?\s*(\d{3}-?\d{4})\s*(.*)$/);
+  if (!match) {
+    return { postalCode: "", address: value.trim() };
+  }
+
+  return {
+    postalCode: normalizePostalCode(match[1]),
+    address: match[2].trim(),
   };
 }
 
@@ -910,12 +944,26 @@ function findPromotionalAddressMetadata(rows: unknown[][]) {
     }
   }
 
-  const jan = rows.flatMap((row) => row.map((cell) => extractJan(cell))).find(Boolean) ?? "";
+  const jan =
+    rows
+      .flatMap((row) => row.map((cell) => stringCell(cell)))
+      .map((text) => {
+        if (!text || looksLikeAddressText(text)) {
+          return "";
+        }
+
+        return extractJan(text);
+      })
+      .find(Boolean) ?? "";
 
   return {
     jan,
     productName: bestProductName || "販促物",
   };
+}
+
+function looksLikeAddressText(value: string) {
+  return /〒|都道府県|[都道府県]|市|区|町|村|丁目|番地|号/.test(value);
 }
 
 function scorePromotionalAddressProductName(productName: string) {
