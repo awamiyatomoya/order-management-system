@@ -101,7 +101,7 @@ export function parseStoreIntroductionWorkbook(buffer: ArrayBuffer): ParsedStore
 
   if (allEntries.length === 0) {
     throw new Error(
-      "導入店舗シートを読み取れませんでした。対応形式（店舗一覧表・0/1フラグ表・ハンズ按分表・店舗割振表・住所録・依頼書・アインズ送り込みリスト）か確認してください。",
+      "導入店舗シートを読み取れませんでした。店舗コード／店名・住所（または所在地）の一覧、送り込みリスト、按分表などの形式か確認してください。",
     );
   }
 
@@ -287,18 +287,34 @@ function tryParseRowListSheet(sheet: XLSX.WorkSheet): ParsedStoreIntroduction {
   };
 }
 
+const promotionalStoreCodeHeaders = [
+  "各店コード",
+  "店舗コード",
+  "店コード",
+  "各店番号",
+  "店舗番号",
+  "店番号",
+  "回答店番",
+  "店番",
+];
+const promotionalStoreNameHeaders = [
+  "送り先名称①",
+  "送り先名称1",
+  "送り先名称",
+  "販売店様名",
+  "店舗名",
+  "店名",
+];
+const promotionalAddressHeaders = ["住所①", "住所1", "住所", "所在地", "所在"];
+
 function tryParsePromotionalAddressListSheet(sheet: XLSX.WorkSheet): ParsedStoreIntroduction {
   const rows = sheetToRows(sheet);
   const headerIndex = rows.findIndex((row) => {
     const normalized = row.map(normalizeHeaderCell);
     return (
-      normalized.some((cell) =>
-        ["各店コード", "各店番号", "店舗コード", "店コード", "回答店番", "店番"].includes(cell),
-      ) &&
-      normalized.some((cell) =>
-        ["送り先名称①", "送り先名称1", "送り先名称", "店舗名", "店名"].includes(cell),
-      ) &&
-      normalized.some((cell) => ["住所①", "住所1", "住所", "所在地"].includes(cell))
+      normalized.some((cell) => matchesHeaderCandidate(cell, promotionalStoreCodeHeaders)) &&
+      normalized.some((cell) => matchesHeaderCandidate(cell, promotionalStoreNameHeaders)) &&
+      normalized.some((cell) => matchesHeaderCandidate(cell, promotionalAddressHeaders))
     );
   });
 
@@ -307,56 +323,51 @@ function tryParsePromotionalAddressListSheet(sheet: XLSX.WorkSheet): ParsedStore
   }
 
   const header = rows[headerIndex].map(normalizeHeaderCell);
-  const storeCodeIndex = findColumnIndex(header, [
-    "各店コード",
-    "各店番号",
-    "店舗コード",
-    "店コード",
-    "回答店番",
-    "店番",
+  const storeCodeIndex = findColumnIndexLoose(header, promotionalStoreCodeHeaders);
+  const storeNameIndex = findColumnIndexLoose(header, promotionalStoreNameHeaders);
+  const postalCodeIndex = findColumnIndexLoose(header, ["郵便番号"]);
+  const addressIndex = findColumnIndexLoose(header, promotionalAddressHeaders);
+  const quantityIndex = findColumnIndexLoose(header, ["個数"]);
+  const unitCountIndex = findColumnIndexLoose(header, ["台数"]);
+  const panelIndex = findColumnIndexLoose(header, ["パネル"]);
+  const hasAllocationColumns = quantityIndex >= 0 || unitCountIndex >= 0 || panelIndex >= 0;
+  const metadata = findPromotionalAddressMetadata([
+    ...rows.slice(0, headerIndex),
+    ...rows.slice(headerIndex + 1),
   ]);
-  const storeNameIndex = findColumnIndex(header, [
-    "送り先名称①",
-    "送り先名称1",
-    "送り先名称",
-    "店舗名",
-    "店名",
-  ]);
-  const postalCodeIndex = findColumnIndex(header, ["郵便番号"]);
-  const addressIndex = findColumnIndex(header, ["住所①", "住所1", "住所", "所在地"]);
-  const quantityIndex = findColumnIndex(header, ["個数"]);
-  const unitCountIndex = findColumnIndex(header, ["台数"]);
-  const panelIndex = findColumnIndex(header, ["パネル"]);
-  const hasIntroductionSignalColumns =
-    quantityIndex >= 0 || unitCountIndex >= 0 || panelIndex >= 0;
-  // 依頼書形式では商品名が表の下に書かれることが多いため、シート全体から拾う
-  const metadata = findPromotionalAddressMetadata(rows);
   const entries: ParsedStoreIntroductionEntry[] = [];
 
   for (const row of rows.slice(headerIndex + 1)) {
     const storeName = stringCell(row[storeNameIndex]);
     const storeCode = stringCell(row[storeCodeIndex]);
-    const rawAddress = stringCell(row[addressIndex]);
-    const addressParts = splitAddressAndPostalCode(rawAddress);
-    const postalFromColumn = normalizePostalCode(stringCell(row[postalCodeIndex]));
+    const address = stringCell(row[addressIndex]);
 
     if (!storeName) {
       continue;
     }
 
-    // 店名ヘッダー行の直後に続く説明文（商品名・納期など）は店舗行ではない
-    if (!storeCode && !rawAddress) {
+    // 依頼書の本文・商品行を店舗行として取り込まない
+    if (!storeCode && !looksLikeStoreAddress(address) && !extractPostalCodeFromAddress(address)) {
       continue;
     }
+
+    if (/お願い|お手数|お世話|ご手配|カウンター|テスター|パネル|pop/i.test(storeName)) {
+      continue;
+    }
+
+    const postalFromColumn = stringCell(row[postalCodeIndex]);
+    const postalCode = normalizePostalCode(
+      postalFromColumn || extractPostalCodeFromAddress(address),
+    );
 
     entries.push({
       jan: metadata.jan || "UNKNOWN",
       productName: metadata.productName,
       storeName,
       storeCode,
-      address: addressParts.address || rawAddress,
-      postalCode: postalFromColumn || addressParts.postalCode,
-      isIntroduced: hasIntroductionSignalColumns
+      address,
+      postalCode,
+      isIntroduced: hasAllocationColumns
         ? isPromotionalAddressIntroduced(row, {
             quantityIndex,
             unitCountIndex,
@@ -366,7 +377,7 @@ function tryParsePromotionalAddressListSheet(sheet: XLSX.WorkSheet): ParsedStore
     });
   }
 
-  if (entries.length < 5) {
+  if (entries.length < 3) {
     return { formatKey: "row-list", entries: [], sheetCount: 0 };
   }
 
@@ -374,18 +385,6 @@ function tryParsePromotionalAddressListSheet(sheet: XLSX.WorkSheet): ParsedStore
     formatKey: "promotional-address-list",
     entries: dedupeEntries(entries),
     sheetCount: 0,
-  };
-}
-
-function splitAddressAndPostalCode(value: string) {
-  const match = value.match(/〒?\s*(\d{3}-?\d{4})\s*(.*)$/);
-  if (!match) {
-    return { postalCode: "", address: value.trim() };
-  }
-
-  return {
-    postalCode: normalizePostalCode(match[1]),
-    address: match[2].trim(),
   };
 }
 
@@ -908,7 +907,10 @@ function lookupAinzAddressBookEntry(
 }
 
 function extractPostalCodeFromAddress(address: string) {
-  const match = address.trim().match(/^(\d{3}-\d{4}|\d{7})\b/);
+  const match = address
+    .trim()
+    .normalize("NFKC")
+    .match(/(?:^|[^\d])(\d{3}-\d{4}|\d{7})(?:\D|$)/);
   if (!match) {
     return "";
   }
@@ -944,26 +946,12 @@ function findPromotionalAddressMetadata(rows: unknown[][]) {
     }
   }
 
-  const jan =
-    rows
-      .flatMap((row) => row.map((cell) => stringCell(cell)))
-      .map((text) => {
-        if (!text || looksLikeAddressText(text)) {
-          return "";
-        }
-
-        return extractJan(text);
-      })
-      .find(Boolean) ?? "";
+  const jan = rows.flatMap((row) => row.map((cell) => extractJan(cell))).find(Boolean) ?? "";
 
   return {
     jan,
     productName: bestProductName || "販促物",
   };
-}
-
-function looksLikeAddressText(value: string) {
-  return /〒|都道府県|[都道府県]|市|区|町|村|丁目|番地|号/.test(value);
 }
 
 function scorePromotionalAddressProductName(productName: string) {
@@ -1359,25 +1347,60 @@ function parseAddressBookRows(rows: unknown[][]) {
   const headerIndex = rows.findIndex((row) => {
     const normalized = row.map(normalizeHeaderCell);
     return (
-      normalized.some((cell) => ["店舗コード", "店コード", "回答店番", "店番", "各店コード"].includes(cell)) &&
-      normalized.some((cell) => ["店名", "店舗名", "送り先名称①", "送り先名称1", "送り先名称"].includes(cell)) &&
-      normalized.some((cell) => ["住所", "住所1", "住所①"].includes(cell))
+      normalized.some((cell) =>
+        matchesHeaderCandidate(cell, [
+          "店舗コード",
+          "店コード",
+          "回答店番",
+          "店番",
+          "各店コード",
+          "各店番号",
+          "店舗番号",
+        ]),
+      ) &&
+      normalized.some((cell) =>
+        matchesHeaderCandidate(cell, [
+          "店名",
+          "店舗名",
+          "送り先名称①",
+          "送り先名称1",
+          "送り先名称",
+        ]),
+      ) &&
+      normalized.some((cell) =>
+        matchesHeaderCandidate(cell, ["住所", "住所1", "住所①", "所在地"]),
+      )
     );
   });
 
   if (headerIndex >= 0) {
     const header = rows[headerIndex].map(normalizeHeaderCell);
-    const storeCodeIndex = findColumnIndex(header, ["店舗コード", "店コード", "回答店番", "店番", "各店コード"]);
-    const storeNameIndex = findColumnIndex(header, ["店名", "店舗名", "送り先名称①", "送り先名称1", "送り先名称"]);
-    const postalCodeIndex = findColumnIndex(header, ["郵便番号"]);
-    const addressIndex = findColumnIndex(header, ["住所", "住所1", "住所①"]);
-    const telIndex = findColumnIndex(header, ["tel", "電話", "電話番号"]);
+    const storeCodeIndex = findColumnIndexLoose(header, [
+      "店舗コード",
+      "店コード",
+      "回答店番",
+      "店番",
+      "各店コード",
+      "各店番号",
+      "店舗番号",
+    ]);
+    const storeNameIndex = findColumnIndexLoose(header, [
+      "店名",
+      "店舗名",
+      "送り先名称①",
+      "送り先名称1",
+      "送り先名称",
+    ]);
+    const postalCodeIndex = findColumnIndexLoose(header, ["郵便番号"]);
+    const addressIndex = findColumnIndexLoose(header, ["住所", "住所1", "住所①", "所在地"]);
+    const telIndex = findColumnIndexLoose(header, ["tel", "電話", "電話番号", "連絡先"]);
 
     return rows
       .slice(headerIndex + 1)
       .map((row) => {
         const storeCode = stringCell(row[storeCodeIndex]);
         const storeName = stringCell(row[storeNameIndex]);
+        const address = stringCell(row[addressIndex]);
 
         if (!storeName) {
           return null;
@@ -1386,8 +1409,9 @@ function parseAddressBookRows(rows: unknown[][]) {
         return {
           storeCode,
           storeName,
-          postalCode: stringCell(row[postalCodeIndex]),
-          address: stringCell(row[addressIndex]),
+          postalCode:
+            stringCell(row[postalCodeIndex]) || extractPostalCodeFromAddress(address),
+          address,
           tel: stringCell(row[telIndex]),
         };
       })
@@ -1937,8 +1961,43 @@ function normalizeHeaderCell(value: unknown) {
 }
 
 function findColumnIndex(header: string[], candidates: string[]) {
-  const normalizedCandidates = candidates.map((candidate) => candidate.toLowerCase().replace(/\s+/g, ""));
+  const normalizedCandidates = candidates.map((candidate) => normalizeHeaderCell(candidate));
   return header.findIndex((cell) => normalizedCandidates.includes(cell));
+}
+
+function findColumnIndexLoose(header: string[], candidates: string[]) {
+  const exact = findColumnIndex(header, candidates);
+  if (exact >= 0) {
+    return exact;
+  }
+
+  const normalizedCandidates = candidates.map((candidate) => normalizeHeaderCell(candidate));
+  return header.findIndex((cell) => {
+    if (!cell) {
+      return false;
+    }
+
+    return normalizedCandidates.some(
+      (candidate) =>
+        cell.includes(candidate) || (cell.length >= 2 && candidate.includes(cell)),
+    );
+  });
+}
+
+function matchesHeaderCandidate(cell: string, candidates: string[]) {
+  const normalizedCell = normalizeHeaderCell(cell);
+  if (!normalizedCell) {
+    return false;
+  }
+
+  return candidates.some((candidate) => {
+    const normalizedCandidate = normalizeHeaderCell(candidate);
+    return (
+      normalizedCell === normalizedCandidate ||
+      normalizedCell.includes(normalizedCandidate) ||
+      (normalizedCandidate.length >= 3 && normalizedCandidate.includes(normalizedCell))
+    );
+  });
 }
 
 function stringCell(value: unknown) {
@@ -1950,7 +2009,23 @@ function stringCell(value: unknown) {
 }
 
 function extractJan(value: unknown) {
-  const match = stringCell(value).replace(/\D/g, "").match(/\d{13}/);
+  const text = stringCell(value);
+  if (!text) {
+    return "";
+  }
+
+  const directMatch = text.match(/(?<!\d)\d{13}(?!\d)/);
+  if (directMatch) {
+    return directMatch[0];
+  }
+
+  // 住所セル（郵便番号+番地）から13桁を合成してJANと誤認しない
+  if (/[〒都道府県市区町村]/.test(text) || extractPostalCodeFromAddress(text)) {
+    return "";
+  }
+
+  const digits = text.replace(/\D/g, "");
+  const match = digits.match(/\d{13}/);
   return match?.[0] ?? "";
 }
 

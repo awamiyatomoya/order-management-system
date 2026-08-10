@@ -26,7 +26,15 @@ export const defaultStoreChains: Store[] = [
   {
     id: "default-store-mimosa",
     name: "ミモザ",
-    aliases: ["ミモザ", "イナイミモザ", "*イナイミモザ", "*イナイミモザ 78"],
+    aliases: [
+      "ミモザ",
+      "イナイミモザ",
+      "*イナイミモザ",
+      "*イナイミモザ 78",
+      "アリー",
+      "AREE",
+      "あれー",
+    ],
   },
   {
     id: "default-store-other",
@@ -308,7 +316,12 @@ function getDefaultStoreNameFromMemo(memoStoreName: string) {
     return "アインズ";
   }
 
-  if (memo.includes("イナイミモザ") || memo.includes("ミモザ")) {
+  if (
+    memo.includes("イナイミモザ") ||
+    memo.includes("ミモザ") ||
+    memo.includes("アリー") ||
+    memo.includes("aree")
+  ) {
     return "ミモザ";
   }
 
