@@ -366,3 +366,4 @@ export function getDemoOrderWorkbenchInitialData(
 }
 
 export const DEMO_BASE_PATH = "/demo";
+export const SHARE_BASE_PATH = "/share";

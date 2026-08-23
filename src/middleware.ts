@@ -8,7 +8,12 @@ function isPublicPath(pathname: string) {
   }
 
   // 提出・共有用。架空サンプルのみ表示し、担当者ログイン不要
-  if (pathname === "/demo" || pathname.startsWith("/demo/")) {
+  if (
+    pathname === "/demo" ||
+    pathname.startsWith("/demo/") ||
+    pathname === "/share" ||
+    pathname.startsWith("/share/")
+  ) {
     return true;
   }
 
