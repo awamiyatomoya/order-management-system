@@ -1,5 +1,5 @@
 import { OrderWorkbench } from "@/components/order-workbench";
-import { getDemoOrderWorkbenchInitialData } from "@/lib/demo-data";
+import { DEMO_BASE_PATH, getDemoOrderWorkbenchInitialData } from "@/lib/demo-data";
 import type { OrderWorkbenchDataScope } from "@/lib/supabase/read-order-data";
 
 const VIEW_CONFIG: Record<
@@ -38,6 +38,7 @@ export default async function DemoPage({
       initialData={initialData}
       view={config.view}
       initialClientId={clientId}
+      basePath={DEMO_BASE_PATH}
     />
   );
 }

@@ -7,6 +7,11 @@ function isPublicPath(pathname: string) {
     return true;
   }
 
+  // 提出・共有用。架空サンプルのみ表示し、担当者ログイン不要
+  if (pathname === "/demo" || pathname.startsWith("/demo/")) {
+    return true;
+  }
+
   if (pathname.startsWith("/api/")) {
     return true;
   }
