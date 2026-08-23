@@ -20,15 +20,15 @@ const VIEW_CONFIG: Record<
   history: { view: "history", scope: "history" },
 };
 
-export default async function DemoPage({
+export default async function DemoSegmentPage({
   params,
   searchParams,
 }: {
-  params: Promise<{ segments?: string[] }>;
-  searchParams: Promise<{ clientId?: string; chain?: string }>;
+  params: Promise<{ segments: string[] }>;
+  searchParams: Promise<{ clientId?: string }>;
 }) {
-  const { segments = [] } = await params;
-  const { clientId, chain } = await searchParams;
+  const { segments } = await params;
+  const { clientId } = await searchParams;
   const segmentKey = segments.join("/");
   const config = VIEW_CONFIG[segmentKey] ?? VIEW_CONFIG[""];
   const initialData = getDemoOrderWorkbenchInitialData(config.scope);
