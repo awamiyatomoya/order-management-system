@@ -5258,6 +5258,16 @@ function withBasePath(basePath: string, href: string) {
     return href;
   }
 
+  // /demo /share は catch-all を使わず ?view= で画面切替（Vercel向けに単純化）
+  if (basePath === "/demo" || basePath === "/share") {
+    if (href === "/") {
+      return basePath;
+    }
+
+    const view = href.replace(/^\//, "");
+    return `${basePath}?view=${encodeURIComponent(view)}`;
+  }
+
   if (href === "/") {
     return basePath;
   }
@@ -5535,7 +5545,12 @@ function SidebarLink({
 }
 
 function buildNavHref(href: string, selectedClientId: string) {
-  return selectedClientId ? `${href}?clientId=${encodeURIComponent(selectedClientId)}` : href;
+  if (!selectedClientId) {
+    return href;
+  }
+
+  const separator = href.includes("?") ? "&" : "?";
+  return `${href}${separator}clientId=${encodeURIComponent(selectedClientId)}`;
 }
 
 function ClientSelectField({
