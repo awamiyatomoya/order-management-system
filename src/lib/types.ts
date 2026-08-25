@@ -157,7 +157,7 @@ export type SupplierMapping = {
   valueMaps: Record<string, Record<string, string>>;
 };
 
-export type SelloutLayoutType = "row-list" | "matrix-product-store";
+export type SelloutLayoutType = "row-list" | "matrix-product-store" | "matrix-store-product";
 
 export type SelloutImport = {
   id: string;

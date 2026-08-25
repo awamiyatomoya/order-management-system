@@ -41,17 +41,12 @@ function formatYen(amount: number) {
   return `¥${amount.toLocaleString("ja-JP")}`;
 }
 
-function resolveSelloutProductName(
-  jan: string,
-  fallbackName: string,
-  clientId: string,
-  products: Product[],
-) {
+function resolveSelloutProductName(jan: string, clientId: string, products: Product[]) {
   const product = products.find(
     (candidate) => candidate.clientId === clientId && candidate.jan === jan,
   );
 
-  return product?.name || fallbackName || "未登録";
+  return product?.name ?? "未登録";
 }
 
 function buildFiltersForEntries(entries: SelloutEntry[], retailer = "all"): SelloutFilters {
@@ -146,12 +141,7 @@ export function SelloutPanel({
     () =>
       entries.map((entry) => ({
         ...entry,
-        productName: resolveSelloutProductName(
-          entry.jan,
-          entry.productName,
-          clientId,
-          products,
-        ),
+        productName: resolveSelloutProductName(entry.jan, clientId, products),
       })),
     [clientId, entries, products],
   );

@@ -1,5 +1,9 @@
 import type * as XLSX from "xlsx";
 import * as XLSXUtils from "xlsx";
+import {
+  findGenericRowListLayout,
+  findStoreProductMatrixLayout,
+} from "@/lib/sellout-layout";
 import type { SelloutLayoutType } from "./types";
 
 export type SelloutRowListColumns = {
@@ -39,6 +43,10 @@ export type SelloutImportProfile = {
     skipStoreCodes?: string[];
   };
   matrix?: SelloutMatrixConfig;
+  storeProduct?: {
+    sheetNamePattern?: RegExp;
+  };
+  rowListAutoDetect?: boolean;
 };
 
 export const selloutImportProfiles: SelloutImportProfile[] = [
@@ -109,6 +117,40 @@ export const selloutImportProfiles: SelloutImportProfile[] = [
       storeColumnStart: 10,
       metricsPerStore: ["qty", "amount", "stock"],
       skipStores: ["全社計", "通販"],
+    },
+  },
+  {
+    profileKey: "donki-store-axis",
+    retailer: "ドン・キホーテ",
+    layoutType: "matrix-store-product",
+    detect: (workbook) => {
+      const layout = findStoreProductMatrixLayout(workbook, /店舗軸/);
+      if (!layout) {
+        return false;
+      }
+
+      return /任意単品分析|mbrdp|ドンキ/.test(layout.metadataText);
+    },
+    storeProduct: {
+      sheetNamePattern: /店舗軸/,
+    },
+  },
+  {
+    profileKey: "heuristic-store-product",
+    retailer: "",
+    layoutType: "matrix-store-product",
+    detect: (workbook) => Boolean(findStoreProductMatrixLayout(workbook)),
+    storeProduct: {},
+  },
+  {
+    profileKey: "heuristic-row-list",
+    retailer: "",
+    layoutType: "row-list",
+    detect: (workbook) => Boolean(findGenericRowListLayout(workbook)),
+    rowListAutoDetect: true,
+    rowList: {
+      headerRow: 1,
+      columns: {},
     },
   },
 ];

@@ -1,4 +1,11 @@
 import * as XLSX from "xlsx";
+import {
+  findGenericRowListLayout,
+  findStoreProductMatrixLayout,
+  inferSelloutRetailer,
+  isSkipStoreLabel,
+  sheetToRows,
+} from "@/lib/sellout-layout";
 import type { SelloutImportProfile } from "@/lib/sellout-profiles";
 import { selloutImportProfiles } from "@/lib/sellout-profiles";
 import type { SelloutLayoutType } from "@/lib/types";
@@ -44,8 +51,12 @@ export function parseSelloutWorkbook(
 
   if (!resolvedProfile) {
     throw new Error(
-      "セルアウトファイルの形式を判別できませんでした。対応小売チェーン（ロフト・ハンズ）のファイルか確認してください。",
+      "セルアウトファイルの形式を判別できませんでした。店舗コード／店名と売上数量・売上金額がある一覧か、対応済みチェーン（ロフト・ハンズ・ドン・キホーテ）のファイルか確認してください。",
     );
+  }
+
+  if (resolvedProfile.rowListAutoDetect) {
+    return parseAutoRowListWorkbook(workbook, resolvedProfile);
   }
 
   if (resolvedProfile.layoutType === "row-list" && resolvedProfile.rowList) {
@@ -54,6 +65,10 @@ export function parseSelloutWorkbook(
 
   if (resolvedProfile.layoutType === "matrix-product-store" && resolvedProfile.matrix) {
     return parseMatrixProductStoreWorkbook(workbook, resolvedProfile);
+  }
+
+  if (resolvedProfile.layoutType === "matrix-store-product") {
+    return parseStoreProductMatrixWorkbook(workbook, resolvedProfile);
   }
 
   throw new Error(`プロファイル ${resolvedProfile.profileKey} の設定が不完全です。`);
@@ -188,6 +203,205 @@ function parseMatrixProductStoreWorkbook(
   };
 }
 
+function parseStoreProductMatrixWorkbook(
+  workbook: XLSX.WorkBook,
+  profile: SelloutImportProfile,
+): ParsedSelloutWorkbook {
+  const layout = findStoreProductMatrixLayout(workbook, profile.storeProduct?.sheetNamePattern);
+  if (!layout) {
+    throw new Error("店舗×商品のセルアウト表を読み取れませんでした。");
+  }
+
+  if (!layout.period) {
+    throw new Error("集計期間を読み取れませんでした。");
+  }
+
+  const sheet = workbook.Sheets[layout.sheetName];
+  if (!sheet) {
+    throw new Error("対象シートが見つかりませんでした。");
+  }
+
+  const rows = sheetToRows(sheet);
+  const entries: ParsedSelloutEntry[] = [];
+
+  for (let rowIndex = layout.metricRowIndex + 1; rowIndex < rows.length; rowIndex += 1) {
+    const row = rows[rowIndex] ?? [];
+    const storeCode = readCell(row, layout.storeCodeCol ?? undefined);
+    const storeName = readCell(row, layout.storeNameCol ?? undefined);
+
+    if (!storeCode && !storeName) {
+      continue;
+    }
+
+    if (isSkipStoreLabel(storeCode) || isSkipStoreLabel(storeName)) {
+      continue;
+    }
+
+    for (const block of layout.productBlocks) {
+      const qty = parseOptionalIntegerValue(row[block.qtyCol]) ?? 0;
+      const amount = parseOptionalIntegerValue(row[block.amountCol ?? -1]) ?? 0;
+
+      if (qty === 0 && amount === 0) {
+        continue;
+      }
+
+      entries.push({
+        periodStart: layout.period.start,
+        periodEnd: layout.period.end,
+        retailer: profile.retailer,
+        storeCode,
+        storeName,
+        jan: block.jan,
+        productName: block.productName,
+        qty,
+        amount,
+        stock: null,
+      });
+    }
+  }
+
+  if (entries.length === 0) {
+    throw new Error("セルアウトデータが1件も見つかりませんでした。");
+  }
+
+  const retailer =
+    profile.retailer ||
+    inferSelloutRetailer(
+      entries.map((entry) => entry.storeName),
+      layout.metadataText,
+    );
+
+  return {
+    profileKey: profile.profileKey,
+    retailer,
+    layoutType: profile.layoutType,
+    periodStart: layout.period.start,
+    periodEnd: layout.period.end,
+    entries: entries.map((entry) => ({ ...entry, retailer })),
+  };
+}
+
+function parseAutoRowListWorkbook(
+  workbook: XLSX.WorkBook,
+  profile: SelloutImportProfile,
+): ParsedSelloutWorkbook {
+  const layout = findGenericRowListLayout(workbook);
+  if (!layout) {
+    throw new Error("セルアウトの一覧形式を読み取れませんでした。");
+  }
+
+  const sheet = workbook.Sheets[layout.sheetName];
+  if (!sheet) {
+    throw new Error("対象シートが見つかりませんでした。");
+  }
+
+  const rows = sheetToRows(sheet);
+  const entries: ParsedSelloutEntry[] = [];
+
+  for (let rowIndex = layout.headerRowIndex + 1; rowIndex < rows.length; rowIndex += 1) {
+    const row = rows[rowIndex] ?? [];
+    const storeCode = readCell(row, layout.columns.storeCode);
+    const storeName = readCell(row, layout.columns.storeName);
+    const jan = parseJanValue(row[layout.columns.jan ?? -1]);
+
+    if (!jan) {
+      continue;
+    }
+
+    if (isSkipStoreLabel(storeCode) || isSkipStoreLabel(storeName)) {
+      continue;
+    }
+
+    const rowDate = parseFlexibleDate(row[layout.columns.date ?? -1]);
+    const periodStart = rowDate || layout.period?.start || "";
+    const periodEnd = rowDate || layout.period?.end || periodStart;
+
+    if (!periodStart) {
+      continue;
+    }
+
+    const qty = parseIntegerValue(row[layout.columns.qty ?? -1]);
+    const amount = parseIntegerValue(row[layout.columns.amount ?? -1]);
+    if (qty === 0 && amount === 0) {
+      continue;
+    }
+
+    entries.push({
+      periodStart,
+      periodEnd,
+      retailer: profile.retailer,
+      storeCode,
+      storeName,
+      jan,
+      productName: readCell(row, layout.columns.productName),
+      qty,
+      amount,
+      stock: parseOptionalIntegerValue(row[layout.columns.stock ?? -1]),
+    });
+  }
+
+  if (entries.length === 0) {
+    throw new Error("セルアウトデータが1件も見つかりませんでした。");
+  }
+
+  const retailer =
+    profile.retailer ||
+    inferSelloutRetailer(
+      entries.map((entry) => entry.storeName),
+      layout.metadataText,
+    );
+  const periodStart = entries.reduce(
+    (min, entry) => (entry.periodStart < min ? entry.periodStart : min),
+    entries[0].periodStart,
+  );
+  const periodEnd = entries.reduce(
+    (max, entry) => (entry.periodEnd > max ? entry.periodEnd : max),
+    entries[0].periodEnd,
+  );
+
+  return {
+    profileKey: profile.profileKey,
+    retailer,
+    layoutType: profile.layoutType,
+    periodStart,
+    periodEnd,
+    entries: entries.map((entry) => ({ ...entry, retailer })),
+  };
+}
+
+function parseFlexibleDate(value: string | number | Date | null | undefined) {
+  if (value instanceof Date && Number.isFinite(value.getTime())) {
+    return formatIsoDate(value);
+  }
+
+  if (typeof value === "number" && Number.isFinite(value)) {
+    const digits = String(Math.trunc(value));
+    if (digits.length === 8) {
+      return `${digits.slice(0, 4)}-${digits.slice(4, 6)}-${digits.slice(6, 8)}`;
+    }
+  }
+
+  const text = String(value ?? "").trim();
+  const ymd = parseYmdDate(text);
+  if (ymd) {
+    return ymd;
+  }
+
+  const match = text.normalize("NFKC").match(/^(\d{4})[.\/-](\d{1,2})[.\/-](\d{1,2})$/);
+  if (!match) {
+    return "";
+  }
+
+  return `${match[1]}-${match[2].padStart(2, "0")}-${match[3].padStart(2, "0")}`;
+}
+
+function formatIsoDate(value: Date) {
+  const year = value.getFullYear();
+  const month = String(value.getMonth() + 1).padStart(2, "0");
+  const day = String(value.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
 function resolveSheet(workbook: XLSX.WorkBook, sheetNamePattern?: RegExp) {
   const sheetName = sheetNamePattern
     ? workbook.SheetNames.find((name) => sheetNamePattern.test(name))
@@ -203,14 +417,6 @@ function resolveSheet(workbook: XLSX.WorkBook, sheetNamePattern?: RegExp) {
   }
 
   return sheet;
-}
-
-function sheetToRows(sheet: XLSX.WorkSheet) {
-  return XLSX.utils.sheet_to_json<(string | number | null)[]>(sheet, {
-    header: 1,
-    defval: "",
-    raw: true,
-  });
 }
 
 function buildColumnIndex(
