@@ -45,7 +45,6 @@ const TRUNCATED_STORE_NAME_ALIASES: Record<string, string[]> = {
   コスメ本厚木: ["本厚木"],
   コスメ武蔵小金: ["武蔵小金井", "nonowa"],
   コスメシァル鶴: ["シァル", "鶴見"],
-  千里万博ロフト: ["千里バンパク"],
 };
 
 export function looksLikeStoreAddress(value: string) {
@@ -168,7 +167,50 @@ function isExcelInternalStoreCode(storeCode: string) {
   return /^\d{2,4}$/.test(storeCode.trim());
 }
 
+const CHAIN_MARKERS: Array<{ chain: string; pattern: RegExp }> = [
+  { chain: "ロフト", pattern: /ロフト|loft/ },
+  { chain: "ハンズ", pattern: /ハンズ|hands/ },
+  { chain: "アインズ", pattern: /アインズ|ainz/ },
+  { chain: "@cosme", pattern: /@cosme|アットコスメ/ },
+  { chain: "ドン・キホーテ", pattern: /ドンキ|ドン・キホーテ|donki|ピカソ|長崎屋|情熱職人/ },
+];
+
+/** 店名そのものが名乗っているチェーン。判別できなければ空文字。 */
+function getStoreNameChainMarker(storeName: string) {
+  const normalized = normalizeStoreLocationName(storeName);
+  return CHAIN_MARKERS.find(({ pattern }) => pattern.test(normalized))?.chain ?? "";
+}
+
+/** 店名が別チェーンを名乗っている組み合わせを弾く（ハンズ渋谷店 → 渋谷ロフト の防止） */
+function isChainConsistentMatch(entryStoreName: string, candidate: StoreLocation) {
+  const entryChain = getStoreNameChainMarker(entryStoreName);
+  if (!entryChain) {
+    return true;
+  }
+
+  const candidateChain = getStoreNameChainMarker(candidate.storeName);
+  if (!candidateChain) {
+    return true;
+  }
+
+  return entryChain === candidateChain;
+}
+
 export function resolveStoreLocationMatch(
+  entry: Pick<StoreLocation, "storeCode" | "storeName" | "postalCode" | "address">,
+  lookup: ReturnType<typeof buildStoreLocationLookup>,
+  options?: StoreLocationMatchOptions,
+) {
+  const matched = resolveStoreLocationCandidate(entry, lookup, options);
+
+  if (matched && !isChainConsistentMatch(entry.storeName, matched)) {
+    return undefined;
+  }
+
+  return matched;
+}
+
+function resolveStoreLocationCandidate(
   entry: Pick<StoreLocation, "storeCode" | "storeName" | "postalCode" | "address">,
   lookup: ReturnType<typeof buildStoreLocationLookup>,
   options?: StoreLocationMatchOptions,
@@ -190,6 +232,12 @@ export function resolveStoreLocationMatch(
     if (byName) {
       return byName;
     }
+  }
+
+  // ロフトは曖昧一致より先に、店名の完全一致で確定させる
+  const loftMatch = findLoftStoreLocationMatch(entry.storeName, lookup.byName);
+  if (loftMatch) {
+    return loftMatch;
   }
 
   const looseMatch = findLooseStoreLocationMatch(entry.storeName, lookup.byName);
@@ -479,6 +527,62 @@ export function normalizeHandsStoreMatchName(value: string) {
     .replace(/パルコシティ/g, "")
     .replace(/\d+店$/, "")
     .replace(/店$/, "");
+}
+
+export function normalizeLoftStoreMatchName(value: string) {
+  return normalizeStoreLocationName(value)
+    .replace(/万博/g, "バンパク")
+    .replace(/ロフト/g, "")
+    .replace(/loft/g, "")
+    .replace(/店$/, "");
+}
+
+/** POS表記（新神戸・千里万博など）を公式店名へ完全一致で寄せる。曖昧一致はしない。 */
+function findLoftStoreLocationMatch(storeName: string, byName: Map<string, StoreLocation>) {
+  const query = normalizeLoftStoreMatchName(storeName);
+  if (query.length < 2) {
+    return undefined;
+  }
+
+  const loftLocations = Array.from(
+    new Map(
+      Array.from(byName.values())
+        .filter((location) => isLoftLocation(location))
+        .map((location) => [location.storeCode || location.storeName, location] as const),
+    ).values(),
+  );
+
+  if (loftLocations.length === 0) {
+    return undefined;
+  }
+
+  // 「新○○」は建て替え後のPOS表記で、公式は「○○」のことがある
+  const queries = query.startsWith("新") && query.length >= 3 ? [query, query.slice(1)] : [query];
+
+  for (const candidateQuery of queries) {
+    const matches = loftLocations.filter(
+      (location) => normalizeLoftStoreMatchName(location.storeName) === candidateQuery,
+    );
+
+    if (matches.length === 1) {
+      return matches[0];
+    }
+
+    if (matches.length > 1) {
+      return undefined;
+    }
+  }
+
+  return undefined;
+}
+
+function isLoftLocation(location: StoreLocation) {
+  if (location.storeCode.startsWith("loft-")) {
+    return true;
+  }
+
+  const normalized = normalizeStoreLocationName(location.storeName);
+  return normalized.includes("ロフト") || normalized.includes("loft");
 }
 
 function findHandsStoreLocationMatch(
