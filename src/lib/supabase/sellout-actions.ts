@@ -320,13 +320,7 @@ function resolveSelloutStoreMatch(
   retailer: string,
   options?: StoreLocationMatchOptions,
 ) {
-  if (retailer === "ロフト" && /^\d{2,4}$/.test(entry.storeCode.trim())) {
-    const loftMatch = lookup.byCode.get(`loft-${entry.storeCode.trim()}`);
-    if (loftMatch) {
-      return loftMatch;
-    }
-  }
-
+  // ExcelのPOS店舗CDと公式サイトの shop_id は別体系。コードでの直接照合はしない。
   return resolveStoreLocationMatch(
     {
       storeCode: entry.storeCode,

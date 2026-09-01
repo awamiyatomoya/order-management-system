@@ -45,6 +45,7 @@ const TRUNCATED_STORE_NAME_ALIASES: Record<string, string[]> = {
   コスメ本厚木: ["本厚木"],
   コスメ武蔵小金: ["武蔵小金井", "nonowa"],
   コスメシァル鶴: ["シァル", "鶴見"],
+  千里万博ロフト: ["千里バンパク"],
 };
 
 export function looksLikeStoreAddress(value: string) {
@@ -61,7 +62,10 @@ export function normalizeStoreLocationName(value: string) {
     .normalize("NFKC")
     .toLowerCase()
     .replace(/\s+/g, "")
-    .replace(/[()（）]/g, "");
+    .replace(/[()（）]/g, "")
+    .replace(/[髙𠮷]/g, (char) => (char === "髙" ? "高" : "吉"))
+    .replace(/﨑/g, "崎")
+    .replace(/濵/g, "浜");
 }
 
 export function buildStoreNameMatchKeys(storeName: string) {
