@@ -234,15 +234,19 @@ function resolveStoreLocationCandidate(
     }
   }
 
-  // ロフトは曖昧一致より先に、店名の完全一致で確定させる
+  // ロフトは店名の完全一致で確定させる
   const loftMatch = findLoftStoreLocationMatch(entry.storeName, lookup.byName);
   if (loftMatch) {
     return loftMatch;
   }
 
-  const looseMatch = findLooseStoreLocationMatch(entry.storeName, lookup.byName);
-  if (looseMatch) {
-    return looseMatch;
+  // 「○○ロフト」と名乗る店を曖昧一致に回すと、別のロフト店に化ける。
+  // 完全一致で決まらなければ未照合のままにする。
+  if (getStoreNameChainMarker(entry.storeName) !== "ロフト") {
+    const looseMatch = findLooseStoreLocationMatch(entry.storeName, lookup.byName);
+    if (looseMatch) {
+      return looseMatch;
+    }
   }
 
   const cosmeticMatch = findCosmeticLoftStoreMatch(entry.storeName, lookup.byName);

@@ -66,6 +66,29 @@ test("異体字の店名がマスタに一致する", () => {
   assert.equal(matchLoft("", "髙松ロフト"), "高松ロフト");
 });
 
+/**
+ * 「新横浜ロフト」問題の本質は、照合できない店名を曖昧一致で近い店に寄せていたこと。
+ * マスタにない店名は、別のロフト店に化けるより未照合のままにする。
+ */
+test("マスタにないロフト店名を別のロフト店に寄せない", () => {
+  const unknownLoftStores = [
+    "越谷ロフト",
+    "藤沢ロフト",
+    "銀座ロフト別館",
+    "池袋ロフト2号店",
+    "渋谷ロフトアネックス",
+  ];
+
+  const guessed = unknownLoftStores
+    .map((storeName) => ({ storeName, actual: matchLoft("", storeName) }))
+    .filter((row) => row.actual !== undefined);
+
+  assert.deepEqual(
+    guessed.map((row) => `${row.storeName} -> ${row.actual}`),
+    [],
+  );
+});
+
 test("他チェーンの店名をロフト店舗に誤照合しない", () => {
   const otherChainStores = [
     "ドン・キホーテ 銀座本館",

@@ -4,7 +4,9 @@ export type SelloutMonthlyRow = {
   monthKey: string;
   month: string;
   retailer: string;
+  storeKey: string;
   storeName: string;
+  isStoreMatched: boolean;
   jan: string;
   productName: string;
   qty: number;
@@ -49,8 +51,16 @@ export function getSelloutMonthLabel(entry: Pick<SelloutEntry, "periodStart" | "
   return `${year}年${Number(month)}月`;
 }
 
-export function getSelloutDisplayStoreName(entry: Pick<SelloutEntry, "storeName" | "matchedStoreName">) {
-  return entry.matchedStoreName || entry.storeName || "店舗不明";
+/** 表示はマスタ解決後の店名のみ。Excelの生値は「照合できた」ように見えるので出さない。 */
+export function getSelloutDisplayStoreName(entry: Pick<SelloutEntry, "matchedStoreName">) {
+  return entry.matchedStoreName || "店舗不明";
+}
+
+/** 未照合の店舗どうしが「店舗不明」で1行に混ざらないようにするための行の識別子 */
+export function getSelloutStoreKey(
+  entry: Pick<SelloutEntry, "matchedStoreCode" | "storeCode" | "storeName">,
+) {
+  return entry.matchedStoreCode || entry.storeCode || entry.storeName;
 }
 
 export function getSelloutMonthKey(entry: Pick<SelloutEntry, "periodStart" | "periodEnd">) {
@@ -127,13 +137,16 @@ export function buildSelloutMonthlyRows(entries: SelloutEntry[]): SelloutMonthly
     const month = getSelloutMonthLabel(entry);
     const monthKey = getSelloutMonthKey(entry);
     const storeName = getSelloutDisplayStoreName(entry);
-    const key = `${month}|${entry.retailer}|${storeName}|${entry.jan}`;
+    const storeKey = getSelloutStoreKey(entry);
+    const key = `${month}|${entry.retailer}|${storeKey}|${entry.jan}`;
 
     const current = rowsByKey.get(key) ?? {
       monthKey,
       month,
       retailer: entry.retailer,
+      storeKey,
       storeName,
+      isStoreMatched: Boolean(entry.matchedStoreName),
       jan: entry.jan,
       productName: entry.productName,
       qty: 0,
@@ -168,7 +181,7 @@ export function buildSelloutMonthlyRows(entries: SelloutEntry[]): SelloutMonthly
 }
 
 export function summarizeSelloutMonthlyRows(rows: SelloutMonthlyRow[]): SelloutSummary {
-  const storeCount = new Set(rows.map((row) => row.storeName)).size;
+  const storeCount = new Set(rows.map((row) => row.storeKey)).size;
   const totalQty = rows.reduce((sum, row) => sum + row.qty, 0);
   const totalAmount = rows.reduce((sum, row) => sum + row.amount, 0);
 
@@ -194,7 +207,7 @@ export function buildSelloutMonthlyTotals(entries: SelloutEntry[]): SelloutStore
     const key = buildSelloutTotalsKey(
       monthKey,
       entry.retailer,
-      getSelloutDisplayStoreName(entry),
+      getSelloutStoreKey(entry),
       entry.jan,
     );
     const current = totals.get(key) ?? { qty: 0, amount: 0 };
@@ -224,7 +237,7 @@ export function getPreviousSelloutMonthKey(monthKey: string) {
 
 /** 前月に同じ店舗×商品の実績がなければ null（0件と前月データなしを区別する） */
 export function getSelloutPreviousMonthTotals(
-  row: Pick<SelloutMonthlyRow, "monthKey" | "retailer" | "storeName" | "jan">,
+  row: Pick<SelloutMonthlyRow, "monthKey" | "retailer" | "storeKey" | "jan">,
   totals: SelloutStoreProductTotals,
 ) {
   const previousMonthKey = getPreviousSelloutMonthKey(row.monthKey);
@@ -232,17 +245,12 @@ export function getSelloutPreviousMonthTotals(
     return null;
   }
 
-  const key = buildSelloutTotalsKey(previousMonthKey, row.retailer, row.storeName, row.jan);
+  const key = buildSelloutTotalsKey(previousMonthKey, row.retailer, row.storeKey, row.jan);
   return totals.get(key) ?? null;
 }
 
-function buildSelloutTotalsKey(
-  monthKey: string,
-  retailer: string,
-  storeName: string,
-  jan: string,
-) {
-  return `${monthKey}|${retailer}|${storeName}|${jan}`;
+function buildSelloutTotalsKey(monthKey: string, retailer: string, storeKey: string, jan: string) {
+  return `${monthKey}|${retailer}|${storeKey}|${jan}`;
 }
 
 export function buildSelloutMonthlyChartRows(entries: SelloutEntry[]): SelloutChartRow[] {

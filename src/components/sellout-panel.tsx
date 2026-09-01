@@ -211,6 +211,11 @@ export function SelloutPanel({
 
   const summary = useMemo(() => summarizeSelloutMonthlyRows(monthlyRows), [monthlyRows]);
 
+  const unmatchedStoreCount = useMemo(
+    () => new Set(monthlyRows.filter((row) => !row.isStoreMatched).map((row) => row.storeKey)).size,
+    [monthlyRows],
+  );
+
   const selectedMonthKey =
     filters.year !== "all" && filters.month !== "all"
       ? `${filters.year}-${filters.month.padStart(2, "0")}`
@@ -498,6 +503,13 @@ export function SelloutPanel({
             onMonthSelect={selectMonthFromChart}
           />
 
+          {unmatchedStoreCount > 0 ? (
+            <p className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-700">
+              店舗マスタと照合できなかった店舗が{unmatchedStoreCount}
+              件あります。「店舗不明」の行は、店舗マスタに正しい店名を登録すると解消します。
+            </p>
+          ) : null}
+
           {isLoading ? (
             <p className="text-sm text-muted-foreground">セルアウトデータを読み込み中...</p>
           ) : monthlyRows.length === 0 ? (
@@ -526,9 +538,11 @@ export function SelloutPanel({
                     const previousMonthQtyDiff = previousMonth ? row.qty - previousMonth.qty : null;
 
                     return (
-                      <TableRow key={`${row.month}-${row.retailer}-${row.storeName}-${row.jan}`}>
+                      <TableRow key={`${row.month}-${row.retailer}-${row.storeKey}-${row.jan}`}>
                         <TableCell>{row.retailer}</TableCell>
-                        <TableCell>{row.storeName}</TableCell>
+                        <TableCell className={row.isStoreMatched ? undefined : "text-amber-600"}>
+                          {row.storeName}
+                        </TableCell>
                         <TableCell className="font-mono text-xs">{row.jan}</TableCell>
                         <TableCell>{row.productName}</TableCell>
                         <TableCell className="text-right">{row.qty.toLocaleString("ja-JP")}</TableCell>
