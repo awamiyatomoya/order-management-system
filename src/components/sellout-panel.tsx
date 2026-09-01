@@ -32,8 +32,10 @@ import {
   buildSelloutProductChartRows,
   filterSelloutEntries,
   getLatestSelloutYearMonth,
+  getPreviousSelloutMonthKey,
   getSelloutMonthKey,
   getSelloutPreviousMonthTotals,
+  summarizeSelloutMonthlyRows,
   type SelloutFilters,
 } from "@/lib/sellout-view";
 import { importSelloutWorkbook, readSelloutData } from "@/lib/supabase/sellout-actions";
@@ -41,6 +43,11 @@ import type { Client, Product, SelloutEntry } from "@/lib/types";
 
 function formatYen(amount: number) {
   return `¥${amount.toLocaleString("ja-JP")}`;
+}
+
+function formatSignedYen(diff: number) {
+  const sign = diff > 0 ? "+" : diff < 0 ? "-" : "";
+  return `${sign}¥${Math.abs(diff).toLocaleString("ja-JP")}`;
 }
 
 function formatSignedDiff(diff: number) {
@@ -202,21 +209,57 @@ export function SelloutPanel({
     [filteredEntries],
   );
 
-  const summary = useMemo(() => {
-    const storeKeys = new Set(monthlyRows.map((row) => row.storeName));
-    const storeCount = storeKeys.size;
-    const totalQty = monthlyRows.reduce((sum, row) => sum + row.qty, 0);
-    const totalAmount = monthlyRows.reduce((sum, row) => sum + row.amount, 0);
+  const summary = useMemo(() => summarizeSelloutMonthlyRows(monthlyRows), [monthlyRows]);
+
+  const selectedMonthKey =
+    filters.year !== "all" && filters.month !== "all"
+      ? `${filters.year}-${filters.month.padStart(2, "0")}`
+      : "";
+
+  const previousMonthSummary = useMemo(() => {
+    const previousMonthKey = getPreviousSelloutMonthKey(selectedMonthKey);
+    if (!previousMonthKey) {
+      return null;
+    }
+
+    const previousMonthEntries = trendScopedEntries.filter(
+      (entry) => getSelloutMonthKey(entry) === previousMonthKey,
+    );
+
+    if (previousMonthEntries.length === 0) {
+      return null;
+    }
+
+    return summarizeSelloutMonthlyRows(buildSelloutMonthlyRows(previousMonthEntries));
+  }, [selectedMonthKey, trendScopedEntries]);
+
+  // 単月を選んでいるときだけ前月比が成り立つ。前月実績がなければ各値 null。
+  const summaryDiff = useMemo(() => {
+    if (!selectedMonthKey) {
+      return null;
+    }
+
+    if (!previousMonthSummary) {
+      return {
+        totalAmount: null,
+        totalQty: null,
+        storeCount: null,
+        averageAmountPerStore: null,
+        averageQtyPerStore: null,
+      } satisfies Record<keyof typeof summary, null>;
+    }
 
     return {
-      storeCount,
-      totalQty,
-      totalAmount,
-      averageAmountPerStore: storeCount > 0 ? Math.round(totalAmount / storeCount) : 0,
+      totalAmount: summary.totalAmount - previousMonthSummary.totalAmount,
+      totalQty: summary.totalQty - previousMonthSummary.totalQty,
+      storeCount: summary.storeCount - previousMonthSummary.storeCount,
+      averageAmountPerStore:
+        summary.averageAmountPerStore - previousMonthSummary.averageAmountPerStore,
       averageQtyPerStore:
-        storeCount > 0 ? Math.round((totalQty / storeCount) * 100) / 100 : 0,
+        Math.round((summary.averageQtyPerStore - previousMonthSummary.averageQtyPerStore) * 100) /
+        100,
     };
-  }, [monthlyRows]);
+  }, [previousMonthSummary, selectedMonthKey, summary]);
 
   const storeSuggestions = useMemo(() => {
     const query = filters.storeName.trim().toLowerCase();
@@ -370,16 +413,50 @@ export function SelloutPanel({
       </Card>
 
       <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
-        <SummaryCard label="売上金額（上代）" value={formatYen(summary.totalAmount)} />
-        <SummaryCard label="販売個数" value={`${summary.totalQty.toLocaleString("ja-JP")}個`} />
-        <SummaryCard label="店舗数" value={`${summary.storeCount.toLocaleString("ja-JP")}店`} />
-        <SummaryCard label="1店舗平均売上金額" value={formatYen(summary.averageAmountPerStore)} />
+        <SummaryCard
+          label="売上金額（上代）"
+          value={formatYen(summary.totalAmount)}
+          diff={summaryDiff && { value: summaryDiff.totalAmount, format: formatSignedYen }}
+        />
+        <SummaryCard
+          label="販売個数"
+          value={`${summary.totalQty.toLocaleString("ja-JP")}個`}
+          diff={
+            summaryDiff && {
+              value: summaryDiff.totalQty,
+              format: (diff) => `${formatSignedDiff(diff)}個`,
+            }
+          }
+        />
+        <SummaryCard
+          label="店舗数"
+          value={`${summary.storeCount.toLocaleString("ja-JP")}店`}
+          diff={
+            summaryDiff && {
+              value: summaryDiff.storeCount,
+              format: (diff) => `${formatSignedDiff(diff)}店`,
+            }
+          }
+        />
+        <SummaryCard
+          label="1店舗平均売上金額"
+          value={formatYen(summary.averageAmountPerStore)}
+          diff={
+            summaryDiff && { value: summaryDiff.averageAmountPerStore, format: formatSignedYen }
+          }
+        />
         <SummaryCard
           label="1店舗平均個数"
           value={`${summary.averageQtyPerStore.toLocaleString("ja-JP", {
             minimumFractionDigits: 0,
             maximumFractionDigits: 2,
           })}個`}
+          diff={
+            summaryDiff && {
+              value: summaryDiff.averageQtyPerStore,
+              format: (diff) => `${formatSignedDiff(diff)}個`,
+            }
+          }
         />
       </div>
 
@@ -417,11 +494,7 @@ export function SelloutPanel({
           <SelloutCharts
             monthlyRows={monthlyChartRows}
             productRows={productChartRows}
-            selectedMonthKey={
-              filters.year !== "all" && filters.month !== "all"
-                ? `${filters.year}-${filters.month.padStart(2, "0")}`
-                : ""
-            }
+            selectedMonthKey={selectedMonthKey}
             onMonthSelect={selectMonthFromChart}
           />
 
@@ -770,12 +843,30 @@ function MonthYearPicker({
   );
 }
 
-function SummaryCard({ label, value }: { label: string; value: string }) {
+function SummaryCard({
+  label,
+  value,
+  diff,
+}: {
+  label: string;
+  value: string;
+  /** null を渡すと単月表示でないため前月比を出さない。value が null なら前月実績なし。 */
+  diff?: { value: number | null; format: (value: number) => string } | null;
+}) {
   return (
     <Card size="sm" className="gap-0 py-0">
       <CardContent className="px-3 py-2.5">
         <p className="text-xs text-muted-foreground">{label}</p>
         <p className="mt-0.5 text-xl font-semibold tracking-tight">{value}</p>
+        {diff ? (
+          diff.value === null ? (
+            <p className="mt-0.5 text-xs text-muted-foreground">前月比 —</p>
+          ) : (
+            <p className={`mt-0.5 text-xs font-medium ${getDiffToneClass(diff.value)}`}>
+              前月比 {diff.format(diff.value)}
+            </p>
+          )
+        ) : null}
       </CardContent>
     </Card>
   );

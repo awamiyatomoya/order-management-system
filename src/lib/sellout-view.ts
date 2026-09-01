@@ -13,6 +13,14 @@ export type SelloutMonthlyRow = {
 
 export type SelloutStoreProductTotals = Map<string, { qty: number; amount: number }>;
 
+export type SelloutSummary = {
+  storeCount: number;
+  totalQty: number;
+  totalAmount: number;
+  averageAmountPerStore: number;
+  averageQtyPerStore: number;
+};
+
 export type SelloutChartRow = {
   label: string;
   qty: number;
@@ -157,6 +165,20 @@ export function buildSelloutMonthlyRows(entries: SelloutEntry[]): SelloutMonthly
 
     return a.jan.localeCompare(b.jan, "ja");
   });
+}
+
+export function summarizeSelloutMonthlyRows(rows: SelloutMonthlyRow[]): SelloutSummary {
+  const storeCount = new Set(rows.map((row) => row.storeName)).size;
+  const totalQty = rows.reduce((sum, row) => sum + row.qty, 0);
+  const totalAmount = rows.reduce((sum, row) => sum + row.amount, 0);
+
+  return {
+    storeCount,
+    totalQty,
+    totalAmount,
+    averageAmountPerStore: storeCount > 0 ? Math.round(totalAmount / storeCount) : 0,
+    averageQtyPerStore: storeCount > 0 ? Math.round((totalQty / storeCount) * 100) / 100 : 0,
+  };
 }
 
 /** 店舗×商品×年月ごとの合計。前月比の参照元に使う。 */
