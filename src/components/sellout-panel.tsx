@@ -28,10 +28,12 @@ import {
   buildSelloutFilterOptions,
   buildSelloutMonthlyChartRows,
   buildSelloutMonthlyRows,
+  buildSelloutMonthlyTotals,
   buildSelloutProductChartRows,
   filterSelloutEntries,
   getLatestSelloutYearMonth,
   getSelloutMonthKey,
+  getSelloutPreviousMonthTotals,
   type SelloutFilters,
 } from "@/lib/sellout-view";
 import { importSelloutWorkbook, readSelloutData } from "@/lib/supabase/sellout-actions";
@@ -39,6 +41,18 @@ import type { Client, Product, SelloutEntry } from "@/lib/types";
 
 function formatYen(amount: number) {
   return `¥${amount.toLocaleString("ja-JP")}`;
+}
+
+function formatSignedDiff(diff: number) {
+  return diff > 0 ? `+${diff.toLocaleString("ja-JP")}` : diff.toLocaleString("ja-JP");
+}
+
+function getDiffToneClass(diff: number) {
+  if (diff > 0) {
+    return "text-emerald-600";
+  }
+
+  return diff < 0 ? "text-red-600" : "text-muted-foreground";
 }
 
 function resolveSelloutProductName(jan: string, clientId: string, products: Product[]) {
@@ -170,6 +184,12 @@ export function SelloutPanel({
   const monthlyRows = useMemo(
     () => buildSelloutMonthlyRows(filteredEntries),
     [filteredEntries],
+  );
+
+  // 前月比は年月フィルタ外の実績も要るので、月を絞らない集計から引く
+  const monthlyTotals = useMemo(
+    () => buildSelloutMonthlyTotals(trendScopedEntries),
+    [trendScopedEntries],
   );
 
   const monthlyChartRows = useMemo(
@@ -422,12 +442,15 @@ export function SelloutPanel({
                     <TableHead>商品名</TableHead>
                     <TableHead className="text-right">数量</TableHead>
                     <TableHead className="text-right">平均差</TableHead>
+                    <TableHead className="text-right">前月差</TableHead>
                     <TableHead className="text-right">金額</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
                   {monthlyRows.map((row) => {
                     const qtyDiff = Math.round(row.qty - summary.averageQtyPerStore);
+                    const previousMonth = getSelloutPreviousMonthTotals(row, monthlyTotals);
+                    const previousMonthQtyDiff = previousMonth ? row.qty - previousMonth.qty : null;
 
                     return (
                       <TableRow key={`${row.month}-${row.retailer}-${row.storeName}-${row.jan}`}>
@@ -436,17 +459,18 @@ export function SelloutPanel({
                         <TableCell className="font-mono text-xs">{row.jan}</TableCell>
                         <TableCell>{row.productName}</TableCell>
                         <TableCell className="text-right">{row.qty.toLocaleString("ja-JP")}</TableCell>
-                        <TableCell
-                          className={`text-right font-medium ${
-                            qtyDiff > 0
-                              ? "text-emerald-600"
-                              : qtyDiff < 0
-                                ? "text-red-600"
-                                : "text-muted-foreground"
-                          }`}
-                        >
-                          {qtyDiff > 0 ? `+${qtyDiff}` : `${qtyDiff}`}
+                        <TableCell className={`text-right font-medium ${getDiffToneClass(qtyDiff)}`}>
+                          {formatSignedDiff(qtyDiff)}
                         </TableCell>
+                        {previousMonthQtyDiff === null ? (
+                          <TableCell className="text-right text-muted-foreground">—</TableCell>
+                        ) : (
+                          <TableCell
+                            className={`text-right font-medium ${getDiffToneClass(previousMonthQtyDiff)}`}
+                          >
+                            {formatSignedDiff(previousMonthQtyDiff)}
+                          </TableCell>
+                        )}
                         <TableCell className="text-right">{formatYen(row.amount)}</TableCell>
                       </TableRow>
                     );

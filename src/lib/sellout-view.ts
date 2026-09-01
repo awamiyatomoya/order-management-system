@@ -1,6 +1,7 @@
 import type { SelloutEntry } from "@/lib/types";
 
 export type SelloutMonthlyRow = {
+  monthKey: string;
   month: string;
   retailer: string;
   storeName: string;
@@ -9,6 +10,8 @@ export type SelloutMonthlyRow = {
   qty: number;
   amount: number;
 };
+
+export type SelloutStoreProductTotals = Map<string, { qty: number; amount: number }>;
 
 export type SelloutChartRow = {
   label: string;
@@ -114,10 +117,12 @@ export function buildSelloutMonthlyRows(entries: SelloutEntry[]): SelloutMonthly
 
   entries.forEach((entry) => {
     const month = getSelloutMonthLabel(entry);
+    const monthKey = getSelloutMonthKey(entry);
     const storeName = getSelloutDisplayStoreName(entry);
     const key = `${month}|${entry.retailer}|${storeName}|${entry.jan}`;
 
     const current = rowsByKey.get(key) ?? {
+      monthKey,
       month,
       retailer: entry.retailer,
       storeName,
@@ -152,6 +157,70 @@ export function buildSelloutMonthlyRows(entries: SelloutEntry[]): SelloutMonthly
 
     return a.jan.localeCompare(b.jan, "ja");
   });
+}
+
+/** 店舗×商品×年月ごとの合計。前月比の参照元に使う。 */
+export function buildSelloutMonthlyTotals(entries: SelloutEntry[]): SelloutStoreProductTotals {
+  const totals: SelloutStoreProductTotals = new Map();
+
+  entries.forEach((entry) => {
+    const monthKey = getSelloutMonthKey(entry);
+    if (!monthKey) {
+      return;
+    }
+
+    const key = buildSelloutTotalsKey(
+      monthKey,
+      entry.retailer,
+      getSelloutDisplayStoreName(entry),
+      entry.jan,
+    );
+    const current = totals.get(key) ?? { qty: 0, amount: 0 };
+
+    totals.set(key, {
+      qty: current.qty + entry.qty,
+      amount: current.amount + entry.amount,
+    });
+  });
+
+  return totals;
+}
+
+export function getPreviousSelloutMonthKey(monthKey: string) {
+  const match = /^(\d{4})-(\d{2})$/.exec(monthKey);
+  if (!match) {
+    return "";
+  }
+
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const previousYear = month === 1 ? year - 1 : year;
+  const previousMonth = month === 1 ? 12 : month - 1;
+
+  return `${previousYear}-${String(previousMonth).padStart(2, "0")}`;
+}
+
+/** 前月に同じ店舗×商品の実績がなければ null（0件と前月データなしを区別する） */
+export function getSelloutPreviousMonthTotals(
+  row: Pick<SelloutMonthlyRow, "monthKey" | "retailer" | "storeName" | "jan">,
+  totals: SelloutStoreProductTotals,
+) {
+  const previousMonthKey = getPreviousSelloutMonthKey(row.monthKey);
+  if (!previousMonthKey) {
+    return null;
+  }
+
+  const key = buildSelloutTotalsKey(previousMonthKey, row.retailer, row.storeName, row.jan);
+  return totals.get(key) ?? null;
+}
+
+function buildSelloutTotalsKey(
+  monthKey: string,
+  retailer: string,
+  storeName: string,
+  jan: string,
+) {
+  return `${monthKey}|${retailer}|${storeName}|${jan}`;
 }
 
 export function buildSelloutMonthlyChartRows(entries: SelloutEntry[]): SelloutChartRow[] {
