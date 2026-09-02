@@ -540,8 +540,19 @@ export function SelloutPanel({
                     return (
                       <TableRow key={`${row.month}-${row.retailer}-${row.storeKey}-${row.jan}`}>
                         <TableCell>{row.retailer}</TableCell>
-                        <TableCell className={row.isStoreMatched ? undefined : "text-amber-600"}>
-                          {row.storeName}
+                        <TableCell>
+                          {row.isStoreMatched ? (
+                            row.storeName
+                          ) : (
+                            <span className="text-amber-600">
+                              {row.storeName}
+                              {row.sourceStoreName ? (
+                                <span className="block text-xs text-muted-foreground">
+                                  Excel: {row.sourceStoreName}
+                                </span>
+                              ) : null}
+                            </span>
+                          )}
                         </TableCell>
                         <TableCell className="font-mono text-xs">{row.jan}</TableCell>
                         <TableCell>{row.productName}</TableCell>

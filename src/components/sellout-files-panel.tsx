@@ -24,6 +24,7 @@ import {
 } from "@/components/ui/table";
 import {
   createSelloutFileDownloadUrl,
+  deleteSelloutImport,
   importSelloutWorkbook,
   readSelloutData,
 } from "@/lib/supabase/sellout-actions";
@@ -163,6 +164,28 @@ export function SelloutFilesPanel({
     setImports(data.imports);
   }
 
+  async function handleDelete(importBatch: SelloutImport) {
+    if (!clientId) {
+      return;
+    }
+
+    const confirmed = window.confirm(
+      `${importBatch.retailer}（${formatPeriod(importBatch.periodStart, importBatch.periodEnd)}）の取込を削除します。売上実績からも消えます。よろしいですか？`,
+    );
+    if (!confirmed) {
+      return;
+    }
+
+    const result = await deleteSelloutImport(importBatch.id, clientId);
+    setNotice(result.message);
+    if (!result.ok) {
+      return;
+    }
+
+    const data = await readSelloutData(clientId);
+    setImports(data.imports);
+  }
+
   const filteredImports = useMemo(() => {
     const query = search.trim().toLowerCase();
     if (!query) {
@@ -298,20 +321,32 @@ export function SelloutFilesPanel({
                         {formatYen(importBatch.totalAmount)}
                       </TableCell>
                       <TableCell>
-                        {importBatch.fileStoragePath ? (
+                        <div className="flex flex-wrap gap-2">
+                          {importBatch.fileStoragePath ? (
+                            <Button
+                              type="button"
+                              variant="outline"
+                              size="sm"
+                              onClick={() => {
+                                void downloadSelloutFile(importBatch);
+                              }}
+                            >
+                              ダウンロード
+                            </Button>
+                          ) : (
+                            <span className="text-muted-foreground text-xs">ファイルなし</span>
+                          )}
                           <Button
                             type="button"
                             variant="outline"
                             size="sm"
                             onClick={() => {
-                              void downloadSelloutFile(importBatch);
+                              void handleDelete(importBatch);
                             }}
                           >
-                            ダウンロード
+                            削除
                           </Button>
-                        ) : (
-                          <span className="text-muted-foreground text-xs">ファイルなし</span>
-                        )}
+                        </div>
                       </TableCell>
                     </TableRow>
                   ))}

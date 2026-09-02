@@ -36,6 +36,9 @@ yarn-error.log*
 # vercel
 .vercel
 
+# 取込データの手作業バックアップ（実売上が入るのでコミットしない）
+/backups
+
 # typescript
 *.tsbuildinfo
 next-env.d.ts

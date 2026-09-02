@@ -76,6 +76,27 @@ test("未知フォーマットでも店舗×商品のクロス表なら読み取
   assert.equal(parsed.entries.length, 1);
 });
 
+test("アットコスメの月次一覧を取り込む", () => {
+  const parsed = parseSelloutWorkbook(
+    buildWorkbook({
+      Sheet1: [
+        ["売上日付", "店舗CD", "店舗名称", "メーカー名", "ＪＡＮ", "品名", "登録単価", "売上数", "売上金額"],
+        ["2026-08", "67", "アミュエスト博多店", "ESIENCE", "4573587783667", "ダーマインショット", 2480, 1, 2480],
+        ["2026-08", "501", "@COSME TOKYO", "ESIENCE", "4573587783667", "ダーマインショット", 2480, 6, 14880],
+        ["2026-08", "600", "天満橋京阪シティモール店", "ESIENCE", "4573587783667", "ダーマインショット", 2480, 5, 12400],
+      ],
+    }),
+  );
+
+  assert.equal(parsed.retailer, "@cosme STORE");
+  assert.equal(parsed.periodStart, "2026-08-01");
+  assert.equal(parsed.periodEnd, "2026-08-31");
+  assert.equal(parsed.entries.length, 3);
+  assert.equal(parsed.entries[1].storeName, "@COSME TOKYO");
+  assert.equal(parsed.entries[1].qty, 6);
+  assert.equal(parsed.entries[1].amount, 14880);
+});
+
 test("判別できないファイルは取込エラーにする", () => {
   assert.throws(
     () => parseSelloutWorkbook(buildWorkbook({ Sheet1: [["foo", "bar"], ["1", "2"]] })),

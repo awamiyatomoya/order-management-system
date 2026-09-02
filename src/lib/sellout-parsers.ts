@@ -4,6 +4,7 @@ import {
   findStoreProductMatrixLayout,
   inferSelloutRetailer,
   isSkipStoreLabel,
+  parseYearMonthPeriod,
   sheetToRows,
 } from "@/lib/sellout-layout";
 import type { SelloutImportProfile } from "@/lib/sellout-profiles";
@@ -312,9 +313,11 @@ function parseAutoRowListWorkbook(
       continue;
     }
 
-    const rowDate = parseFlexibleDate(row[layout.columns.date ?? -1]);
-    const periodStart = rowDate || layout.period?.start || "";
-    const periodEnd = rowDate || layout.period?.end || periodStart;
+    const dateCell = row[layout.columns.date ?? -1];
+    const yearMonth = parseYearMonthPeriod(String(dateCell ?? ""));
+    const rowDate = parseFlexibleDate(dateCell);
+    const periodStart = yearMonth?.start || rowDate || layout.period?.start || "";
+    const periodEnd = yearMonth?.end || rowDate || layout.period?.end || periodStart;
 
     if (!periodStart) {
       continue;

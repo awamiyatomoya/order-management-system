@@ -7,6 +7,8 @@ export type SelloutMonthlyRow = {
   storeKey: string;
   storeName: string;
   isStoreMatched: boolean;
+  /** 未照合のとき、どの店を登録すればよいか分かるように残すExcel上の店名 */
+  sourceStoreName: string;
   jan: string;
   productName: string;
   qty: number;
@@ -147,6 +149,7 @@ export function buildSelloutMonthlyRows(entries: SelloutEntry[]): SelloutMonthly
       storeKey,
       storeName,
       isStoreMatched: Boolean(entry.matchedStoreName),
+      sourceStoreName: entry.storeName,
       jan: entry.jan,
       productName: entry.productName,
       qty: 0,

@@ -37,12 +37,12 @@ export type GenericRowListLayout = {
 };
 
 const STORE_CODE_HEADERS = new Set(["店舗コード", "店舗cd", "店コード", "店番", "店舗番号"]);
-const STORE_NAME_HEADERS = new Set(["店舗名", "店舗", "店名"]);
+const STORE_NAME_HEADERS = new Set(["店舗名", "店舗名称", "店舗", "店名"]);
 const QTY_HEADERS = ["売上数量", "販売数量", "売上数", "販売数", "数量"];
 const AMOUNT_HEADERS = ["売上金額", "販売金額", "売上額", "金額"];
 const JAN_HEADERS = new Set(["jan", "janコード", "jancd", "商品コード"]);
 const PRODUCT_HEADERS = new Set(["商品名", "商品", "品名"]);
-const DATE_HEADERS = new Set(["日付", "売上日", "年月日", "対象日", "伝票日"]);
+const DATE_HEADERS = new Set(["日付", "売上日付", "売上日", "年月日", "対象日", "伝票日"]);
 const SKIP_LABELS = new Set(["合計", "総計", "総合計", "全社計", "計", "小計", "通販"]);
 
 const RETAILER_RULES: Array<{ name: string; patterns: RegExp[]; weight: number }> = [
@@ -59,7 +59,7 @@ const RETAILER_RULES: Array<{ name: string; patterns: RegExp[]; weight: number }
   { name: "ロフト", patterns: [/ロフト/, /loft/i], weight: 3 },
   { name: "ハンズ", patterns: [/ハンズ/, /hands/i], weight: 3 },
   { name: "アインズ", patterns: [/アインズ/, /ainz/i], weight: 3 },
-  { name: "@cosme STORE", patterns: [/@cosme/, /アットコスメ/], weight: 3 },
+  { name: "@cosme STORE", patterns: [/@cosme/i, /アットコスメ/], weight: 3 },
 ];
 
 const RETAILER_ALIASES: Record<string, string> = {
@@ -72,6 +72,9 @@ const RETAILER_ALIASES: Record<string, string> = {
   ハンズ: "ハンズ",
   hands: "ハンズ",
   アインズ: "アインズ",
+  "@cosme": "@cosme STORE",
+  "@cosme store": "@cosme STORE",
+  アットコスメ: "@cosme STORE",
 };
 
 export function sheetToRows(sheet: XLSX.WorkSheet) {
@@ -121,7 +124,32 @@ export function parsePeriodFromText(text: string): { start: string; end: string 
     return toPeriod(compact);
   }
 
-  return null;
+  return parseYearMonthPeriod(normalized);
+}
+
+/** 2026-08 / 2026年8月 / 202608 をその月の初日〜末日にする */
+export function parseYearMonthPeriod(value: string): { start: string; end: string } | null {
+  const normalized = String(value ?? "").normalize("NFKC").trim();
+  const match =
+    normalized.match(/^(\d{4})[-/.年](\d{1,2})月?$/) ??
+    normalized.match(/^(\d{4})(\d{2})$/);
+
+  if (!match) {
+    return null;
+  }
+
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  if (!Number.isInteger(year) || month < 1 || month > 12) {
+    return null;
+  }
+
+  const lastDay = new Date(year, month, 0).getDate();
+  const monthText = String(month).padStart(2, "0");
+  return {
+    start: `${year}-${monthText}-01`,
+    end: `${year}-${monthText}-${String(lastDay).padStart(2, "0")}`,
+  };
 }
 
 export function parsePeriodFromRows(rows: (string | number | null)[][]) {

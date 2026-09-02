@@ -6,12 +6,16 @@ import {
   buildStoreLocationLookup,
   resolveStoreLocationMatch,
   type StoreLocation,
-  type StoreLocationMatchOptions,
 } from "@/lib/store-location-matching";
 import {
   belongsToStoreLocationChain,
   hasOfficialChainStoreMaster,
 } from "@/lib/store-location-groups";
+import {
+  findDuplicateSelloutImport,
+  formatSelloutPeriodLabel,
+  resolveImportedSelloutStore,
+} from "@/lib/sellout-store-match";
 import { ensureOfficialChainStoreLocationsFromOfficialSite } from "@/lib/supabase/store-location-actions";
 import { readStoreLocationRecords } from "@/lib/supabase/store-location-actions";
 import type { SelloutEntry, SelloutImport } from "@/lib/types";
@@ -64,14 +68,14 @@ export async function importSelloutWorkbook(formData: FormData): Promise<ImportS
   );
 
   const enrichedEntries = parsed.entries.map((entry) => {
-    const matched = resolveSelloutStoreMatch(entry, lookup, parsed.retailer, {
+    const matched = resolveImportedSelloutStore(entry, parsed.retailer, lookup, {
       introducedStoreCodes,
     });
     return {
       ...entry,
-      storeCode: matched?.storeCode || entry.storeCode,
-      matchedStoreCode: matched?.storeCode || "",
-      matchedStoreName: matched?.storeName || "",
+      storeCode: matched.storeCode,
+      matchedStoreCode: matched.matchedStoreCode,
+      matchedStoreName: matched.matchedStoreName,
     };
   });
 
@@ -79,6 +83,21 @@ export async function importSelloutWorkbook(formData: FormData): Promise<ImportS
   const importId = createId();
   const importedAt = new Date().toISOString();
   let fileStoragePath = "";
+
+  if (hasSupabaseServerEnv()) {
+    const existing = await readSelloutImports(clientId);
+    const duplicate = findDuplicateSelloutImport(existing, {
+      retailer: parsed.retailer,
+      periodStart: parsed.periodStart,
+      periodEnd: parsed.periodEnd,
+    });
+    if (duplicate) {
+      return {
+        ok: false,
+        message: `${parsed.retailer}（${formatSelloutPeriodLabel(parsed.periodStart, parsed.periodEnd)}）はすでに取り込んでいます。同じデータを二重に入れることはできません。やり直す場合は「取込ファイル」から削除してから上げてください。`,
+      };
+    }
+  }
 
   if (hasSupabaseServerEnv()) {
     const uploadResult = await uploadSelloutFileToStorage(clientId, file);
@@ -213,12 +232,9 @@ export async function importSelloutWorkbook(formData: FormData): Promise<ImportS
   };
 }
 
-export async function readSelloutData(clientId: string) {
+async function readSelloutImports(clientId: string) {
   if (!clientId || !hasSupabaseServerEnv()) {
-    return {
-      imports: [] as SelloutImport[],
-      entries: [] as SelloutEntry[],
-    };
+    return [] as SelloutImport[];
   }
 
   const supabase = createServerSupabaseClient();
@@ -232,13 +248,28 @@ export async function readSelloutData(clientId: string) {
     .limit(100);
 
   if (importsError || !imports?.length) {
+    return [] as SelloutImport[];
+  }
+
+  return imports.map(mapSelloutImport);
+}
+
+export async function readSelloutData(clientId: string) {
+  if (!clientId || !hasSupabaseServerEnv()) {
     return {
       imports: [] as SelloutImport[],
       entries: [] as SelloutEntry[],
     };
   }
 
-  const mappedImports = imports.map(mapSelloutImport);
+  const mappedImports = await readSelloutImports(clientId);
+
+  if (mappedImports.length === 0) {
+    return {
+      imports: [] as SelloutImport[],
+      entries: [] as SelloutEntry[],
+    };
+  }
   // 小売企業×対象期間ごとに最新取込だけ使う（月次ファイルを積み上げて見られるようにする）
   const activeImportIds = getLatestImportIdsByRetailerAndPeriod(mappedImports);
   if (activeImportIds.length === 0) {
@@ -248,6 +279,7 @@ export async function readSelloutData(clientId: string) {
     };
   }
 
+  const supabase = createServerSupabaseClient();
   const { data: entries, error: entriesError } = await supabase
     .from("sellout_entries")
     .select(
@@ -314,23 +346,43 @@ function buildSelloutStoreLocationLookup(
   return buildStoreLocationLookup(storeLocations);
 }
 
-function resolveSelloutStoreMatch(
-  entry: Pick<StoreLocation, "storeCode" | "storeName">,
-  lookup: ReturnType<typeof buildStoreLocationLookup>,
-  retailer: string,
-  options?: StoreLocationMatchOptions,
-) {
-  // ExcelのPOS店舗CDと公式サイトの shop_id は別体系。コードでの直接照合はしない。
-  return resolveStoreLocationMatch(
-    {
-      storeCode: entry.storeCode,
-      storeName: entry.storeName,
-      postalCode: "",
-      address: "",
-    },
-    lookup,
-    options,
-  );
+export async function deleteSelloutImport(importId: string, clientId: string) {
+  if (!importId || !clientId) {
+    return { ok: false as const, message: "削除に必要な情報が不足しています。" };
+  }
+
+  if (!hasSupabaseServerEnv()) {
+    return { ok: false as const, message: "セルアウト取込を削除できません。" };
+  }
+
+  const supabase = createServerSupabaseClient();
+  const { data: importBatch, error: readError } = await supabase
+    .from("sellout_imports")
+    .select("id, file_storage_path")
+    .eq("id", importId)
+    .eq("client_id", clientId)
+    .maybeSingle();
+
+  if (readError || !importBatch) {
+    return { ok: false as const, message: "削除する取込が見つかりません。" };
+  }
+
+  const { error: deleteError } = await supabase.from("sellout_imports").delete().eq("id", importId);
+  if (deleteError) {
+    return {
+      ok: false as const,
+      message: `セルアウト取込の削除に失敗しました: ${deleteError.message}`,
+    };
+  }
+
+  if (importBatch.file_storage_path) {
+    await supabase.storage.from("sellout-files").remove([importBatch.file_storage_path]);
+  }
+
+  revalidatePath("/sell-out");
+  revalidatePath("/sell-out/files");
+
+  return { ok: true as const, message: "取込を削除しました。" };
 }
 
 async function loadIntroducedStoreCodes(
