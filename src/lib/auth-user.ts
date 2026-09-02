@@ -4,7 +4,34 @@ export type AuthUserSummary = {
   id: string;
   email: string;
   displayName: string;
+  invited: boolean;
 };
+
+export function resolveAuthAppOrigin(input: {
+  siteUrl?: string;
+  forwardedProto?: string | null;
+  forwardedHost?: string | null;
+  host?: string | null;
+  vercelUrl?: string;
+}) {
+  const siteUrl = input.siteUrl?.trim().replace(/\/$/, "");
+  if (siteUrl) {
+    return siteUrl;
+  }
+
+  const host = (input.forwardedHost || input.host || "").split(",")[0]?.trim();
+  if (host) {
+    const proto = (input.forwardedProto || "https").split(",")[0]?.trim() || "https";
+    return `${proto}://${host}`;
+  }
+
+  const vercelUrl = input.vercelUrl?.trim().replace(/^https?:\/\//, "");
+  if (vercelUrl) {
+    return `https://${vercelUrl}`;
+  }
+
+  return "";
+}
 
 export function resolveAuthDisplayName(user: {
   email?: string | null;

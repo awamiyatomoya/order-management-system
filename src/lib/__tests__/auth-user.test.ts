@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import {
+  resolveAuthAppOrigin,
   resolveAuthDisplayName,
   validateAuthDisplayName,
   validateAuthEmail,
@@ -25,4 +26,18 @@ test("メールとパスワードの入力を検証する", () => {
   assert.equal(validateAuthPassword("longenough").ok, true);
   assert.equal(validateAuthDisplayName("").ok, false);
   assert.equal(validateAuthDisplayName("山田太郎").ok, true);
+});
+
+test("招待メールの戻り先は公開サイトの住所を優先する", () => {
+  assert.equal(
+    resolveAuthAppOrigin({ siteUrl: "https://oms.example.com/" }),
+    "https://oms.example.com",
+  );
+  assert.equal(
+    resolveAuthAppOrigin({
+      forwardedProto: "https",
+      forwardedHost: "oms.example.com",
+    }),
+    "https://oms.example.com",
+  );
 });

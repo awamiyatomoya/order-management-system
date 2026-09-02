@@ -2,7 +2,12 @@ import { createServerClient } from "@supabase/ssr";
 import { NextResponse, type NextRequest } from "next/server";
 
 function isPublicPath(pathname: string) {
-  if (pathname === "/login" || pathname === "/operator") {
+  if (
+    pathname === "/login" ||
+    pathname === "/operator" ||
+    pathname === "/set-password" ||
+    pathname.startsWith("/auth/")
+  ) {
     return true;
   }
 

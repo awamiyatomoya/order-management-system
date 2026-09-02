@@ -14,7 +14,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import type { AuthUserSummary } from "@/lib/auth-user";
-import { createAuthUser, deleteAuthUser, listAuthUsers } from "@/lib/supabase/auth-actions";
+import { deleteAuthUser, inviteAuthUser, listAuthUsers } from "@/lib/supabase/auth-actions";
 
 export function UsersPanel({
   initialUsers,
@@ -26,7 +26,6 @@ export function UsersPanel({
   const [users, setUsers] = useState(initialUsers);
   const [displayName, setDisplayName] = useState("");
   const [email, setEmail] = useState("");
-  const [password, setPassword] = useState("");
   const [notice, setNotice] = useState("");
   const [isSaving, setIsSaving] = useState(false);
 
@@ -38,7 +37,7 @@ export function UsersPanel({
     event.preventDefault();
     setIsSaving(true);
     setNotice("");
-    const result = await createAuthUser(displayName, email, password);
+    const result = await inviteAuthUser(displayName, email);
     setIsSaving(false);
 
     if (!result.ok) {
@@ -48,8 +47,7 @@ export function UsersPanel({
 
     setDisplayName("");
     setEmail("");
-    setPassword("");
-    setNotice("ユーザーを追加しました。");
+    setNotice("招待メールを送りました。相手がリンクから自分でパスワードを設定します。");
     await refreshUsers();
   }
 
@@ -76,7 +74,7 @@ export function UsersPanel({
         </p>
         <h1 className="mt-3 text-2xl font-semibold">ユーザー</h1>
         <p className="mt-1 text-sm text-muted-foreground">
-          ログインできる人を追加します。ここで登録した名前が、取込やチェックの記録に残ります。
+          名前とメールを入れて招待します。相手がメールのリンクから、自分でパスワードを決めます。
         </p>
       </div>
 
@@ -102,19 +100,9 @@ export function UsersPanel({
                 onChange={(event) => setEmail(event.target.value)}
               />
             </Field>
-            <Field>
-              <FieldLabel htmlFor="new-password">初期パスワード</FieldLabel>
-              <Input
-                id="new-password"
-                type="password"
-                value={password}
-                placeholder="8文字以上"
-                onChange={(event) => setPassword(event.target.value)}
-              />
-            </Field>
             <div className="flex items-end">
               <Button type="submit" disabled={isSaving}>
-                {isSaving ? "追加中..." : "ユーザーを追加"}
+                {isSaving ? "送信中..." : "招待メールを送る"}
               </Button>
             </div>
           </form>
@@ -132,6 +120,7 @@ export function UsersPanel({
                 <TableRow>
                   <TableHead>名前</TableHead>
                   <TableHead>メール</TableHead>
+                  <TableHead>状態</TableHead>
                   <TableHead />
                 </TableRow>
               </TableHeader>
@@ -140,6 +129,7 @@ export function UsersPanel({
                   <TableRow key={user.id}>
                     <TableCell>{user.displayName}</TableCell>
                     <TableCell>{user.email}</TableCell>
+                    <TableCell>{user.invited ? "招待中" : "利用中"}</TableCell>
                     <TableCell className="text-right">
                       {user.id === currentUserId ? (
                         <span className="text-xs text-muted-foreground">自分</span>
