@@ -1,13 +1,11 @@
+import { createServerClient } from "@supabase/ssr";
 import { NextResponse, type NextRequest } from "next/server";
-import { OPERATOR_COOKIE_NAME } from "@/lib/operator-session";
-import { normalizeOperatorName } from "@/lib/operator-options";
 
 function isPublicPath(pathname: string) {
-  if (pathname === "/operator") {
+  if (pathname === "/login" || pathname === "/operator") {
     return true;
   }
 
-  // 提出・共有用。架空サンプルのみ表示し、担当者ログイン不要
   if (
     pathname === "/demo" ||
     pathname.startsWith("/demo/") ||
@@ -32,22 +30,63 @@ function isPublicPath(pathname: string) {
   return /\.(?:svg|png|jpg|jpeg|gif|webp|ico)$/.test(pathname);
 }
 
-export function middleware(request: NextRequest) {
+export async function middleware(request: NextRequest) {
   const { pathname, search } = request.nextUrl;
+  let response = NextResponse.next({ request });
+
+  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+  const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+  if (!supabaseUrl || !supabaseAnonKey) {
+    return response;
+  }
+
+  const supabase = createServerClient(supabaseUrl, supabaseAnonKey, {
+    cookies: {
+      getAll() {
+        return request.cookies.getAll();
+      },
+      setAll(cookiesToSet) {
+        cookiesToSet.forEach(({ name, value }) => {
+          request.cookies.set(name, value);
+        });
+        response = NextResponse.next({ request });
+        cookiesToSet.forEach(({ name, value, options }) => {
+          response.cookies.set(name, value, options);
+        });
+      },
+    },
+  });
+
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+
+  if (pathname === "/operator") {
+    const loginUrl = request.nextUrl.clone();
+    loginUrl.pathname = "/login";
+    loginUrl.search = search;
+    return NextResponse.redirect(loginUrl);
+  }
 
   if (isPublicPath(pathname)) {
-    return NextResponse.next();
+    if (pathname === "/login" && user) {
+      const homeUrl = request.nextUrl.clone();
+      homeUrl.pathname = "/";
+      homeUrl.search = "";
+      return NextResponse.redirect(homeUrl);
+    }
+
+    return response;
   }
 
-  const operatorName = normalizeOperatorName(request.cookies.get(OPERATOR_COOKIE_NAME)?.value);
-  if (operatorName) {
-    return NextResponse.next();
+  if (user) {
+    return response;
   }
 
-  const redirectUrl = request.nextUrl.clone();
-  redirectUrl.pathname = "/operator";
-  redirectUrl.searchParams.set("next", `${pathname}${search}`);
-  return NextResponse.redirect(redirectUrl);
+  const loginUrl = request.nextUrl.clone();
+  loginUrl.pathname = "/login";
+  loginUrl.searchParams.set("next", `${pathname}${search}`);
+  return NextResponse.redirect(loginUrl);
 }
 
 export const config = {

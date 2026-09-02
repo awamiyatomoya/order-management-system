@@ -70,6 +70,7 @@ import { supplierMappings } from "@/lib/supplier-mappings";
 import { StoreIntroductionPanel } from "@/components/store-introduction-panel";
 import { SelloutFilesPanel } from "@/components/sellout-files-panel";
 import { SelloutPanel } from "@/components/sellout-panel";
+import { SidebarAuth } from "@/components/sidebar-auth";
 import {
   productMasterExtraFields,
   type ProductMasterExtraKey,
@@ -5416,11 +5417,11 @@ function MasterSidebar({
 
   return (
     <aside
-      className={`fixed left-0 z-50 w-36 border-r border-sidebar-border bg-sidebar px-3 py-5 text-sidebar-foreground ${
+      className={`fixed left-0 z-50 flex w-36 flex-col border-r border-sidebar-border bg-sidebar px-3 py-5 text-sidebar-foreground ${
         basePath ? "top-10 bottom-0" : "inset-y-0"
       }`}
     >
-      <nav className="flex flex-col gap-2 text-sm font-medium">
+      <nav className="flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto text-sm font-medium">
         {navigation.map((item) => {
           if (item.type === "link") {
             return (
@@ -5511,6 +5512,7 @@ function MasterSidebar({
           );
         })}
       </nav>
+      {basePath ? null : <SidebarAuth />}
     </aside>
   );
 }
