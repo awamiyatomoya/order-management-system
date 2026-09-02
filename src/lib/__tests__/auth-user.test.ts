@@ -1,8 +1,10 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import {
+  isAdminDisplayName,
   resolveAuthAppOrigin,
   resolveAuthDisplayName,
+  resolveAuthRole,
   validateAuthDisplayName,
   validateAuthEmail,
   validateAuthPassword,
@@ -26,6 +28,14 @@ test("メールとパスワードの入力を検証する", () => {
   assert.equal(validateAuthPassword("longenough").ok, true);
   assert.equal(validateAuthDisplayName("").ok, false);
   assert.equal(validateAuthDisplayName("山田太郎").ok, true);
+});
+
+test("粟宮は管理者、それ以外は一般ユーザー", () => {
+  assert.equal(isAdminDisplayName("粟宮"), true);
+  assert.equal(isAdminDisplayName("粟宮朋哉"), true);
+  assert.equal(isAdminDisplayName("山田太郎"), false);
+  assert.equal(resolveAuthRole({ user_metadata: { role: "admin" } }), "admin");
+  assert.equal(resolveAuthRole({ user_metadata: { display_name: "山田太郎" } }), "member");
 });
 
 test("招待メールの戻り先は公開サイトの住所を優先する", () => {

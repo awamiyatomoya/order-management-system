@@ -1,11 +1,36 @@
 import { MAX_OPERATOR_NAME_LENGTH, normalizeOperatorName } from "@/lib/operator-options";
 
+export type AuthRole = "admin" | "member";
+
 export type AuthUserSummary = {
   id: string;
   email: string;
   displayName: string;
   invited: boolean;
+  isAdmin: boolean;
 };
+
+const ADMIN_DISPLAY_NAMES = new Set(["粟宮", "粟宮朋哉"]);
+
+export function isAdminDisplayName(value: string) {
+  const normalized = normalizeOperatorName(value);
+  return ADMIN_DISPLAY_NAMES.has(normalized) || normalized.startsWith("粟宮");
+}
+
+export function resolveAuthRole(user: {
+  email?: string | null;
+  user_metadata?: { display_name?: unknown; role?: unknown };
+}): AuthRole {
+  if (user.user_metadata?.role === "admin") {
+    return "admin";
+  }
+
+  if (isAdminDisplayName(resolveAuthDisplayName(user))) {
+    return "admin";
+  }
+
+  return "member";
+}
 
 export function resolveAuthAppOrigin(input: {
   siteUrl?: string;

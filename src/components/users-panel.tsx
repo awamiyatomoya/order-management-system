@@ -24,7 +24,6 @@ export function UsersPanel({
   currentUserId: string;
 }) {
   const [users, setUsers] = useState(initialUsers);
-  const [displayName, setDisplayName] = useState("");
   const [email, setEmail] = useState("");
   const [notice, setNotice] = useState("");
   const [isSaving, setIsSaving] = useState(false);
@@ -37,7 +36,7 @@ export function UsersPanel({
     event.preventDefault();
     setIsSaving(true);
     setNotice("");
-    const result = await inviteAuthUser(displayName, email);
+    const result = await inviteAuthUser(email);
     setIsSaving(false);
 
     if (!result.ok) {
@@ -45,9 +44,8 @@ export function UsersPanel({
       return;
     }
 
-    setDisplayName("");
     setEmail("");
-    setNotice("招待メールを送りました。相手がリンクから自分でパスワードを設定します。");
+    setNotice("招待メールを送りました。相手がリンクから自分で名前とパスワードを設定します。");
     await refreshUsers();
   }
 
@@ -74,22 +72,13 @@ export function UsersPanel({
         </p>
         <h1 className="mt-3 text-2xl font-semibold">ユーザー</h1>
         <p className="mt-1 text-sm text-muted-foreground">
-          名前とメールを入れて招待します。相手がメールのリンクから、自分でパスワードを決めます。
+          メールアドレスだけ入れて招待します。相手がリンクから、自分で名前とパスワードを決めます。管理者の粟宮だけが、招待と削除ができます。
         </p>
       </div>
 
       <Card>
         <CardContent className="grid gap-3 pt-6">
-          <form className="grid gap-3 md:grid-cols-2" onSubmit={handleCreate}>
-            <Field>
-              <FieldLabel htmlFor="new-name">名前</FieldLabel>
-              <Input
-                id="new-name"
-                value={displayName}
-                placeholder="例: 山田太郎"
-                onChange={(event) => setDisplayName(event.target.value)}
-              />
-            </Field>
+          <form className="grid gap-3 md:grid-cols-[1fr_auto]" onSubmit={handleCreate}>
             <Field>
               <FieldLabel htmlFor="new-email">メールアドレス</FieldLabel>
               <Input
@@ -129,10 +118,14 @@ export function UsersPanel({
                   <TableRow key={user.id}>
                     <TableCell>{user.displayName}</TableCell>
                     <TableCell>{user.email}</TableCell>
-                    <TableCell>{user.invited ? "招待中" : "利用中"}</TableCell>
+                    <TableCell>
+                      {user.isAdmin ? "管理者" : user.invited ? "招待中" : "利用中"}
+                    </TableCell>
                     <TableCell className="text-right">
                       {user.id === currentUserId ? (
                         <span className="text-xs text-muted-foreground">自分</span>
+                      ) : user.isAdmin ? (
+                        <span className="text-xs text-muted-foreground">管理者</span>
                       ) : (
                         <Button type="button" variant="outline" size="sm" onClick={() => void handleDelete(user)}>
                           削除

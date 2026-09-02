@@ -10,6 +10,10 @@ export default async function UsersPage() {
     redirect("/login?next=/users");
   }
 
+  if (!current.isAdmin) {
+    redirect("/");
+  }
+
   const users = await listAuthUsers();
 
   return <UsersPanel initialUsers={users} currentUserId={current.id} />;

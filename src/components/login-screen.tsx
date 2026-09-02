@@ -51,7 +51,7 @@ export function LoginScreen({ canCreateFirstUser }: { canCreateFirstUser: boolea
           <CardTitle>{canCreateFirstUser ? "最初のアカウントを作る" : "ログイン"}</CardTitle>
           <CardDescription>
             {canCreateFirstUser
-              ? "このシステムの最初の人として、名前・メール・パスワードを登録します。あとから仲間を追加できます。"
+              ? "最初の人は管理者になります。粟宮さんが、自分の名前で作ってください。"
               : "登録したメールアドレスとパスワードで入ってください。作業した人の記録にも使います。"}
           </CardDescription>
         </CardHeader>

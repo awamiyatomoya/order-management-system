@@ -12,11 +12,12 @@ import {
 } from "@/components/ui/card";
 import { Field, FieldGroup, FieldLabel } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
-import { completeInvitedPassword } from "@/lib/supabase/auth-actions";
+import { completeInvitedProfile } from "@/lib/supabase/auth-actions";
 import { createAuthBrowserClient } from "@/lib/supabase/auth-browser";
 
 export function SetPasswordScreen() {
   const router = useRouter();
+  const [displayName, setDisplayName] = useState("");
   const [password, setPassword] = useState("");
   const [passwordConfirm, setPasswordConfirm] = useState("");
   const [errorMessage, setErrorMessage] = useState("");
@@ -41,7 +42,7 @@ export function SetPasswordScreen() {
 
     setErrorMessage("");
     setIsSubmitting(true);
-    const result = await completeInvitedPassword(password);
+    const result = await completeInvitedProfile(displayName, password);
     setIsSubmitting(false);
 
     if (!result.ok) {
@@ -57,12 +58,23 @@ export function SetPasswordScreen() {
     <main className="flex min-h-screen items-center justify-center bg-background px-4 py-10 text-foreground">
       <Card className="w-full max-w-md">
         <CardHeader>
-          <CardTitle>パスワードを設定</CardTitle>
-          <CardDescription>招待メールのリンクから来た人だけが、ここで自分のパスワードを決めます。</CardDescription>
+          <CardTitle>名前とパスワードを設定</CardTitle>
+          <CardDescription>招待メールのリンクから来た人だけが、ここで自分の名前とパスワードを決めます。</CardDescription>
         </CardHeader>
         <CardContent>
           <form onSubmit={handleSubmit}>
             <FieldGroup>
+              <Field>
+                <FieldLabel htmlFor="display-name">名前</FieldLabel>
+                <Input
+                  id="display-name"
+                  value={displayName}
+                  placeholder="例: 山田太郎"
+                  autoComplete="name"
+                  disabled={!isReady}
+                  onChange={(event) => setDisplayName(event.target.value)}
+                />
+              </Field>
               <Field>
                 <FieldLabel htmlFor="new-password">パスワード</FieldLabel>
                 <Input
@@ -91,7 +103,7 @@ export function SetPasswordScreen() {
               <Button
                 type="submit"
                 className="w-full"
-                disabled={!isReady || isSubmitting || password.length < 8}
+                disabled={!isReady || isSubmitting || !displayName.trim() || password.length < 8}
               >
                 {isSubmitting ? "設定中..." : "設定してはじめる"}
               </Button>

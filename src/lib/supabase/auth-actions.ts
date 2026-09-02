@@ -6,11 +6,13 @@ import { redirect } from "next/navigation";
 import {
   resolveAuthAppOrigin,
   resolveAuthDisplayName,
+  resolveAuthRole,
   validateAuthDisplayName,
   validateAuthEmail,
   validateAuthPassword,
   type AuthUserSummary,
 } from "@/lib/auth-user";
+import type { User } from "@supabase/supabase-js";
 import { createAuthServerClient } from "@/lib/supabase/auth-client";
 import { createServerSupabaseClient, hasSupabaseServerEnv } from "@/lib/supabase/server";
 
@@ -27,12 +29,7 @@ export async function getCurrentAuthUser(): Promise<AuthUserSummary | null> {
     return null;
   }
 
-  return {
-    id: data.user.id,
-    email: data.user.email ?? "",
-    displayName: resolveAuthDisplayName(data.user),
-    invited: !data.user.email_confirmed_at,
-  };
+  return await toAuthUserSummary(data.user);
 }
 
 export async function hasAnyAuthUser() {
@@ -86,15 +83,14 @@ export async function createFirstAuthUser(
   return createAuthUserRecord(displayName, email, password, { signIn: true });
 }
 
-export async function inviteAuthUser(displayName: string, email: string): Promise<AuthActionResult> {
+export async function inviteAuthUser(email: string): Promise<AuthActionResult> {
   const current = await getCurrentAuthUser();
   if (!current) {
     return { ok: false, message: "ログインしてください。" };
   }
 
-  const nameResult = validateAuthDisplayName(displayName);
-  if (!nameResult.ok) {
-    return nameResult;
+  if (!current.isAdmin) {
+    return { ok: false, message: "ユーザーの招待は管理者だけができます。" };
   }
 
   const emailResult = validateAuthEmail(email);
@@ -114,7 +110,7 @@ export async function inviteAuthUser(displayName: string, email: string): Promis
   const redirectTo = `${origin}/set-password`;
   const admin = createServerSupabaseClient();
   const { error } = await admin.auth.admin.inviteUserByEmail(emailResult.email, {
-    data: { display_name: nameResult.displayName },
+    data: { role: "member" },
     redirectTo,
   });
 
@@ -130,7 +126,15 @@ export async function inviteAuthUser(displayName: string, email: string): Promis
   return { ok: true };
 }
 
-export async function completeInvitedPassword(password: string): Promise<AuthActionResult> {
+export async function completeInvitedProfile(
+  displayName: string,
+  password: string,
+): Promise<AuthActionResult> {
+  const nameResult = validateAuthDisplayName(displayName);
+  if (!nameResult.ok) {
+    return nameResult;
+  }
+
   const passwordResult = validateAuthPassword(password);
   if (!passwordResult.ok) {
     return passwordResult;
@@ -142,9 +146,18 @@ export async function completeInvitedPassword(password: string): Promise<AuthAct
     return { ok: false, message: "招待リンクの有効期限が切れているか、無効です。もう一度招待してもらってください。" };
   }
 
-  const { error } = await supabase.auth.updateUser({ password: passwordResult.password });
+  const { error } = await supabase.auth.updateUser({
+    password: passwordResult.password,
+    data: {
+      display_name: nameResult.displayName,
+      role: resolveAuthRole({
+        email: data.user.email,
+        user_metadata: { display_name: nameResult.displayName },
+      }),
+    },
+  });
   if (error) {
-    return { ok: false, message: `パスワードの設定に失敗しました: ${error.message}` };
+    return { ok: false, message: `登録に失敗しました: ${error.message}` };
   }
 
   revalidatePath("/");
@@ -153,7 +166,7 @@ export async function completeInvitedPassword(password: string): Promise<AuthAct
 
 export async function listAuthUsers(): Promise<AuthUserSummary[]> {
   const current = await getCurrentAuthUser();
-  if (!current || !hasSupabaseServerEnv()) {
+  if (!current?.isAdmin || !hasSupabaseServerEnv()) {
     return [];
   }
 
@@ -163,12 +176,7 @@ export async function listAuthUsers(): Promise<AuthUserSummary[]> {
     return [];
   }
 
-  return data.users.map((user) => ({
-    id: user.id,
-    email: user.email ?? "",
-    displayName: resolveAuthDisplayName(user),
-    invited: !user.email_confirmed_at,
-  }));
+  return Promise.all(data.users.map((user) => toAuthUserSummary(user)));
 }
 
 export async function deleteAuthUser(userId: string): Promise<AuthActionResult> {
@@ -177,11 +185,24 @@ export async function deleteAuthUser(userId: string): Promise<AuthActionResult> 
     return { ok: false, message: "ログインしてください。" };
   }
 
+  if (!current.isAdmin) {
+    return { ok: false, message: "ユーザーの削除は管理者だけができます。" };
+  }
+
   if (current.id === userId) {
     return { ok: false, message: "自分のアカウントは削除できません。" };
   }
 
   const admin = createServerSupabaseClient();
+  const { data: target, error: targetError } = await admin.auth.admin.getUserById(userId);
+  if (targetError || !target.user) {
+    return { ok: false, message: "削除するユーザーが見つかりません。" };
+  }
+
+  if (resolveAuthRole(target.user) === "admin") {
+    return { ok: false, message: "管理者は削除できません。" };
+  }
+
   const { error } = await admin.auth.admin.deleteUser(userId);
   if (error) {
     return { ok: false, message: `ユーザーの削除に失敗しました: ${error.message}` };
@@ -228,7 +249,7 @@ async function createAuthUserRecord(
     email: emailResult.email,
     password: passwordResult.password,
     email_confirm: true,
-    user_metadata: { display_name: nameResult.displayName },
+    user_metadata: { display_name: nameResult.displayName, role: "admin" },
   });
 
   if (error) {
@@ -253,6 +274,25 @@ async function createAuthUserRecord(
   revalidatePath("/");
   revalidatePath("/users");
   return { ok: true };
+}
+
+async function toAuthUserSummary(user: User): Promise<AuthUserSummary> {
+  const displayName = resolveAuthDisplayName(user);
+  const isAdmin = resolveAuthRole(user) === "admin";
+
+  if (isAdmin && user.user_metadata?.role !== "admin" && hasSupabaseServerEnv()) {
+    await createServerSupabaseClient().auth.admin.updateUserById(user.id, {
+      user_metadata: { ...user.user_metadata, role: "admin" },
+    });
+  }
+
+  return {
+    id: user.id,
+    email: user.email ?? "",
+    displayName,
+    invited: !user.email_confirmed_at,
+    isAdmin,
+  };
 }
 
 async function getAuthAppOrigin() {
