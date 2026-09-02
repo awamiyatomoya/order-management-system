@@ -20,6 +20,7 @@ import { ensureOfficialChainStoreLocationsFromOfficialSite } from "@/lib/supabas
 import { readStoreLocationRecords } from "@/lib/supabase/store-location-actions";
 import type { SelloutEntry, SelloutImport } from "@/lib/types";
 import { createId } from "@/lib/uuid";
+import { requirePermission } from "@/lib/supabase/auth-actions";
 import { createServerSupabaseClient, hasSupabaseServerEnv } from "./server";
 
 export type ImportSelloutResult =
@@ -36,6 +37,11 @@ export type ImportSelloutResult =
     };
 
 export async function importSelloutWorkbook(formData: FormData): Promise<ImportSelloutResult> {
+  const access = await requirePermission("sellOut", "create");
+  if (!access.ok) {
+    return access;
+  }
+
   const clientId = String(formData.get("clientId") ?? "");
   const file = formData.get("file");
 
@@ -347,6 +353,11 @@ function buildSelloutStoreLocationLookup(
 }
 
 export async function deleteSelloutImport(importId: string, clientId: string) {
+  const access = await requirePermission("sellOut", "delete");
+  if (!access.ok) {
+    return access;
+  }
+
   if (!importId || !clientId) {
     return { ok: false as const, message: "削除に必要な情報が不足しています。" };
   }

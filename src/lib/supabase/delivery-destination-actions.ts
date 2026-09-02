@@ -3,6 +3,7 @@
 import { revalidatePath } from "next/cache";
 import { z } from "zod";
 import type { DeliveryDestination } from "@/lib/delivery-destination-master";
+import { requirePermission } from "@/lib/supabase/auth-actions";
 import { createServerSupabaseClient, hasSupabaseServerEnv } from "./server";
 
 const deliveryDestinationSchema = z.object({
@@ -31,6 +32,11 @@ export type SaveDeliveryDestinationResult =
 export async function saveDeliveryDestination(
   destination: DeliveryDestination,
 ): Promise<SaveDeliveryDestinationResult> {
+  const access = await requirePermission("deliveryDestinations", "edit");
+  if (!access.ok) {
+    return access;
+  }
+
   const result = deliveryDestinationSchema.safeParse(destination);
 
   if (!result.success) {

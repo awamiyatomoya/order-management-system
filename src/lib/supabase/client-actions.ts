@@ -3,6 +3,7 @@
 import { revalidatePath } from "next/cache";
 import { z } from "zod";
 import type { Client, Supplier } from "@/lib/types";
+import { requirePermission } from "@/lib/supabase/auth-actions";
 import { createServerSupabaseClient, hasSupabaseServerEnv } from "./server";
 
 const clientNameSchema = z.string().trim().min(1);
@@ -40,6 +41,11 @@ export type UpdateClientResult =
     };
 
 export async function saveClient(name: string): Promise<SaveClientResult> {
+  const access = await requirePermission("clients", "create");
+  if (!access.ok) {
+    return access;
+  }
+
   const result = clientNameSchema.safeParse(name);
 
   if (!result.success) {
@@ -114,6 +120,11 @@ export async function updateClient(params: {
   name: string;
   fbpFeeRate: number;
 }): Promise<UpdateClientResult> {
+  const access = await requirePermission("clients", "edit");
+  if (!access.ok) {
+    return access;
+  }
+
   const result = updateClientSchema.safeParse(params);
 
   if (!result.success) {

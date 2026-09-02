@@ -1,3 +1,4 @@
+import type { AuthPermissions } from "@/lib/auth-permissions";
 import { MAX_OPERATOR_NAME_LENGTH, normalizeOperatorName } from "@/lib/operator-options";
 
 export type AuthRole = "admin" | "member";
@@ -8,6 +9,7 @@ export type AuthUserSummary = {
   displayName: string;
   invited: boolean;
   isAdmin: boolean;
+  permissions: AuthPermissions;
 };
 
 const ADMIN_DISPLAY_NAMES = new Set(["粟宮", "粟宮朋哉"]);

@@ -3,6 +3,7 @@
 import { revalidatePath } from "next/cache";
 import { z } from "zod";
 import type { Store } from "@/lib/types";
+import { requirePermission } from "@/lib/supabase/auth-actions";
 import { createServerSupabaseClient, hasSupabaseServerEnv } from "./server";
 
 const storeSchema = z.object({
@@ -24,6 +25,11 @@ export type SaveStoreResult =
     };
 
 export async function saveStore(store: Store): Promise<SaveStoreResult> {
+  const access = await requirePermission("stores", "edit");
+  if (!access.ok) {
+    return access;
+  }
+
   const result = storeSchema.safeParse(store);
 
   if (!result.success) {

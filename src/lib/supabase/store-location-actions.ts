@@ -12,6 +12,7 @@ import {
   type OfficialStoreChainName,
 } from "@/lib/official-chain-store-masters";
 import type { StoreLocation } from "@/lib/store-location-matching";
+import { requirePermission } from "@/lib/supabase/auth-actions";
 import { listChainStoreLocationCodes } from "@/lib/store-location-sync";
 import { createServerSupabaseClient, hasSupabaseServerEnv } from "./server";
 
@@ -305,6 +306,11 @@ export async function previewOfficialChainStoreSync(chainName: OfficialStoreChai
 export async function applyOfficialChainStoreSync(
   chainName: OfficialStoreChainName,
 ): Promise<{ ok: boolean; message: string; count: number }> {
+  const access = await requirePermission("stores", "edit");
+  if (!access.ok) {
+    return { ok: false, message: access.message, count: 0 };
+  }
+
   return ensureOfficialChainStoreLocationsFromOfficialSite(chainName);
 }
 

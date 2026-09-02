@@ -3,6 +3,7 @@
 import { revalidatePath } from "next/cache";
 import { z } from "zod";
 import { requireOperatorName } from "@/lib/operator-session";
+import { requirePermission } from "@/lib/supabase/auth-actions";
 import type { ImportError, Order } from "@/lib/types";
 import { createServerSupabaseClient, hasSupabaseServerEnv } from "./server";
 
@@ -97,6 +98,11 @@ export async function saveBlockedImport(params: {
   fileStoragePath?: string;
   errors: ImportError[];
 }): Promise<SaveImportResult> {
+  const access = await requirePermission("orders", "create");
+  if (!access.ok) {
+    return access;
+  }
+
   const errorsResult = z.array(importErrorSchema).safeParse(params.errors);
 
   if (!params.clientId || !params.supplierId || !params.fileName || !errorsResult.success) {
@@ -176,6 +182,11 @@ export async function saveImportedOrders(params: {
   fileStoragePath?: string;
   orders: Order[];
 }): Promise<SaveImportResult> {
+  const access = await requirePermission("orders", "create");
+  if (!access.ok) {
+    return access;
+  }
+
   if (!params.clientId || !params.supplierId || !params.fileName || params.orders.length === 0) {
     return {
       ok: false,
@@ -404,6 +415,11 @@ export async function saveImportedOrders(params: {
 }
 
 export async function uploadOrderFile(formData: FormData): Promise<UploadOrderFileResult> {
+  const access = await requirePermission("orders", "create");
+  if (!access.ok) {
+    return access;
+  }
+
   const clientId = String(formData.get("clientId") ?? "");
   const supplierId = String(formData.get("supplierId") ?? "");
   const file = formData.get("file");

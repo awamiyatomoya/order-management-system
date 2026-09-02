@@ -4,6 +4,7 @@ import { revalidatePath } from "next/cache";
 import { z } from "zod";
 import { calculatePayoutLineAmount } from "@/lib/import-orders";
 import { requireOperatorName } from "@/lib/operator-session";
+import { requirePermission } from "@/lib/supabase/auth-actions";
 import { resolveProductPayoutRate } from "@/lib/payout-rate";
 import type { DeletionLog } from "@/lib/types";
 import { insertDeletionLog } from "./deletion-log-actions";
@@ -39,6 +40,11 @@ export async function updateOrderArrivalDueDateInSupabase(params: {
   orderId: string;
   arrivalDueDate: string;
 }): Promise<SaveOrderStatusResult> {
+  const access = await requirePermission("orders", "edit");
+  if (!access.ok) {
+    return access;
+  }
+
   const result = orderArrivalDueDateSchema.safeParse(params);
 
   if (!result.success || Number.isNaN(Date.parse(params.arrivalDueDate))) {
@@ -87,6 +93,11 @@ export async function updateOrderStoreNameInSupabase(params: {
   orderId: string;
   storeName: string;
 }): Promise<SaveOrderStatusResult> {
+  const access = await requirePermission("orders", "edit");
+  if (!access.ok) {
+    return access;
+  }
+
   const result = orderStoreNameSchema.safeParse(params);
 
   if (!result.success) {
@@ -133,6 +144,11 @@ export async function confirmOrderInSupabase(params: {
   clientId: string;
   orderId: string;
 }): Promise<SaveOrderStatusResult> {
+  const access = await requirePermission("orders", "edit");
+  if (!access.ok) {
+    return access;
+  }
+
   if (!params.clientId || !params.orderId) {
     return {
       ok: false,
@@ -314,6 +330,11 @@ export async function undoOrderConfirmationInSupabase(params: {
   clientId: string;
   orderId: string;
 }): Promise<SaveOrderStatusResult> {
+  const access = await requirePermission("orders", "edit");
+  if (!access.ok) {
+    return access;
+  }
+
   if (!params.clientId || !params.orderId) {
     return {
       ok: false,
@@ -409,6 +430,11 @@ export async function markOrderShippedInSupabase(params: {
   clientId: string;
   orderId: string;
 }): Promise<SaveOrderStatusResult> {
+  const access = await requirePermission("orders", "edit");
+  if (!access.ok) {
+    return access;
+  }
+
   if (!params.clientId || !params.orderId) {
     return {
       ok: false,
@@ -517,6 +543,11 @@ export async function markOrderCheckedInSupabase(params: {
   clientId: string;
   orderId: string;
 }): Promise<SaveOrderStatusResult> {
+  const access = await requirePermission("orders", "edit");
+  if (!access.ok) {
+    return access;
+  }
+
   if (!params.clientId || !params.orderId) {
     return {
       ok: false,
@@ -593,6 +624,11 @@ export async function deleteOrderInSupabase(params: {
   supplierId: string;
   orderNo: string;
 }): Promise<SaveOrderStatusResult> {
+  const access = await requirePermission("orders", "delete");
+  if (!access.ok) {
+    return access;
+  }
+
   if (!params.clientId || !params.orderId || !params.supplierId || !params.orderNo) {
     return {
       ok: false,

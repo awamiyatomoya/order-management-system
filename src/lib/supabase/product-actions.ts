@@ -6,6 +6,7 @@ import { normalizeProductImageForUpload } from "@/lib/normalize-product-image";
 import { calculatePayoutRateFromPrices } from "@/lib/payout-rate";
 import { productMasterExtraFields } from "@/lib/product-master-fields";
 import type { Product } from "@/lib/types";
+import { requirePermission } from "@/lib/supabase/auth-actions";
 import { mapProduct, productSelectColumns, type ProductRow, attachProductImageUrls } from "./read-order-data";
 import { createServerSupabaseClient, hasSupabaseServerEnv } from "./server";
 
@@ -164,6 +165,11 @@ export async function fetchProductsForProductMasterImport(clientId: string): Pro
 }
 
 export async function uploadProductImage(formData: FormData): Promise<UploadProductImageResult> {
+  const access = await requirePermission("products", "edit");
+  if (!access.ok) {
+    return access;
+  }
+
   const clientId = String(formData.get("clientId") ?? "");
   const jan = String(formData.get("jan") ?? "").trim();
   const file = formData.get("file");
@@ -238,6 +244,11 @@ export async function saveProduct(
   product: Product,
   options?: { previousJan?: string },
 ): Promise<SaveProductResult> {
+  const access = await requirePermission("products", options?.previousJan ? "edit" : "create");
+  if (!access.ok) {
+    return access;
+  }
+
   const productWithPayoutRate: Product = {
     ...product,
     payoutRate: calculatePayoutRateFromPrices(product.wholesalePrice, product.retailPrice),
@@ -433,6 +444,11 @@ export async function deleteProduct(params: {
   clientId: string;
   jan: string;
 }): Promise<SaveProductResult> {
+  const access = await requirePermission("products", "delete");
+  if (!access.ok) {
+    return access;
+  }
+
   if (!params.clientId || !params.jan) {
     return {
       ok: false,

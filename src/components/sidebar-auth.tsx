@@ -1,16 +1,19 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { canUseFeature } from "@/lib/auth-permissions";
 import { getCurrentAuthUser, logoutAuth } from "@/lib/supabase/auth-actions";
 
 export function SidebarAuth() {
   const [displayName, setDisplayName] = useState("");
   const [isAdmin, setIsAdmin] = useState(false);
+  const [canViewUsers, setCanViewUsers] = useState(false);
 
   useEffect(() => {
     void getCurrentAuthUser().then((user) => {
       setDisplayName(user?.displayName ?? "");
       setIsAdmin(Boolean(user?.isAdmin));
+      setCanViewUsers(user ? canUseFeature(user.permissions, "users", "view") : false);
     });
   }, []);
 
@@ -24,7 +27,7 @@ export function SidebarAuth() {
         {displayName}
         {isAdmin ? "（管理者）" : ""}
       </p>
-      {isAdmin ? (
+      {canViewUsers ? (
         <a
           href="/users"
           className="mt-1 block rounded-md px-2 py-1.5 text-xs text-sidebar-foreground/70 hover:bg-sidebar-accent/70 hover:text-sidebar-accent-foreground"

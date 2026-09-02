@@ -17,6 +17,8 @@ import { createFirstAuthUser, loginWithPassword } from "@/lib/supabase/auth-acti
 export function LoginScreen({ canCreateFirstUser }: { canCreateFirstUser: boolean }) {
   const router = useRouter();
   const searchParams = useSearchParams();
+  const previewInviteGate = searchParams.get("preview") === "invite";
+  const [showLoginForm, setShowLoginForm] = useState(canCreateFirstUser && !previewInviteGate);
   const [displayName, setDisplayName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -44,6 +46,21 @@ export function LoginScreen({ canCreateFirstUser }: { canCreateFirstUser: boolea
     router.refresh();
   }
 
+  if ((!canCreateFirstUser || previewInviteGate) && !showLoginForm) {
+    return (
+      <main className="flex min-h-screen flex-col items-center justify-center bg-background px-4">
+        <p className="text-sm text-muted-foreground">アカウント招待制です</p>
+        <button
+          type="button"
+          className="mt-20 text-xs text-muted-foreground/40 transition-colors hover:text-muted-foreground"
+          onClick={() => setShowLoginForm(true)}
+        >
+          招待済みの方
+        </button>
+      </main>
+    );
+  }
+
   return (
     <main className="flex min-h-screen items-center justify-center bg-background px-4 py-10 text-foreground">
       <Card className="w-full max-w-md">
@@ -52,7 +69,7 @@ export function LoginScreen({ canCreateFirstUser }: { canCreateFirstUser: boolea
           <CardDescription>
             {canCreateFirstUser
               ? "最初の人は管理者になります。粟宮さんが、自分の名前で作ってください。"
-              : "登録したメールアドレスとパスワードで入ってください。作業した人の記録にも使います。"}
+              : "招待されたメールアドレスとパスワードで入ってください。"}
           </CardDescription>
         </CardHeader>
         <CardContent>

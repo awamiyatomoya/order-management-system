@@ -72,6 +72,12 @@ import { SelloutFilesPanel } from "@/components/sellout-files-panel";
 import { SelloutPanel } from "@/components/sellout-panel";
 import { SidebarAuth } from "@/components/sidebar-auth";
 import {
+  canUseFeature,
+  workbenchScopeToFeature,
+  type AuthPermissions,
+} from "@/lib/auth-permissions";
+import { getCurrentAuthUser } from "@/lib/supabase/auth-actions";
+import {
   productMasterExtraFields,
   type ProductMasterExtraKey,
 } from "@/lib/product-master-fields";
@@ -5276,6 +5282,18 @@ function withBasePath(basePath: string, href: string) {
   return `${basePath}${href}`;
 }
 
+function canViewWorkbenchLink(
+  view: WorkbenchView,
+  permissions: AuthPermissions | null,
+  isPublic: boolean,
+) {
+  if (isPublic || !permissions) {
+    return true;
+  }
+
+  return canUseFeature(permissions, workbenchScopeToFeature(view), "view");
+}
+
 function MasterSidebar({
   currentView,
   selectedClientId,
@@ -5285,6 +5303,18 @@ function MasterSidebar({
   selectedClientId: string;
   basePath?: string;
 }) {
+  const [permissions, setPermissions] = useState<AuthPermissions | null>(null);
+
+  useEffect(() => {
+    if (basePath) {
+      return;
+    }
+
+    void getCurrentAuthUser().then((user) => {
+      setPermissions(user?.permissions ?? null);
+    });
+  }, [basePath]);
+
   const navigation = [
     {
       type: "link" as const,
@@ -5386,6 +5416,29 @@ function MasterSidebar({
     },
   ];
 
+  const visibleNavigation = navigation
+    .map((item) => {
+      if (item.type === "link") {
+        return canViewWorkbenchLink(item.view, permissions, Boolean(basePath)) ? item : null;
+      }
+
+      const links = item.links
+        .map((link) => {
+          if (link.type === "subgroup") {
+            const children = link.links.filter((child) =>
+              canViewWorkbenchLink(child.view, permissions, Boolean(basePath)),
+            );
+            return children.length > 0 ? { ...link, links: children } : null;
+          }
+
+          return canViewWorkbenchLink(link.view, permissions, Boolean(basePath)) ? link : null;
+        })
+        .filter((link): link is NonNullable<typeof link> => Boolean(link));
+
+      return links.length > 0 ? { ...item, links } : null;
+    })
+    .filter((item): item is NonNullable<typeof item> => Boolean(item));
+
   const groupViews = sidebarGroupViews;
 
   const [openGroups, setOpenGroups] = useState<Record<string, boolean>>(() => {
@@ -5422,7 +5475,7 @@ function MasterSidebar({
       }`}
     >
       <nav className="flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto text-sm font-medium">
-        {navigation.map((item) => {
+        {visibleNavigation.map((item) => {
           if (item.type === "link") {
             return (
               <SidebarLink

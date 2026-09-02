@@ -39,6 +39,7 @@ import {
 } from "@/lib/store-matching";
 import type { Product, Store, StoreIntroductionEntry, StoreIntroductionImport } from "@/lib/types";
 import { createId } from "@/lib/uuid";
+import { requirePermission } from "@/lib/supabase/auth-actions";
 import { createServerSupabaseClient, hasSupabaseServerEnv } from "./server";
 
 export type ImportStoreIntroductionResult =
@@ -57,6 +58,11 @@ export type ImportStoreIntroductionResult =
 export async function importStoreIntroductionWorkbook(
   formData: FormData,
 ): Promise<ImportStoreIntroductionResult> {
+  const access = await requirePermission("storeIntroductions", "create");
+  if (!access.ok) {
+    return access;
+  }
+
   const clientId = String(formData.get("clientId") ?? "");
   const file = formData.get("file");
   const storesJson = String(formData.get("storesJson") ?? "[]");

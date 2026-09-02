@@ -1,5 +1,6 @@
 import { redirect } from "next/navigation";
 import { UsersPanel } from "@/components/users-panel";
+import { canUseFeature, firstAllowedPath } from "@/lib/auth-permissions";
 import { getCurrentAuthUser, listAuthUsers } from "@/lib/supabase/auth-actions";
 
 export const dynamic = "force-dynamic";
@@ -10,11 +11,11 @@ export default async function UsersPage() {
     redirect("/login?next=/users");
   }
 
-  if (!current.isAdmin) {
-    redirect("/");
+  if (!canUseFeature(current.permissions, "users", "view")) {
+    redirect(firstAllowedPath(current.permissions) || "/");
   }
 
   const users = await listAuthUsers();
 
-  return <UsersPanel initialUsers={users} currentUserId={current.id} />;
+  return <UsersPanel initialUsers={users} currentUser={current} />;
 }

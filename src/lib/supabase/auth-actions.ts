@@ -4,6 +4,16 @@ import { headers } from "next/headers";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import {
+  canUseFeature,
+  createMemberAuthPermissions,
+  isAuthFeatureId,
+  isAuthPermissionLevel,
+  resolveAuthPermissions,
+  type AuthFeatureId,
+  type AuthPermissionAction,
+  type AuthPermissions,
+} from "@/lib/auth-permissions";
+import {
   resolveAuthAppOrigin,
   resolveAuthDisplayName,
   resolveAuthRole,
@@ -89,8 +99,8 @@ export async function inviteAuthUser(email: string): Promise<AuthActionResult> {
     return { ok: false, message: "ログインしてください。" };
   }
 
-  if (!current.isAdmin) {
-    return { ok: false, message: "ユーザーの招待は管理者だけができます。" };
+  if (!canUseFeature(current.permissions, "users", "create")) {
+    return { ok: false, message: "ユーザーの招待は許可されていません。" };
   }
 
   const emailResult = validateAuthEmail(email);
@@ -110,7 +120,7 @@ export async function inviteAuthUser(email: string): Promise<AuthActionResult> {
   const redirectTo = `${origin}/set-password`;
   const admin = createServerSupabaseClient();
   const { error } = await admin.auth.admin.inviteUserByEmail(emailResult.email, {
-    data: { role: "member" },
+    data: { role: "member", permissions: createMemberAuthPermissions() },
     redirectTo,
   });
 
@@ -154,6 +164,7 @@ export async function completeInvitedProfile(
         email: data.user.email,
         user_metadata: { display_name: nameResult.displayName },
       }),
+      permissions: resolveAuthPermissions(data.user.user_metadata?.permissions),
     },
   });
   if (error) {
@@ -166,7 +177,7 @@ export async function completeInvitedProfile(
 
 export async function listAuthUsers(): Promise<AuthUserSummary[]> {
   const current = await getCurrentAuthUser();
-  if (!current?.isAdmin || !hasSupabaseServerEnv()) {
+  if (!current || !canUseFeature(current.permissions, "users", "view") || !hasSupabaseServerEnv()) {
     return [];
   }
 
@@ -185,8 +196,8 @@ export async function deleteAuthUser(userId: string): Promise<AuthActionResult> 
     return { ok: false, message: "ログインしてください。" };
   }
 
-  if (!current.isAdmin) {
-    return { ok: false, message: "ユーザーの削除は管理者だけができます。" };
+  if (!canUseFeature(current.permissions, "users", "delete")) {
+    return { ok: false, message: "ユーザーの削除は許可されていません。" };
   }
 
   if (current.id === userId) {
@@ -210,6 +221,72 @@ export async function deleteAuthUser(userId: string): Promise<AuthActionResult> 
 
   revalidatePath("/users");
   return { ok: true };
+}
+
+export async function updateAuthUserPermissions(
+  userId: string,
+  permissions: AuthPermissions,
+): Promise<AuthActionResult> {
+  const current = await getCurrentAuthUser();
+  if (!current) {
+    return { ok: false, message: "ログインしてください。" };
+  }
+
+  if (!canUseFeature(current.permissions, "users", "edit")) {
+    return { ok: false, message: "権限の変更は許可されていません。" };
+  }
+
+  if (!hasSupabaseServerEnv()) {
+    return { ok: false, message: "権限を保存できません。" };
+  }
+
+  const admin = createServerSupabaseClient();
+  const { data: target, error: targetError } = await admin.auth.admin.getUserById(userId);
+  if (targetError || !target.user) {
+    return { ok: false, message: "ユーザーが見つかりません。" };
+  }
+
+  if (resolveAuthRole(target.user) === "admin") {
+    return { ok: false, message: "管理者の権限は変更できません。" };
+  }
+
+  const nextPermissions = resolveAuthPermissions(permissions);
+  for (const [feature, level] of Object.entries(nextPermissions)) {
+    if (!isAuthFeatureId(feature) || !isAuthPermissionLevel(level)) {
+      return { ok: false, message: "権限の内容が正しくありません。" };
+    }
+  }
+
+  const { error } = await admin.auth.admin.updateUserById(userId, {
+    user_metadata: {
+      ...target.user.user_metadata,
+      permissions: nextPermissions,
+    },
+  });
+
+  if (error) {
+    return { ok: false, message: `権限の保存に失敗しました: ${error.message}` };
+  }
+
+  revalidatePath("/users");
+  revalidatePath("/");
+  return { ok: true };
+}
+
+export async function requirePermission(
+  feature: AuthFeatureId,
+  action: AuthPermissionAction,
+): Promise<{ ok: true; user: AuthUserSummary } | { ok: false; message: string }> {
+  const user = await getCurrentAuthUser();
+  if (!user) {
+    return { ok: false, message: "ログインしてください。" };
+  }
+
+  if (!canUseFeature(user.permissions, feature, action)) {
+    return { ok: false, message: "この操作は許可されていません。" };
+  }
+
+  return { ok: true, user };
 }
 
 export async function logoutAuth() {
@@ -292,6 +369,7 @@ async function toAuthUserSummary(user: User): Promise<AuthUserSummary> {
     displayName,
     invited: !user.email_confirmed_at,
     isAdmin,
+    permissions: resolveAuthPermissions(user.user_metadata?.permissions, { isAdmin }),
   };
 }
 

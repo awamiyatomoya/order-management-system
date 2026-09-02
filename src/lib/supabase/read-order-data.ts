@@ -24,6 +24,9 @@ import type { StoreLocationRecord } from "@/lib/store-location-groups";
 import { calculatePayoutRateFromPrices } from "@/lib/payout-rate";
 import { productMasterExtraFields } from "@/lib/product-master-fields";
 import { readStoreLocationRecords, readStoreLocationRecordsWithHandsAutoSync } from "@/lib/supabase/store-location-actions";
+import { redirect } from "next/navigation";
+import { canUseFeature, firstAllowedPath, workbenchScopeToFeature } from "@/lib/auth-permissions";
+import { getCurrentAuthUser } from "@/lib/supabase/auth-actions";
 import { createServerSupabaseClient, hasSupabaseServerEnv } from "./server";
 
 export const productSelectColumns = [
@@ -179,6 +182,16 @@ type StoreRow = {
 export async function getOrderWorkbenchInitialData(
   scope: OrderWorkbenchDataScope = "orders",
 ): Promise<OrderWorkbenchInitialData> {
+  const current = await getCurrentAuthUser();
+  if (current && !canUseFeature(current.permissions, workbenchScopeToFeature(scope), "view")) {
+    const fallback = firstAllowedPath(current.permissions);
+    if (fallback) {
+      redirect(fallback);
+    }
+
+    return getEmptyInitialData("この画面を見る権限がありません。");
+  }
+
   if (!hasSupabaseServerEnv()) {
     return getEmptyInitialData(
       "Supabase環境変数が未設定のため、データを表示できません。サンプルデータへの自動切り替えは無効です。",
