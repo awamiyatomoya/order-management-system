@@ -1,0 +1,26 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      - name: 店舗照合・取込の回帰テスト
+        run: npm test
+
+      # next build でも型チェックは走るが、環境変数なしで検証できるのでここでも見る
+      - name: 型チェック
+        run: npx tsc --noEmit
