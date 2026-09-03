@@ -165,7 +165,7 @@ export function UsersPanel({
               </Field>
               <div className="flex items-end">
                 <Button type="submit" disabled={isSaving}>
-                  {isSaving ? "送信中..." : "招待メールを送る"}
+                  {isSaving ? "作成中..." : "招待リンクを作る"}
                 </Button>
               </div>
             </form>

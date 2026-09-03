@@ -20,6 +20,7 @@ import { ensureOfficialChainStoreLocationsFromOfficialSite } from "@/lib/supabas
 import { readStoreLocationRecords } from "@/lib/supabase/store-location-actions";
 import type { SelloutEntry, SelloutImport } from "@/lib/types";
 import { createId } from "@/lib/uuid";
+import { evaluateSelloutClientGuard } from "@/lib/sellout-client-guard";
 import { requirePermission } from "@/lib/supabase/auth-actions";
 import { createServerSupabaseClient, hasSupabaseServerEnv } from "./server";
 
@@ -62,6 +63,20 @@ export async function importSelloutWorkbook(formData: FormData): Promise<ImportS
       ok: false,
       message: error instanceof Error ? error.message : "セルアウトファイルを読み取れませんでした。",
     };
+  }
+
+  if (hasSupabaseServerEnv()) {
+    const catalog = await readSelloutProductCatalog();
+    const selectedClientName = catalog.clientNames.get(clientId) || "今のクライアント";
+    const guard = evaluateSelloutClientGuard({
+      selectedClientId: clientId,
+      selectedClientName,
+      jans: parsed.entries.map((entry) => entry.jan),
+      catalog: catalog.entries,
+    });
+    if (!guard.ok) {
+      return guard;
+    }
   }
 
   await ensureStoreLocationsForRetailer(parsed.retailer);
@@ -235,6 +250,28 @@ export async function importSelloutWorkbook(formData: FormData): Promise<ImportS
     importBatch,
     entries,
     message: `${importBatch.retailer}（${periodLabel}）として ${summary.entryCount}件 / ${summary.storeCount}店舗を取り込みました。`,
+  };
+}
+
+async function readSelloutProductCatalog() {
+  const supabase = createServerSupabaseClient();
+  const [productsResult, clientsResult] = await Promise.all([
+    supabase.from("products").select("jan, client_id"),
+    supabase.from("clients").select("id, name"),
+  ]);
+
+  const clientNames = new Map<string, string>();
+  for (const client of clientsResult.data ?? []) {
+    clientNames.set(String(client.id), String(client.name ?? ""));
+  }
+
+  return {
+    clientNames,
+    entries: (productsResult.data ?? []).map((row) => ({
+      jan: String(row.jan ?? ""),
+      clientId: String(row.client_id ?? ""),
+      clientName: clientNames.get(String(row.client_id ?? "")) ?? "",
+    })),
   };
 }
 

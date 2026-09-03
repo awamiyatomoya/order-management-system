@@ -116,7 +116,7 @@ export async function inviteAuthUser(email: string): Promise<AuthActionResult> {
   }
 
   if (!hasSupabaseServerEnv()) {
-    return { ok: false, message: "招待メールを送れません。" };
+    return { ok: false, message: "招待リンクを作れません。" };
   }
 
   const origin = await getAuthAppOrigin();
@@ -124,22 +124,22 @@ export async function inviteAuthUser(email: string): Promise<AuthActionResult> {
     return { ok: false, message: "招待メールの戻り先URLを決められませんでした。" };
   }
 
-  const redirectTo = `${origin}/auth/callback`;
   const admin = createServerSupabaseClient();
-  const { error } = await admin.auth.admin.inviteUserByEmail(emailResult.email, {
-    data: { role: "member", permissions: createMemberAuthPermissions() },
-    redirectTo,
-  });
-
-  if (error) {
-    if (/already|registered|exists/i.test(error.message)) {
-      return createInviteLinkForExistingUser(admin, emailResult.email, origin, redirectTo);
-    }
-
-    return { ok: false, message: `招待メールの送信に失敗しました: ${error.message}` };
+  const existing = await findAuthUserByEmail(admin, emailResult.email);
+  if (existing && String(existing.user_metadata?.display_name ?? "").trim()) {
+    return { ok: false, message: "このメールアドレスはすでに使われています。" };
   }
 
-  const inviteUrl = await createInviteCallbackUrl(admin, emailResult.email, origin, false);
+  const inviteUrl = await createInviteCallbackUrl(
+    admin,
+    emailResult.email,
+    origin,
+    Boolean(existing?.email_confirmed_at),
+  );
+  if (!inviteUrl) {
+    return { ok: false, message: "招待リンクを作れませんでした。少し待ってからもう一度試してください。" };
+  }
+
   revalidatePath("/users");
   return { ok: true, inviteUrl };
 }
@@ -382,38 +382,16 @@ async function toAuthUserSummary(user: User): Promise<AuthUserSummary> {
   };
 }
 
-async function createInviteLinkForExistingUser(
+async function findAuthUserByEmail(
   admin: ReturnType<typeof createServerSupabaseClient>,
   email: string,
-  origin: string,
-  redirectTo: string,
-): Promise<AuthActionResult> {
+) {
   const { data, error } = await admin.auth.admin.listUsers({ page: 1, perPage: 100 });
   if (error) {
-    return { ok: false, message: "このメールアドレスはすでに使われています。" };
+    return null;
   }
 
-  const user = data.users.find((item) => (item.email ?? "").toLowerCase() === email);
-  if (!user) {
-    return { ok: false, message: "このメールアドレスはすでに使われています。" };
-  }
-
-  if (String(user.user_metadata?.display_name ?? "").trim()) {
-    return { ok: false, message: "このメールアドレスはすでに使われています。" };
-  }
-
-  const inviteUrl = await createInviteCallbackUrl(
-    admin,
-    email,
-    origin,
-    Boolean(user.email_confirmed_at),
-  );
-  if (!inviteUrl) {
-    return { ok: false, message: "招待リンクを作り直せませんでした。もう一度試してください。" };
-  }
-
-  revalidatePath("/users");
-  return { ok: true, inviteUrl };
+  return data.users.find((item) => (item.email ?? "").toLowerCase() === email) ?? null;
 }
 
 async function createInviteCallbackUrl(
@@ -456,12 +434,7 @@ async function isIncompleteInviteUser(email: string) {
   }
 
   const admin = createServerSupabaseClient();
-  const { data, error } = await admin.auth.admin.listUsers({ page: 1, perPage: 100 });
-  if (error) {
-    return false;
-  }
-
-  const user = data.users.find((item) => (item.email ?? "").toLowerCase() === email);
+  const user = await findAuthUserByEmail(admin, email);
   return Boolean(user && !String(user.user_metadata?.display_name ?? "").trim());
 }
 
