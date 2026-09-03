@@ -1,5 +1,6 @@
 import { createServerClient } from "@supabase/ssr";
 import { NextResponse, type NextRequest } from "next/server";
+import { buildAuthCallbackSearch, extractAuthInviteParams } from "@/lib/auth-invite";
 
 function isPublicPath(pathname: string) {
   if (
@@ -65,6 +66,14 @@ export async function middleware(request: NextRequest) {
   const {
     data: { user },
   } = await supabase.auth.getUser();
+
+  const inviteParams = extractAuthInviteParams(search);
+  if (inviteParams && pathname !== "/auth/callback") {
+    const callbackUrl = request.nextUrl.clone();
+    callbackUrl.pathname = "/auth/callback";
+    callbackUrl.search = buildAuthCallbackSearch(inviteParams);
+    return NextResponse.redirect(callbackUrl);
+  }
 
   if (pathname === "/operator") {
     const loginUrl = request.nextUrl.clone();

@@ -65,7 +65,11 @@ export function UsersPanel({
     }
 
     setEmail("");
-    setNotice("招待メールを送りました。相手がリンクから自分で名前とパスワードを設定します。");
+    setNotice(
+      result.inviteUrl
+        ? `このリンクを相手に送ってください。ログイン画面に直接パスワードを入れても、まだ入れません。\n${result.inviteUrl}`
+        : "招待メールを送りました。相手はメールのリンクから名前とパスワードを決めます。",
+    );
     await refreshUsers();
   }
 
@@ -147,7 +151,7 @@ export function UsersPanel({
                 </Button>
               </div>
             </form>
-            {notice ? <p className="text-sm text-muted-foreground">{notice}</p> : null}
+            {notice ? <p className="whitespace-pre-wrap break-all text-sm text-muted-foreground">{notice}</p> : null}
           </CardContent>
         </Card>
       ) : notice ? (

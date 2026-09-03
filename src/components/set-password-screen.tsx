@@ -135,6 +135,12 @@ async function prepareSession() {
   }
 
   const query = new URLSearchParams(window.location.search);
+  const code = query.get("code");
+  if (code) {
+    const { error } = await supabase.auth.exchangeCodeForSession(code);
+    return !error;
+  }
+
   const tokenHash = query.get("token_hash");
   const type = query.get("type");
   if (tokenHash && type) {

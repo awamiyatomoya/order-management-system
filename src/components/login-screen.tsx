@@ -1,7 +1,8 @@
 "use client";
 
 import { useRouter, useSearchParams } from "next/navigation";
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import { extractAuthInviteParams, hasInviteAccessTokens } from "@/lib/auth-invite";
 import { Button } from "@/components/ui/button";
 import {
   Card,
@@ -24,6 +25,15 @@ export function LoginScreen({ canCreateFirstUser }: { canCreateFirstUser: boolea
   const [password, setPassword] = useState("");
   const [errorMessage, setErrorMessage] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
+
+  useEffect(() => {
+    const search = window.location.search;
+    const hash = window.location.hash;
+    const inviteParams = extractAuthInviteParams(search, hash);
+    if (inviteParams || hasInviteAccessTokens(hash)) {
+      router.replace(`/set-password${search}${hash}`);
+    }
+  }, [router]);
 
   async function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -69,7 +79,7 @@ export function LoginScreen({ canCreateFirstUser }: { canCreateFirstUser: boolea
           <CardDescription>
             {canCreateFirstUser
               ? "最初の人は管理者になります。粟宮さんが、自分の名前で作ってください。"
-              : "招待されたメールアドレスとパスワードで入ってください。"}
+              : "まだパスワードを決めていない人は、招待メールのリンクを開いてください。"}
           </CardDescription>
         </CardHeader>
         <CardContent>

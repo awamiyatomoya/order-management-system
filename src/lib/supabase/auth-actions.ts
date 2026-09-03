@@ -26,7 +26,7 @@ import type { User } from "@supabase/supabase-js";
 import { createAuthServerClient } from "@/lib/supabase/auth-client";
 import { createServerSupabaseClient, hasSupabaseServerEnv } from "@/lib/supabase/server";
 
-export type AuthActionResult = { ok: true } | { ok: false; message: string };
+export type AuthActionResult = { ok: true; inviteUrl?: string } | { ok: false; message: string };
 
 export async function getCurrentAuthUser(): Promise<AuthUserSummary | null> {
   if (!hasSupabaseServerEnv() || !process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY) {
@@ -74,6 +74,13 @@ export async function loginWithPassword(email: string, password: string): Promis
   });
 
   if (error) {
+    if (await isIncompleteInviteUser(emailResult.email)) {
+      return {
+        ok: false,
+        message: "招待メールのリンクから、名前とパスワードを設定してください。",
+      };
+    }
+
     return { ok: false, message: "メールアドレスまたはパスワードが違います。" };
   }
 
@@ -117,7 +124,7 @@ export async function inviteAuthUser(email: string): Promise<AuthActionResult> {
     return { ok: false, message: "招待メールの戻り先URLを決められませんでした。" };
   }
 
-  const redirectTo = `${origin}/set-password`;
+  const redirectTo = `${origin}/auth/callback`;
   const admin = createServerSupabaseClient();
   const { error } = await admin.auth.admin.inviteUserByEmail(emailResult.email, {
     data: { role: "member", permissions: createMemberAuthPermissions() },
@@ -126,14 +133,15 @@ export async function inviteAuthUser(email: string): Promise<AuthActionResult> {
 
   if (error) {
     if (/already|registered|exists/i.test(error.message)) {
-      return { ok: false, message: "このメールアドレスはすでに使われています。" };
+      return createInviteLinkForExistingUser(admin, emailResult.email, origin, redirectTo);
     }
 
     return { ok: false, message: `招待メールの送信に失敗しました: ${error.message}` };
   }
 
+  const inviteUrl = await createInviteCallbackUrl(admin, emailResult.email, origin, redirectTo);
   revalidatePath("/users");
-  return { ok: true };
+  return { ok: true, inviteUrl };
 }
 
 export async function completeInvitedProfile(
@@ -371,6 +379,73 @@ async function toAuthUserSummary(user: User): Promise<AuthUserSummary> {
     isAdmin,
     permissions: resolveAuthPermissions(user.user_metadata?.permissions, { isAdmin }),
   };
+}
+
+async function createInviteLinkForExistingUser(
+  admin: ReturnType<typeof createServerSupabaseClient>,
+  email: string,
+  origin: string,
+  redirectTo: string,
+): Promise<AuthActionResult> {
+  const { data, error } = await admin.auth.admin.listUsers({ page: 1, perPage: 100 });
+  if (error) {
+    return { ok: false, message: "このメールアドレスはすでに使われています。" };
+  }
+
+  const user = data.users.find((item) => (item.email ?? "").toLowerCase() === email);
+  if (!user) {
+    return { ok: false, message: "このメールアドレスはすでに使われています。" };
+  }
+
+  if (String(user.user_metadata?.display_name ?? "").trim()) {
+    return { ok: false, message: "このメールアドレスはすでに使われています。" };
+  }
+
+  const inviteUrl = await createInviteCallbackUrl(admin, email, origin, redirectTo);
+  if (!inviteUrl) {
+    return { ok: false, message: "招待リンクを作り直せませんでした。もう一度試してください。" };
+  }
+
+  revalidatePath("/users");
+  return { ok: true, inviteUrl };
+}
+
+async function createInviteCallbackUrl(
+  admin: ReturnType<typeof createServerSupabaseClient>,
+  email: string,
+  origin: string,
+  redirectTo: string,
+) {
+  const { data, error } = await admin.auth.admin.generateLink({
+    type: "invite",
+    email,
+    options: {
+      redirectTo,
+      data: { role: "member", permissions: createMemberAuthPermissions() },
+    },
+  });
+
+  const tokenHash = data?.properties?.hashed_token;
+  if (error || !tokenHash) {
+    return "";
+  }
+
+  return `${origin}/auth/callback?token_hash=${encodeURIComponent(tokenHash)}&type=invite`;
+}
+
+async function isIncompleteInviteUser(email: string) {
+  if (!hasSupabaseServerEnv()) {
+    return false;
+  }
+
+  const admin = createServerSupabaseClient();
+  const { data, error } = await admin.auth.admin.listUsers({ page: 1, perPage: 100 });
+  if (error) {
+    return false;
+  }
+
+  const user = data.users.find((item) => (item.email ?? "").toLowerCase() === email);
+  return Boolean(user && !String(user.user_metadata?.display_name ?? "").trim());
 }
 
 async function getAuthAppOrigin() {
