@@ -15,11 +15,10 @@ import {
 } from "@/components/ui/table";
 import {
   AUTH_FEATURES,
-  AUTH_PERMISSION_LEVELS,
+  AUTH_PERMISSION_CHOICES,
   canUseFeature,
-  toggleAuthPermissionLevel,
   type AuthFeatureId,
-  type AuthPermissionAction,
+  type AuthPermissionLevel,
 } from "@/lib/auth-permissions";
 import type { AuthUserSummary } from "@/lib/auth-user";
 import {
@@ -107,12 +106,15 @@ export function UsersPanel({
     }
   }
 
-  async function handlePermissionClick(feature: AuthFeatureId, action: AuthPermissionAction) {
+  async function handlePermissionChange(feature: AuthFeatureId, nextLevel: AuthPermissionLevel) {
     if (!selectedUser || selectedUser.isAdmin || !canEditPermissions) {
       return;
     }
 
-    const nextLevel = toggleAuthPermissionLevel(selectedUser.permissions[feature], action);
+    if (selectedUser.permissions[feature] === nextLevel) {
+      return;
+    }
+
     const nextPermissions = {
       ...selectedUser.permissions,
       [feature]: nextLevel,
@@ -145,7 +147,7 @@ export function UsersPanel({
         </p>
         <h1 className="mt-3 text-2xl font-semibold">ユーザー</h1>
         <p className="mt-1 text-sm text-muted-foreground">
-          「権限を編集」を押すと、機能ごとに見る・追加・編集・削除を付けられます。同じ段階のボタンをもう一度押すと、その機能は使えなくなります。
+          「権限を編集」を押すと、機能ごとに権限を選べます。「なし」にすると、その画面は見えません。
         </p>
       </div>
 
@@ -263,43 +265,56 @@ export function UsersPanel({
                 {selectedUser.isAdmin
                   ? "管理者はすべての操作ができます。"
                   : canEditPermissions
-                    ? "付けたい段階のボタンを押してください。"
+                    ? "丸を選んでください。「なし」はその画面を見せません。"
                     : "権限を見るだけできます。変更はできません。"}
               </p>
             </div>
-            <div className="grid gap-3">
-              {AUTH_FEATURES.map((feature) => {
-                const currentLevel = selectedUser.permissions[feature.id];
-                return (
-                  <div
-                    key={feature.id}
-                    className="grid gap-2 sm:grid-cols-[7rem_1fr] sm:items-center"
-                  >
-                    <p className="text-sm font-medium">{feature.label}</p>
-                    <div className="flex flex-wrap gap-1">
-                      {AUTH_PERMISSION_LEVELS.map((level) => {
-                        const isActive = currentLevel === level.id;
-                        return (
-                          <Button
-                            key={level.id}
-                            type="button"
-                            size="sm"
-                            variant={isActive ? "default" : "outline"}
-                            disabled={
-                              selectedUser.isAdmin ||
-                              !canEditPermissions ||
-                              savingFeature === feature.id
-                            }
-                            onClick={() => void handlePermissionClick(feature.id, level.id)}
-                          >
-                            {level.label}
-                          </Button>
-                        );
-                      })}
-                    </div>
-                  </div>
-                );
-              })}
+            <div className="overflow-x-auto">
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead className="min-w-[6rem]">機能</TableHead>
+                    {AUTH_PERMISSION_CHOICES.map((choice) => (
+                      <TableHead key={choice.id} className="text-center">
+                        {choice.label}
+                      </TableHead>
+                    ))}
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {AUTH_FEATURES.map((feature) => {
+                    const currentLevel = selectedUser.permissions[feature.id];
+                    const isBusy = savingFeature === feature.id;
+                    const disabled =
+                      selectedUser.isAdmin || !canEditPermissions || isBusy;
+                    return (
+                      <TableRow key={feature.id}>
+                        <TableCell className="font-medium">{feature.label}</TableCell>
+                        {AUTH_PERMISSION_CHOICES.map((choice) => (
+                          <TableCell key={choice.id} className="text-center">
+                            <label className="inline-flex cursor-pointer items-center justify-center">
+                              <input
+                                type="radio"
+                                className="size-5 accent-foreground"
+                                name={`permission-${feature.id}`}
+                                value={choice.id}
+                                checked={currentLevel === choice.id}
+                                disabled={disabled}
+                                onChange={() =>
+                                  void handlePermissionChange(feature.id, choice.id)
+                                }
+                              />
+                              <span className="sr-only">
+                                {feature.label}を{choice.label}
+                              </span>
+                            </label>
+                          </TableCell>
+                        ))}
+                      </TableRow>
+                    );
+                  })}
+                </TableBody>
+              </Table>
             </div>
           </CardContent>
         </Card>

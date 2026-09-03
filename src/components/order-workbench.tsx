@@ -72,6 +72,7 @@ import { SelloutFilesPanel } from "@/components/sellout-files-panel";
 import { SelloutPanel } from "@/components/sellout-panel";
 import { SidebarAuth } from "@/components/sidebar-auth";
 import {
+  AUTH_PERMISSION_DENIED_MESSAGE,
   canUseFeature,
   workbenchScopeToFeature,
   type AuthPermissions,
@@ -923,8 +924,9 @@ export function OrderWorkbench({
   const [storeMasterDrafts, setStoreMasterDrafts] = useState<StoreMasterDraft[]>([]);
   const skippedInitialProductPageLoadRef = useRef(false);
   const autoSyncedHandsRef = useRef(false);
-  const setNotice = (..._messages: string[]) => {
-    void _messages;
+  const [notice, setNoticeState] = useState("");
+  const setNotice = (...messages: string[]) => {
+    setNoticeState(messages.filter(Boolean).join(" "));
   };
 
   const selectableSuppliers = suppliers.filter(
@@ -3168,6 +3170,24 @@ export function OrderWorkbench({
     setNotice(`${changedClients.length}件のクライアント情報を更新しました。`);
   }
 
+  if (initialData.source === "error" && initialData.message === AUTH_PERMISSION_DENIED_MESSAGE) {
+    return (
+      <main className="min-h-screen bg-background py-8 pr-6 pl-44 text-foreground">
+        <div className="mx-auto flex max-w-[1800px] flex-col gap-6">
+          <header className="flex flex-col gap-3">
+            <h1 className="text-4xl font-bold tracking-tight">{pageTitle}</h1>
+          </header>
+          <p className="text-sm">{AUTH_PERMISSION_DENIED_MESSAGE}</p>
+          <MasterSidebar
+            currentView={view}
+            selectedClientId={selectedClientId}
+            basePath={basePath}
+          />
+        </div>
+      </main>
+    );
+  }
+
   return (
     <main className="min-h-screen bg-background py-8 pr-6 pl-44 text-foreground">
       <div className="mx-auto flex max-w-[1800px] flex-col gap-6">
@@ -3177,6 +3197,18 @@ export function OrderWorkbench({
             <WorkbenchPageIntro view={view} />
           </div>
         </header>
+
+        {notice ? (
+          <div
+            className={
+              notice === AUTH_PERMISSION_DENIED_MESSAGE
+                ? "rounded-lg border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive"
+                : "rounded-lg border border-border bg-muted/40 px-4 py-3 text-sm"
+            }
+          >
+            {notice}
+          </div>
+        ) : null}
 
         {initialData.source !== "supabase" ? (
           <div className="rounded-lg border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive">

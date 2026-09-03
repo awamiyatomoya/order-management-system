@@ -24,8 +24,11 @@ import type { StoreLocationRecord } from "@/lib/store-location-groups";
 import { calculatePayoutRateFromPrices } from "@/lib/payout-rate";
 import { productMasterExtraFields } from "@/lib/product-master-fields";
 import { readStoreLocationRecords, readStoreLocationRecordsWithHandsAutoSync } from "@/lib/supabase/store-location-actions";
-import { redirect } from "next/navigation";
-import { canUseFeature, firstAllowedPath, workbenchScopeToFeature } from "@/lib/auth-permissions";
+import {
+  AUTH_PERMISSION_DENIED_MESSAGE,
+  canUseFeature,
+  workbenchScopeToFeature,
+} from "@/lib/auth-permissions";
 import { getCurrentAuthUser } from "@/lib/supabase/auth-actions";
 import { createServerSupabaseClient, hasSupabaseServerEnv } from "./server";
 
@@ -184,12 +187,7 @@ export async function getOrderWorkbenchInitialData(
 ): Promise<OrderWorkbenchInitialData> {
   const current = await getCurrentAuthUser();
   if (current && !canUseFeature(current.permissions, workbenchScopeToFeature(scope), "view")) {
-    const fallback = firstAllowedPath(current.permissions);
-    if (fallback) {
-      redirect(fallback);
-    }
-
-    return getEmptyInitialData("この画面を見る権限がありません。");
+    return getEmptyInitialData(AUTH_PERMISSION_DENIED_MESSAGE);
   }
 
   if (!hasSupabaseServerEnv()) {

@@ -20,6 +20,11 @@ export const AUTH_PERMISSION_LEVELS = [
   { id: "delete", label: "削除" },
 ] as const;
 
+export const AUTH_PERMISSION_CHOICES = [
+  { id: "none", label: "なし" },
+  ...AUTH_PERMISSION_LEVELS,
+] as const;
+
 export type AuthFeatureId = (typeof AUTH_FEATURES)[number]["id"];
 export type AuthPermissionAction = (typeof AUTH_PERMISSION_LEVELS)[number]["id"];
 export type AuthPermissionLevel = "none" | AuthPermissionAction;
@@ -49,13 +54,15 @@ const FEATURE_PATHS: { feature: AuthFeatureId; path: string }[] = [
   { feature: "users", path: "/users" },
 ];
 
+export const AUTH_PERMISSION_DENIED_MESSAGE = "権限がありません。";
+
 export function createFullAuthPermissions(): AuthPermissions {
   return Object.fromEntries(AUTH_FEATURES.map((feature) => [feature.id, "delete"])) as AuthPermissions;
 }
 
 export function createMemberAuthPermissions(): AuthPermissions {
   return {
-    ...createFullAuthPermissions(),
+    ...(Object.fromEntries(AUTH_FEATURES.map((feature) => [feature.id, "view"])) as AuthPermissions),
     users: "none",
   };
 }

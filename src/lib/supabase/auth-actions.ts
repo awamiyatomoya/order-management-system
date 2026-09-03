@@ -4,6 +4,7 @@ import { headers } from "next/headers";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import {
+  AUTH_PERMISSION_DENIED_MESSAGE,
   canUseFeature,
   createMemberAuthPermissions,
   isAuthFeatureId,
@@ -107,7 +108,7 @@ export async function inviteAuthUser(email: string): Promise<AuthActionResult> {
   }
 
   if (!canUseFeature(current.permissions, "users", "create")) {
-    return { ok: false, message: "ユーザーの招待は許可されていません。" };
+    return { ok: false, message: AUTH_PERMISSION_DENIED_MESSAGE };
   }
 
   const emailResult = validateAuthEmail(email);
@@ -205,7 +206,7 @@ export async function deleteAuthUser(userId: string): Promise<AuthActionResult> 
   }
 
   if (!canUseFeature(current.permissions, "users", "delete")) {
-    return { ok: false, message: "ユーザーの削除は許可されていません。" };
+    return { ok: false, message: AUTH_PERMISSION_DENIED_MESSAGE };
   }
 
   if (current.id === userId) {
@@ -241,7 +242,7 @@ export async function updateAuthUserPermissions(
   }
 
   if (!canUseFeature(current.permissions, "users", "edit")) {
-    return { ok: false, message: "権限の変更は許可されていません。" };
+    return { ok: false, message: AUTH_PERMISSION_DENIED_MESSAGE };
   }
 
   if (!hasSupabaseServerEnv()) {
@@ -291,7 +292,7 @@ export async function requirePermission(
   }
 
   if (!canUseFeature(user.permissions, feature, action)) {
-    return { ok: false, message: "この操作は許可されていません。" };
+    return { ok: false, message: AUTH_PERMISSION_DENIED_MESSAGE };
   }
 
   return { ok: true, user };

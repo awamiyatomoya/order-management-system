@@ -38,6 +38,7 @@ import {
   summarizeSelloutMonthlyRows,
   type SelloutFilters,
 } from "@/lib/sellout-view";
+import { AUTH_PERMISSION_DENIED_MESSAGE } from "@/lib/auth-permissions";
 import { importSelloutWorkbook, readSelloutData } from "@/lib/supabase/sellout-actions";
 import type { Client, Product, SelloutEntry } from "@/lib/types";
 
@@ -413,7 +414,17 @@ export function SelloutPanel({
             </div>
           </div>
 
-          {notice && !isUploading ? <p className="mt-3 text-sm text-muted-foreground">{notice}</p> : null}
+          {notice && !isUploading ? (
+            <p
+              className={
+                notice === AUTH_PERMISSION_DENIED_MESSAGE
+                  ? "mt-3 text-sm text-destructive"
+                  : "mt-3 text-sm text-muted-foreground"
+              }
+            >
+              {notice}
+            </p>
+          ) : null}
         </CardContent>
       </Card>
 

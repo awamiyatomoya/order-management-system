@@ -12,6 +12,7 @@ import {
 } from "@/components/ui/card";
 import { Field, FieldGroup, FieldLabel } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
+import { validateAuthPassword } from "@/lib/auth-user";
 import { completeInvitedProfile } from "@/lib/supabase/auth-actions";
 import { createAuthBrowserClient } from "@/lib/supabase/auth-browser";
 
@@ -33,8 +34,16 @@ export function SetPasswordScreen() {
     });
   }, []);
 
+  const passwordCheck = password ? validateAuthPassword(password) : { ok: true as const };
+
   async function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    const checked = validateAuthPassword(password);
+    if (!checked.ok) {
+      setErrorMessage(checked.message);
+      return;
+    }
+
     if (password !== passwordConfirm) {
       setErrorMessage("パスワードが一致しません。");
       return;
@@ -99,11 +108,15 @@ export function SetPasswordScreen() {
                   onChange={(event) => setPasswordConfirm(event.target.value)}
                 />
               </Field>
-              {errorMessage ? <p className="text-sm text-destructive">{errorMessage}</p> : null}
+              {!passwordCheck.ok ? (
+                <p className="text-sm text-destructive">{passwordCheck.message}</p>
+              ) : errorMessage ? (
+                <p className="text-sm text-destructive">{errorMessage}</p>
+              ) : null}
               <Button
                 type="submit"
                 className="w-full"
-                disabled={!isReady || isSubmitting || !displayName.trim() || password.length < 8}
+                disabled={!isReady || isSubmitting || !displayName.trim()}
               >
                 {isSubmitting ? "設定中..." : "設定してはじめる"}
               </Button>

@@ -13,6 +13,7 @@ import {
 } from "@/components/ui/card";
 import { Field, FieldGroup, FieldLabel } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
+import { validateAuthPassword } from "@/lib/auth-user";
 import { createFirstAuthUser, loginWithPassword } from "@/lib/supabase/auth-actions";
 
 export function LoginScreen({ canCreateFirstUser }: { canCreateFirstUser: boolean }) {
@@ -35,8 +36,16 @@ export function LoginScreen({ canCreateFirstUser }: { canCreateFirstUser: boolea
     }
   }, [router]);
 
+  const passwordCheck = password ? validateAuthPassword(password) : { ok: true as const };
+
   async function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    const checked = validateAuthPassword(password);
+    if (!checked.ok) {
+      setErrorMessage(checked.message);
+      return;
+    }
+
     setErrorMessage("");
     setIsSubmitting(true);
 
@@ -119,16 +128,15 @@ export function LoginScreen({ canCreateFirstUser }: { canCreateFirstUser: boolea
                   onChange={(event) => setPassword(event.target.value)}
                 />
               </Field>
-              {errorMessage ? <p className="text-sm text-destructive">{errorMessage}</p> : null}
+              {!passwordCheck.ok ? (
+                <p className="text-sm text-destructive">{passwordCheck.message}</p>
+              ) : errorMessage ? (
+                <p className="text-sm text-destructive">{errorMessage}</p>
+              ) : null}
               <Button
                 type="submit"
                 className="w-full"
-                disabled={
-                  isSubmitting ||
-                  !email.trim() ||
-                  password.length < 8 ||
-                  (canCreateFirstUser && !displayName.trim())
-                }
+                disabled={isSubmitting || !email.trim() || (canCreateFirstUser && !displayName.trim())}
               >
                 {isSubmitting ? "処理中..." : canCreateFirstUser ? "アカウントを作ってはじめる" : "ログイン"}
               </Button>

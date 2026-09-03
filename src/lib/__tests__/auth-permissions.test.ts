@@ -36,17 +36,23 @@ test("同じボタンをもう一度押すと権限を外す", () => {
   assert.equal(toggleAuthPermissionLevel("view", "delete"), "delete");
 });
 
+test("なしを選ぶとその機能は見られない", () => {
+  const permissions = resolveAuthPermissions({ products: "none" });
+  assert.equal(canUseFeature(permissions, "products", "view"), false);
+});
+
 test("管理者は保存がなくても全部できる", () => {
   const permissions = resolveAuthPermissions(undefined, { isAdmin: true });
   assert.equal(canUseFeature(permissions, "users", "delete"), true);
   assert.equal(canUseFeature(permissions, "orders", "delete"), true);
 });
 
-test("権限の記録がない一般ユーザーは、今まで通りユーザー以外は全部できる", () => {
+test("権限の記録がない一般ユーザーは見るだけでき、ユーザー画面は開けない", () => {
   const permissions = resolveAuthPermissions(undefined);
   const defaults = createMemberAuthPermissions();
   assert.deepEqual(permissions, defaults);
-  assert.equal(canUseFeature(permissions, "products", "delete"), true);
+  assert.equal(canUseFeature(permissions, "products", "view"), true);
+  assert.equal(canUseFeature(permissions, "products", "create"), false);
   assert.equal(canUseFeature(permissions, "users", "view"), false);
 });
 
