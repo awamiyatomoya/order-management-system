@@ -145,7 +145,7 @@ export function UsersPanel({
         </p>
         <h1 className="mt-3 text-2xl font-semibold">ユーザー</h1>
         <p className="mt-1 text-sm text-muted-foreground">
-          ユーザーを選ぶと、機能ごとに見る・追加・編集・削除をボタンで付けられます。同じボタンをもう一度押すと、その機能は使えなくなります。
+          「権限を編集」を押すと、機能ごとに見る・追加・編集・削除を付けられます。同じ段階のボタンをもう一度押すと、その機能は使えなくなります。
         </p>
       </div>
 
@@ -194,8 +194,7 @@ export function UsersPanel({
                 {users.map((user) => (
                   <TableRow
                     key={user.id}
-                    className={selectedUserId === user.id ? "bg-muted/60" : "cursor-pointer"}
-                    onClick={() => setSelectedUserId(user.id)}
+                    className={selectedUserId === user.id ? "bg-muted/60" : undefined}
                   >
                     <TableCell>{user.displayName}</TableCell>
                     <TableCell>{user.email}</TableCell>
@@ -210,12 +209,23 @@ export function UsersPanel({
                             variant="outline"
                             size="sm"
                             disabled={isSaving}
-                            onClick={(event) => {
-                              event.stopPropagation();
+                            onClick={() => {
                               void handleResend(user);
                             }}
                           >
                             リンクを再発行
+                          </Button>
+                        ) : null}
+                        {!user.isAdmin ? (
+                          <Button
+                            type="button"
+                            variant={selectedUserId === user.id ? "default" : "outline"}
+                            size="sm"
+                            onClick={() =>
+                              setSelectedUserId((current) => (current === user.id ? "" : user.id))
+                            }
+                          >
+                            権限を編集
                           </Button>
                         ) : null}
                         {user.id === currentUser.id ? (
@@ -227,8 +237,7 @@ export function UsersPanel({
                             type="button"
                             variant="outline"
                             size="sm"
-                            onClick={(event) => {
-                              event.stopPropagation();
+                            onClick={() => {
                               void handleDelete(user);
                             }}
                           >
@@ -295,7 +304,7 @@ export function UsersPanel({
           </CardContent>
         </Card>
       ) : (
-        <p className="text-sm text-muted-foreground">権限を付ける人を、上の一覧から選んでください。</p>
+        <p className="text-sm text-muted-foreground">権限を変える人の「権限を編集」を押してください。</p>
       )}
     </main>
   );
