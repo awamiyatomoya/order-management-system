@@ -401,31 +401,48 @@ async function createInviteCallbackUrl(
   preferRecovery: boolean,
 ) {
   const firstType = preferRecovery ? "recovery" : "invite";
-  const first = await admin.auth.admin.generateLink({
-    type: firstType,
-    email,
-    options: {
-      redirectTo: `${origin}/set-password`,
-      data: { role: "member", permissions: createMemberAuthPermissions() },
-    },
-  });
-  const firstToken = first.data?.properties?.hashed_token;
-  if (!first.error && firstToken) {
-    return `${origin}/set-password?token_hash=${encodeURIComponent(firstToken)}&type=${firstType}`;
+  const firstUrl = await generateInviteOrRecoveryUrl(admin, email, origin, firstType);
+  if (firstUrl) {
+    return firstUrl;
   }
 
-  const secondType = preferRecovery ? "invite" : "recovery";
-  const second = await admin.auth.admin.generateLink({
-    type: secondType,
+  return generateInviteOrRecoveryUrl(
+    admin,
     email,
-    options: { redirectTo: `${origin}/set-password` },
-  });
-  const secondToken = second.data?.properties?.hashed_token;
-  if (second.error || !secondToken) {
+    origin,
+    preferRecovery ? "invite" : "recovery",
+  );
+}
+
+async function generateInviteOrRecoveryUrl(
+  admin: ReturnType<typeof createServerSupabaseClient>,
+  email: string,
+  origin: string,
+  type: "invite" | "recovery",
+) {
+  const redirectTo = `${origin}/set-password`;
+  const result =
+    type === "recovery"
+      ? await admin.auth.admin.generateLink({
+          type: "recovery",
+          email,
+          options: { redirectTo },
+        })
+      : await admin.auth.admin.generateLink({
+          type: "invite",
+          email,
+          options: {
+            redirectTo,
+            data: { role: "member", permissions: createMemberAuthPermissions() },
+          },
+        });
+
+  const tokenHash = result.data?.properties?.hashed_token;
+  if (result.error || !tokenHash) {
     return "";
   }
 
-  return `${origin}/set-password?token_hash=${encodeURIComponent(secondToken)}&type=${secondType}`;
+  return `${origin}/set-password?token_hash=${encodeURIComponent(tokenHash)}&type=${type}`;
 }
 
 async function isIncompleteInviteUser(email: string) {
