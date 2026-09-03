@@ -277,8 +277,6 @@ export async function updateAuthUserPermissions(
     return { ok: false, message: `権限の保存に失敗しました: ${error.message}` };
   }
 
-  revalidatePath("/users");
-  revalidatePath("/");
   return { ok: true };
 }
 

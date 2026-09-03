@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Field, FieldLabel } from "@/components/ui/field";
@@ -19,6 +19,7 @@ import {
   canUseFeature,
   type AuthFeatureId,
   type AuthPermissionLevel,
+  type AuthPermissions,
 } from "@/lib/auth-permissions";
 import type { AuthUserSummary } from "@/lib/auth-user";
 import {
@@ -40,7 +41,12 @@ export function UsersPanel({
   const [email, setEmail] = useState("");
   const [notice, setNotice] = useState("");
   const [isSaving, setIsSaving] = useState(false);
-  const [savingFeature, setSavingFeature] = useState<AuthFeatureId | null>(null);
+  const pendingPermissionSave = useRef<{
+    userId: string;
+    permissions: AuthPermissions;
+  } | null>(null);
+  const permissionRollback = useRef<Record<string, AuthPermissions>>({});
+  const isSavingPermissions = useRef(false);
 
   const selectedUser = users.find((user) => user.id === selectedUserId) ?? null;
   const canInvite = canUseFeature(currentUser.permissions, "users", "create");
@@ -106,7 +112,7 @@ export function UsersPanel({
     }
   }
 
-  async function handlePermissionChange(feature: AuthFeatureId, nextLevel: AuthPermissionLevel) {
+  function handlePermissionChange(feature: AuthFeatureId, nextLevel: AuthPermissionLevel) {
     if (!selectedUser || selectedUser.isAdmin || !canEditPermissions) {
       return;
     }
@@ -115,26 +121,63 @@ export function UsersPanel({
       return;
     }
 
-    const nextPermissions = {
-      ...selectedUser.permissions,
-      [feature]: nextLevel,
-    };
-
-    setSavingFeature(feature);
     setNotice("");
-    const result = await updateAuthUserPermissions(selectedUser.id, nextPermissions);
-    setSavingFeature(null);
+    setUsers((current) =>
+      current.map((user) => {
+        if (user.id !== selectedUser.id) {
+          return user;
+        }
 
-    if (!result.ok) {
-      setNotice(result.message);
+        if (!permissionRollback.current[user.id]) {
+          permissionRollback.current[user.id] = user.permissions;
+        }
+
+        const nextPermissions = {
+          ...user.permissions,
+          [feature]: nextLevel,
+        };
+        pendingPermissionSave.current = { userId: user.id, permissions: nextPermissions };
+        return { ...user, permissions: nextPermissions };
+      }),
+    );
+    void flushPermissionSave();
+  }
+
+  async function flushPermissionSave() {
+    if (isSavingPermissions.current) {
       return;
     }
 
-    setUsers((current) =>
-      current.map((user) =>
-        user.id === selectedUser.id ? { ...user, permissions: nextPermissions } : user,
-      ),
-    );
+    const pending = pendingPermissionSave.current;
+    if (!pending) {
+      return;
+    }
+
+    isSavingPermissions.current = true;
+    pendingPermissionSave.current = null;
+    const result = await updateAuthUserPermissions(pending.userId, pending.permissions);
+    isSavingPermissions.current = false;
+
+    if (!result.ok) {
+      const previous = permissionRollback.current[pending.userId];
+      setNotice(result.message);
+      if (previous) {
+        setUsers((current) =>
+          current.map((user) =>
+            user.id === pending.userId ? { ...user, permissions: previous } : user,
+          ),
+        );
+      }
+      pendingPermissionSave.current = null;
+      delete permissionRollback.current[pending.userId];
+      return;
+    }
+
+    permissionRollback.current[pending.userId] = pending.permissions;
+    if (!pendingPermissionSave.current) {
+      delete permissionRollback.current[pending.userId];
+    }
+    await flushPermissionSave();
   }
 
   return (
@@ -284,9 +327,7 @@ export function UsersPanel({
                 <TableBody>
                   {AUTH_FEATURES.map((feature) => {
                     const currentLevel = selectedUser.permissions[feature.id];
-                    const isBusy = savingFeature === feature.id;
-                    const disabled =
-                      selectedUser.isAdmin || !canEditPermissions || isBusy;
+                    const disabled = selectedUser.isAdmin || !canEditPermissions;
                     return (
                       <TableRow key={feature.id}>
                         <TableCell className="font-medium">{feature.label}</TableCell>
