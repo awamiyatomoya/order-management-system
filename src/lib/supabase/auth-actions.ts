@@ -139,7 +139,7 @@ export async function inviteAuthUser(email: string): Promise<AuthActionResult> {
     return { ok: false, message: `招待メールの送信に失敗しました: ${error.message}` };
   }
 
-  const inviteUrl = await createInviteCallbackUrl(admin, emailResult.email, origin, redirectTo);
+  const inviteUrl = await createInviteCallbackUrl(admin, emailResult.email, origin, false);
   revalidatePath("/users");
   return { ok: true, inviteUrl };
 }
@@ -376,6 +376,7 @@ async function toAuthUserSummary(user: User): Promise<AuthUserSummary> {
     email: user.email ?? "",
     displayName,
     invited: !user.email_confirmed_at,
+    needsSetup: !String(user.user_metadata?.display_name ?? "").trim(),
     isAdmin,
     permissions: resolveAuthPermissions(user.user_metadata?.permissions, { isAdmin }),
   };
@@ -401,7 +402,12 @@ async function createInviteLinkForExistingUser(
     return { ok: false, message: "このメールアドレスはすでに使われています。" };
   }
 
-  const inviteUrl = await createInviteCallbackUrl(admin, email, origin, redirectTo);
+  const inviteUrl = await createInviteCallbackUrl(
+    admin,
+    email,
+    origin,
+    Boolean(user.email_confirmed_at),
+  );
   if (!inviteUrl) {
     return { ok: false, message: "招待リンクを作り直せませんでした。もう一度試してください。" };
   }
@@ -414,23 +420,34 @@ async function createInviteCallbackUrl(
   admin: ReturnType<typeof createServerSupabaseClient>,
   email: string,
   origin: string,
-  redirectTo: string,
+  preferRecovery: boolean,
 ) {
-  const { data, error } = await admin.auth.admin.generateLink({
-    type: "invite",
+  const firstType = preferRecovery ? "recovery" : "invite";
+  const first = await admin.auth.admin.generateLink({
+    type: firstType,
     email,
     options: {
-      redirectTo,
+      redirectTo: `${origin}/set-password`,
       data: { role: "member", permissions: createMemberAuthPermissions() },
     },
   });
+  const firstToken = first.data?.properties?.hashed_token;
+  if (!first.error && firstToken) {
+    return `${origin}/set-password?token_hash=${encodeURIComponent(firstToken)}&type=${firstType}`;
+  }
 
-  const tokenHash = data?.properties?.hashed_token;
-  if (error || !tokenHash) {
+  const secondType = preferRecovery ? "invite" : "recovery";
+  const second = await admin.auth.admin.generateLink({
+    type: secondType,
+    email,
+    options: { redirectTo: `${origin}/set-password` },
+  });
+  const secondToken = second.data?.properties?.hashed_token;
+  if (second.error || !secondToken) {
     return "";
   }
 
-  return `${origin}/auth/callback?token_hash=${encodeURIComponent(tokenHash)}&type=invite`;
+  return `${origin}/set-password?token_hash=${encodeURIComponent(secondToken)}&type=${secondType}`;
 }
 
 async function isIncompleteInviteUser(email: string) {

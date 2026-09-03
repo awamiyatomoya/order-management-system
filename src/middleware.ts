@@ -68,11 +68,11 @@ export async function middleware(request: NextRequest) {
   } = await supabase.auth.getUser();
 
   const inviteParams = extractAuthInviteParams(search);
-  if (inviteParams && pathname !== "/auth/callback") {
-    const callbackUrl = request.nextUrl.clone();
-    callbackUrl.pathname = "/auth/callback";
-    callbackUrl.search = buildAuthCallbackSearch(inviteParams);
-    return NextResponse.redirect(callbackUrl);
+  if (inviteParams && pathname !== "/set-password" && pathname !== "/auth/callback") {
+    const setPasswordUrl = request.nextUrl.clone();
+    setPasswordUrl.pathname = "/set-password";
+    setPasswordUrl.search = buildAuthCallbackSearch(inviteParams);
+    return NextResponse.redirect(setPasswordUrl);
   }
 
   if (pathname === "/operator") {

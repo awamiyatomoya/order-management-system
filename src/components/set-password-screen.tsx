@@ -146,7 +146,7 @@ async function prepareSession() {
   if (tokenHash && type) {
     const { error } = await supabase.auth.verifyOtp({
       token_hash: tokenHash,
-      type: type as "invite" | "recovery" | "signup" | "email",
+      type: type as "invite" | "recovery" | "signup" | "email" | "magiclink",
     });
     return !error;
   }

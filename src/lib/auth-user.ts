@@ -8,6 +8,7 @@ export type AuthUserSummary = {
   email: string;
   displayName: string;
   invited: boolean;
+  needsSetup: boolean;
   isAdmin: boolean;
   permissions: AuthPermissions;
 };

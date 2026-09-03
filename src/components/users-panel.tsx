@@ -73,6 +73,24 @@ export function UsersPanel({
     await refreshUsers();
   }
 
+  async function handleResend(user: AuthUserSummary) {
+    setIsSaving(true);
+    setNotice("");
+    const result = await inviteAuthUser(user.email);
+    setIsSaving(false);
+
+    if (!result.ok) {
+      setNotice(result.message);
+      return;
+    }
+
+    setNotice(
+      result.inviteUrl
+        ? `新しいリンクです。これを相手に送ってください。\n${result.inviteUrl}`
+        : "招待リンクを作りました。",
+    );
+  }
+
   async function handleDelete(user: AuthUserSummary) {
     const confirmed = window.confirm(`${user.displayName}（${user.email}）を削除します。よろしいですか？`);
     if (!confirmed) {
@@ -185,23 +203,39 @@ export function UsersPanel({
                       {user.isAdmin ? "管理者" : user.invited ? "招待中" : "利用中"}
                     </TableCell>
                     <TableCell className="text-right">
-                      {user.id === currentUser.id ? (
-                        <span className="text-xs text-muted-foreground">自分</span>
-                      ) : user.isAdmin ? (
-                        <span className="text-xs text-muted-foreground">管理者</span>
-                      ) : canDeleteUsers ? (
-                        <Button
-                          type="button"
-                          variant="outline"
-                          size="sm"
-                          onClick={(event) => {
-                            event.stopPropagation();
-                            void handleDelete(user);
-                          }}
-                        >
-                          削除
-                        </Button>
-                      ) : null}
+                      <div className="flex justify-end gap-2">
+                        {canInvite && !user.isAdmin && user.needsSetup ? (
+                          <Button
+                            type="button"
+                            variant="outline"
+                            size="sm"
+                            disabled={isSaving}
+                            onClick={(event) => {
+                              event.stopPropagation();
+                              void handleResend(user);
+                            }}
+                          >
+                            リンクを再発行
+                          </Button>
+                        ) : null}
+                        {user.id === currentUser.id ? (
+                          <span className="text-xs text-muted-foreground">自分</span>
+                        ) : user.isAdmin ? (
+                          <span className="text-xs text-muted-foreground">管理者</span>
+                        ) : canDeleteUsers ? (
+                          <Button
+                            type="button"
+                            variant="outline"
+                            size="sm"
+                            onClick={(event) => {
+                              event.stopPropagation();
+                              void handleDelete(user);
+                            }}
+                          >
+                            削除
+                          </Button>
+                        ) : null}
+                      </div>
                     </TableCell>
                   </TableRow>
                 ))}
