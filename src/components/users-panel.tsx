@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Field, FieldLabel } from "@/components/ui/field";
@@ -40,15 +40,18 @@ export function UsersPanel({
   const [selectedUserId, setSelectedUserId] = useState("");
   const [email, setEmail] = useState("");
   const [notice, setNotice] = useState("");
+  const [permissionNotice, setPermissionNotice] = useState("");
   const [isSaving, setIsSaving] = useState(false);
-  const pendingPermissionSave = useRef<{
-    userId: string;
-    permissions: AuthPermissions;
-  } | null>(null);
-  const permissionRollback = useRef<Record<string, AuthPermissions>>({});
-  const isSavingPermissions = useRef(false);
+  const [isSavingPermissions, setIsSavingPermissions] = useState(false);
+  const [draftPermissions, setDraftPermissions] = useState<AuthPermissions | null>(null);
 
   const selectedUser = users.find((user) => user.id === selectedUserId) ?? null;
+  const editingPermissions = draftPermissions ?? selectedUser?.permissions ?? null;
+  const hasPermissionChanges = Boolean(
+    selectedUser &&
+      editingPermissions &&
+      AUTH_FEATURES.some((feature) => editingPermissions[feature.id] !== selectedUser.permissions[feature.id]),
+  );
   const canInvite = canUseFeature(currentUser.permissions, "users", "create");
   const canEditPermissions = canUseFeature(currentUser.permissions, "users", "edit");
   const canDeleteUsers = canUseFeature(currentUser.permissions, "users", "delete");
@@ -107,77 +110,63 @@ export function UsersPanel({
     if (result.ok) {
       if (selectedUserId === user.id) {
         setSelectedUserId("");
+        setDraftPermissions(null);
+        setPermissionNotice("");
       }
       await refreshUsers();
     }
   }
 
-  function handlePermissionChange(feature: AuthFeatureId, nextLevel: AuthPermissionLevel) {
-    if (!selectedUser || selectedUser.isAdmin || !canEditPermissions) {
-      return;
-    }
-
-    if (selectedUser.permissions[feature] === nextLevel) {
-      return;
-    }
-
-    setNotice("");
-    setUsers((current) =>
-      current.map((user) => {
-        if (user.id !== selectedUser.id) {
-          return user;
-        }
-
-        if (!permissionRollback.current[user.id]) {
-          permissionRollback.current[user.id] = user.permissions;
-        }
-
-        const nextPermissions = {
-          ...user.permissions,
-          [feature]: nextLevel,
-        };
-        pendingPermissionSave.current = { userId: user.id, permissions: nextPermissions };
-        return { ...user, permissions: nextPermissions };
-      }),
-    );
-    void flushPermissionSave();
+  function openPermissionEditor(userId: string) {
+    const user = users.find((item) => item.id === userId);
+    setSelectedUserId((current) => (current === userId ? "" : userId));
+    setDraftPermissions(selectedUserId === userId ? null : user?.permissions ?? null);
+    setPermissionNotice("");
   }
 
-  async function flushPermissionSave() {
-    if (isSavingPermissions.current) {
+  function handlePermissionChange(feature: AuthFeatureId, nextLevel: AuthPermissionLevel) {
+    if (!selectedUser || selectedUser.isAdmin || !canEditPermissions || !editingPermissions) {
       return;
     }
 
-    const pending = pendingPermissionSave.current;
-    if (!pending) {
+    if (editingPermissions[feature] === nextLevel) {
       return;
     }
 
-    isSavingPermissions.current = true;
-    pendingPermissionSave.current = null;
-    const result = await updateAuthUserPermissions(pending.userId, pending.permissions);
-    isSavingPermissions.current = false;
+    setPermissionNotice("");
+    setDraftPermissions({
+      ...editingPermissions,
+      [feature]: nextLevel,
+    });
+  }
+
+  async function handlePermissionSave() {
+    if (!selectedUser || selectedUser.isAdmin || !canEditPermissions || !editingPermissions) {
+      return;
+    }
+
+    if (!hasPermissionChanges) {
+      setPermissionNotice("変更はありません。");
+      return;
+    }
+
+    setIsSavingPermissions(true);
+    setPermissionNotice("");
+    const result = await updateAuthUserPermissions(selectedUser.id, editingPermissions);
+    setIsSavingPermissions(false);
 
     if (!result.ok) {
-      const previous = permissionRollback.current[pending.userId];
-      setNotice(result.message);
-      if (previous) {
-        setUsers((current) =>
-          current.map((user) =>
-            user.id === pending.userId ? { ...user, permissions: previous } : user,
-          ),
-        );
-      }
-      pendingPermissionSave.current = null;
-      delete permissionRollback.current[pending.userId];
+      setPermissionNotice(result.message);
       return;
     }
 
-    permissionRollback.current[pending.userId] = pending.permissions;
-    if (!pendingPermissionSave.current) {
-      delete permissionRollback.current[pending.userId];
-    }
-    await flushPermissionSave();
+    setUsers((current) =>
+      current.map((user) =>
+        user.id === selectedUser.id ? { ...user, permissions: editingPermissions } : user,
+      ),
+    );
+    setDraftPermissions(editingPermissions);
+    setPermissionNotice("保存しました。");
   }
 
   return (
@@ -190,7 +179,7 @@ export function UsersPanel({
         </p>
         <h1 className="mt-3 text-2xl font-semibold">ユーザー</h1>
         <p className="mt-1 text-sm text-muted-foreground">
-          「権限を編集」を押すと、機能ごとに権限を選べます。「なし」にすると、その画面は見えません。
+          「権限を編集」を押すと、機能ごとに権限を選べます。丸を選んだあと「保存」を押してください。「なし」にすると、その画面は見えません。
         </p>
       </div>
 
@@ -266,9 +255,7 @@ export function UsersPanel({
                             type="button"
                             variant={selectedUserId === user.id ? "default" : "outline"}
                             size="sm"
-                            onClick={() =>
-                              setSelectedUserId((current) => (current === user.id ? "" : user.id))
-                            }
+                            onClick={() => openPermissionEditor(user.id)}
                           >
                             権限を編集
                           </Button>
@@ -308,7 +295,7 @@ export function UsersPanel({
                 {selectedUser.isAdmin
                   ? "管理者はすべての操作ができます。"
                   : canEditPermissions
-                    ? "丸を選んでください。「なし」はその画面を見せません。"
+                    ? "丸を選んでから「保存」を押してください。「なし」はその画面を見せません。"
                     : "権限を見るだけできます。変更はできません。"}
               </p>
             </div>
@@ -326,7 +313,7 @@ export function UsersPanel({
                 </TableHeader>
                 <TableBody>
                   {AUTH_FEATURES.map((feature) => {
-                    const currentLevel = selectedUser.permissions[feature.id];
+                    const currentLevel = editingPermissions?.[feature.id] ?? selectedUser.permissions[feature.id];
                     const disabled = selectedUser.isAdmin || !canEditPermissions;
                     return (
                       <TableRow key={feature.id}>
@@ -357,6 +344,24 @@ export function UsersPanel({
                 </TableBody>
               </Table>
             </div>
+            {canEditPermissions && !selectedUser.isAdmin ? (
+              <div className="flex flex-wrap items-center gap-3">
+                <Button
+                  type="button"
+                  disabled={isSavingPermissions || !hasPermissionChanges}
+                  onClick={() => {
+                    void handlePermissionSave();
+                  }}
+                >
+                  {isSavingPermissions ? "保存中..." : "保存"}
+                </Button>
+                {permissionNotice ? (
+                  <p className="text-sm text-muted-foreground">{permissionNotice}</p>
+                ) : hasPermissionChanges ? (
+                  <p className="text-sm text-muted-foreground">まだ保存していません。</p>
+                ) : null}
+              </div>
+            ) : null}
           </CardContent>
         </Card>
       ) : (
