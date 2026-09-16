@@ -1112,6 +1112,74 @@ export function OrderWorkbench({
     }),
     [sellInRows],
   );
+  const sellInPaceContext = useMemo(
+    () => buildSellInPaceContext(sellInPeriodStart, sellInPeriodEnd),
+    [sellInPeriodEnd, sellInPeriodStart],
+  );
+  const sellInPreviousRows = useMemo(
+    () =>
+      sellInPaceContext
+        ? buildSellInRows({
+            orders: selectedOrders,
+            products: selectedProducts,
+            stores,
+            startDate: sellInPaceContext.previousStartDate,
+            endDate: sellInPaceContext.previousEndDate,
+            storeFilter: sellInStoreFilter,
+            search: sellInSearch,
+          })
+        : [],
+    [selectedOrders, selectedProducts, sellInPaceContext, sellInSearch, sellInStoreFilter, stores],
+  );
+  const sellInPreviousOrderCount = useMemo(
+    () =>
+      sellInPaceContext
+        ? countSellInOrders({
+            orders: selectedOrders,
+            products: selectedProducts,
+            stores,
+            startDate: sellInPaceContext.previousStartDate,
+            endDate: sellInPaceContext.previousEndDate,
+            storeFilter: sellInStoreFilter,
+            search: sellInSearch,
+          })
+        : 0,
+    [selectedOrders, selectedProducts, sellInPaceContext, sellInSearch, sellInStoreFilter, stores],
+  );
+  const sellInPaceDiffs = useMemo(() => {
+    if (!sellInPaceContext) {
+      return null;
+    }
+
+    if (sellInPreviousRows.length === 0) {
+      return { orderCount: null, qty: null, wholesaleAmount: null, retailAmount: null };
+    }
+
+    const { elapsedDays, previousMonthDays } = sellInPaceContext;
+    const toPaceDiff = (current: number | null, previousTotal: number | null) => {
+      if (current === null || previousTotal === null) {
+        return null;
+      }
+
+      return Math.round(current - (previousTotal / previousMonthDays) * elapsedDays);
+    };
+
+    return {
+      orderCount: toPaceDiff(sellInOrderCount, sellInPreviousOrderCount),
+      qty: toPaceDiff(
+        sellInTotals.qty,
+        sellInPreviousRows.reduce((total, row) => total + row.qty, 0),
+      ),
+      wholesaleAmount: toPaceDiff(
+        sellInTotals.wholesaleAmount,
+        sumNullableAmounts(sellInPreviousRows.map((row) => row.wholesaleAmount)),
+      ),
+      retailAmount: toPaceDiff(
+        sellInTotals.retailAmount,
+        sumNullableAmounts(sellInPreviousRows.map((row) => row.retailAmount)),
+      ),
+    };
+  }, [sellInOrderCount, sellInPaceContext, sellInPreviousOrderCount, sellInPreviousRows, sellInTotals]);
   const sellInDailyChartRows = useMemo(
     () => buildSellInDailyChartRows(sellInRows),
     [sellInRows],
@@ -4043,15 +4111,45 @@ export function OrderWorkbench({
         {view === "sellIn" ? (
           <section className="grid gap-4">
             <div className="grid gap-4 md:grid-cols-5">
-              <SummaryCard label="発注件数" value={`${sellInOrderCount.toLocaleString()}件`} />
-              <SummaryCard label="数量合計" value={`${sellInTotals.qty.toLocaleString()}点`} />
+              <SummaryCard
+                label="発注件数"
+                value={`${sellInOrderCount.toLocaleString()}件`}
+                diff={
+                  sellInPaceDiffs && {
+                    value: sellInPaceDiffs.orderCount,
+                    format: (value) => `${formatSignedNumber(value)}件`,
+                  }
+                }
+              />
+              <SummaryCard
+                label="数量合計"
+                value={`${sellInTotals.qty.toLocaleString()}点`}
+                diff={
+                  sellInPaceDiffs && {
+                    value: sellInPaceDiffs.qty,
+                    format: (value) => `${formatSignedNumber(value)}点`,
+                  }
+                }
+              />
               <SummaryCard
                 label="下代"
                 value={formatNullableCurrency(sellInTotals.wholesaleAmount)}
+                diff={
+                  sellInPaceDiffs && {
+                    value: sellInPaceDiffs.wholesaleAmount,
+                    format: (value) => `${formatSignedNumber(value)}円`,
+                  }
+                }
               />
               <SummaryCard
                 label="上代"
                 value={formatNullableCurrency(sellInTotals.retailAmount)}
+                diff={
+                  sellInPaceDiffs && {
+                    value: sellInPaceDiffs.retailAmount,
+                    format: (value) => `${formatSignedNumber(value)}円`,
+                  }
+                }
               />
               <SummaryCard label="要対応" value={`${sellInTotals.issueCount}件`} />
             </div>
@@ -4981,16 +5079,28 @@ function SummaryCard({
   label,
   value,
   description,
+  diff,
 }: {
   label: string;
   value: string;
   description?: string;
+  /** null を渡すと月ぴったりの期間でないため前月ペース比を出さない。value が null なら前月実績なし。 */
+  diff?: { value: number | null; format: (value: number) => string } | null;
 }) {
   return (
     <Card>
       <CardHeader>
         <CardDescription>{label}</CardDescription>
         <CardTitle className="text-2xl">{value}</CardTitle>
+        {diff ? (
+          diff.value === null ? (
+            <CardDescription className="text-xs">前月ペース比 —</CardDescription>
+          ) : (
+            <p className={`text-xs font-medium ${getPaceDiffToneClass(diff.value)}`}>
+              前月ペース比 {diff.format(diff.value)}
+            </p>
+          )
+        ) : null}
         {description ? (
           <CardDescription className="text-xs">{description}</CardDescription>
         ) : null}
@@ -7509,6 +7619,40 @@ function getCurrentMonthEndValue() {
   return formatDateOnly(new Date(now.getFullYear(), now.getMonth() + 1, 0));
 }
 
+// 前月ペース比は「開始が某月1日・終了がその月末」の期間だけ対象。未来月は比較しない。
+// 期待値 = 前月の全日合計 ÷ 前月の暦日数 × 経過日数(今月なら1日〜今日、過去月ならその月の全日)。
+function buildSellInPaceContext(startDate: string, endDate: string) {
+  const start = parseDateOnly(startDate);
+  const end = parseDateOnly(endDate);
+
+  if (!start || !end || start.getDate() !== 1) {
+    return null;
+  }
+
+  const monthEnd = new Date(start.getFullYear(), start.getMonth() + 1, 0);
+
+  if (end.getTime() !== monthEnd.getTime()) {
+    return null;
+  }
+
+  const now = new Date();
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+
+  if (start > today) {
+    return null;
+  }
+
+  const elapsedDays = monthEnd <= today ? monthEnd.getDate() : today.getDate();
+  const previousMonthEnd = new Date(start.getFullYear(), start.getMonth(), 0);
+
+  return {
+    elapsedDays,
+    previousMonthDays: previousMonthEnd.getDate(),
+    previousStartDate: formatDateOnly(new Date(start.getFullYear(), start.getMonth() - 1, 1)),
+    previousEndDate: formatDateOnly(previousMonthEnd),
+  };
+}
+
 function addNullableAmounts(current: number | null, next: number | null) {
   if (current === null || next === null) {
     return null;
@@ -8436,6 +8580,18 @@ function parseRatePercent(value: string) {
 
 function formatNullableCurrency(value: number | null) {
   return value === null ? "未設定" : `${value.toLocaleString()}円`;
+}
+
+function formatSignedNumber(value: number) {
+  return value > 0 ? `+${value.toLocaleString()}` : value.toLocaleString();
+}
+
+function getPaceDiffToneClass(value: number) {
+  if (value > 0) {
+    return "text-emerald-600";
+  }
+
+  return value < 0 ? "text-red-600" : "text-muted-foreground";
 }
 
 function formatNullableRate(value: number | null) {
