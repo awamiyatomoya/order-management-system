@@ -68,6 +68,7 @@ import {
 } from "@/lib/store-matching";
 import { supplierMappings } from "@/lib/supplier-mappings";
 import { StoreIntroductionPanel } from "@/components/store-introduction-panel";
+import { PosSellingStoresSection } from "@/components/pos-selling-stores-section";
 import { SelloutFilesPanel } from "@/components/sellout-files-panel";
 import { SelloutPanel } from "@/components/sellout-panel";
 import { SidebarAuth } from "@/components/sidebar-auth";
@@ -4513,21 +4514,24 @@ export function OrderWorkbench({
         ) : null}
 
         {view === "storeIntroductions" ? (
-          <StoreIntroductionPanel
-            clientId={selectedClientId}
-            initialDataClientId={initialStoreIntroductionClientId}
-            clients={clients}
-            onClientChange={handleClientChange}
-            products={products}
-            stores={stores}
-            storeLocations={storeLocations}
-            initialImports={initialData.storeIntroductionImports}
-            initialEntries={initialData.storeIntroductionEntries}
-            onStoreLocationsRefresh={async () => {
-              const locations = await readStoreLocationRecords();
-              setStoreLocations(locations);
-            }}
-          />
+          <section className="grid gap-4">
+            <StoreIntroductionPanel
+              clientId={selectedClientId}
+              initialDataClientId={initialStoreIntroductionClientId}
+              clients={clients}
+              onClientChange={handleClientChange}
+              products={products}
+              stores={stores}
+              storeLocations={storeLocations}
+              initialImports={initialData.storeIntroductionImports}
+              initialEntries={initialData.storeIntroductionEntries}
+              onStoreLocationsRefresh={async () => {
+                const locations = await readStoreLocationRecords();
+                setStoreLocations(locations);
+              }}
+            />
+            <PosSellingStoresSection clientId={selectedClientId} />
+          </section>
         ) : null}
 
         {view === "sellOut" ? (
