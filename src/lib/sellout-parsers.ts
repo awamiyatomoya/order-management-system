@@ -286,7 +286,7 @@ function parseAutoRowListWorkbook(
   workbook: XLSX.WorkBook,
   profile: SelloutImportProfile,
 ): ParsedSelloutWorkbook {
-  const layout = findGenericRowListLayout(workbook);
+  const layout = findGenericRowListLayout(workbook, profile.rowList?.sheetNamePattern);
   if (!layout) {
     throw new Error("セルアウトの一覧形式を読み取れませんでした。");
   }

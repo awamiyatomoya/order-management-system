@@ -136,6 +136,37 @@ export const selloutImportProfiles: SelloutImportProfile[] = [
     },
   },
   {
+    profileKey: "incube-daily-sellout",
+    retailer: "インキューブ",
+    layoutType: "row-list",
+    detect: (workbook) => {
+      const sheetName = workbook.SheetNames.find((name) => /売上データ照会/.test(name));
+      if (!sheetName) {
+        return false;
+      }
+
+      const sheet = workbook.Sheets[sheetName];
+      if (!sheet) {
+        return false;
+      }
+
+      const headerRow = sheetToRows(sheet)[0] ?? [];
+      const normalized = headerRow.map(normalizeHeaderCell);
+      return (
+        normalized.includes("日別日付") &&
+        normalized.includes("店舗名") &&
+        normalized.includes("janコード") &&
+        normalized.includes("売上数量")
+      );
+    },
+    rowListAutoDetect: true,
+    rowList: {
+      sheetNamePattern: /売上データ照会/,
+      headerRow: 1,
+      columns: {},
+    },
+  },
+  {
     profileKey: "heuristic-store-product",
     retailer: "",
     layoutType: "matrix-store-product",

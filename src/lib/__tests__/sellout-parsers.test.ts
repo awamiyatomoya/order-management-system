@@ -3,7 +3,7 @@ import { test } from "node:test";
 import * as XLSX from "xlsx";
 import { parseSelloutWorkbook } from "@/lib/sellout-parsers";
 
-function buildWorkbook(sheets: Record<string, (string | number)[][]>) {
+function buildWorkbook(sheets: Record<string, (string | number | Date)[][]>) {
   const workbook = XLSX.utils.book_new();
 
   Object.entries(sheets).forEach(([sheetName, rows]) => {
@@ -95,6 +95,34 @@ test("アットコスメの月次一覧を取り込む", () => {
   assert.equal(parsed.entries[1].storeName, "@COSME TOKYO");
   assert.equal(parsed.entries[1].qty, 6);
   assert.equal(parsed.entries[1].amount, 14880);
+});
+
+test("インキューブの日別POS（売上データ照会）を取り込む", () => {
+  const parsed = parseSelloutWorkbook(
+    buildWorkbook({
+      // 1枚目はピボット集計シート。2枚目の明細シートを読むこと。
+      Sheet1: [
+        ["行ラベル", "合計 / 売上数量", "合計 / 売上金額"],
+        ["天神店", 3, 7440],
+      ],
+      売上データ照会_20260910113639: [
+        ["日別日付", "店舗名", "JANコード", "商品名", "売上金額", "売上数量"],
+        [new Date(2026, 7, 1), "天神店　　", 4573587783667, "エシエンスＣＡＺダーマＳ", 2480, 1],
+        [new Date(2026, 7, 15), "久留米店", 4573587783667, "エシエンスＣＡＺダーマＳ", 4960, 2],
+      ],
+    }),
+  );
+
+  assert.equal(parsed.profileKey, "incube-daily-sellout");
+  assert.equal(parsed.retailer, "インキューブ");
+  assert.equal(parsed.periodStart, "2026-08-01");
+  assert.equal(parsed.periodEnd, "2026-08-15");
+  assert.equal(parsed.entries.length, 2);
+  assert.equal(parsed.entries[0].storeName, "天神店");
+  assert.equal(parsed.entries[0].jan, "4573587783667");
+  assert.equal(parsed.entries[0].qty, 1);
+  assert.equal(parsed.entries[0].amount, 2480);
+  assert.equal(parsed.entries[1].periodStart, "2026-08-15");
 });
 
 test("判別できないファイルは取込エラーにする", () => {
