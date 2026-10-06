@@ -101,6 +101,11 @@ function parseRowListWorkbook(
       continue;
     }
 
+    // 店舗CD列がヘッダーなしの形式だとコードで判定できないので、店名の集計行ラベルでも飛ばす
+    if (isSkipStoreLabel(storeCode) || isSkipStoreLabel(storeName)) {
+      continue;
+    }
+
     const dateValue = readCell(row, columnIndex.date);
     const period = parseYmdDate(dateValue);
     if (!period) {

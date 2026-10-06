@@ -32,6 +32,28 @@ test("ロフトの月次一覧を取り込む", () => {
   assert.equal(parsed.entries[0].qty, 10);
 });
 
+test("店舗CDヘッダーが空欄のロフト新形式も取り込む", () => {
+  const parsed = parseSelloutWorkbook(
+    buildWorkbook({
+      Sheet1: [
+        ["", "", "店舗", "JAN", "商品", "カテゴリ", "クラス", "売上", "金額", "在庫", "終了フラグ", "設定日", "担当", "所属"],
+        [20260930, "201", "池袋ロフト", 4573587783667, "エシエンスＣＡＺダーマインショット１００", 12, 1266, 8, 19840, 5, 1, 20260907, "担当A", "本社"],
+        [20260930, "9999", "全店", 4573587783667, "エシエンスＣＡＺダーマインショット１００", 12, 1266, 83, 205840, 49, 1, 20260913, "", ""],
+      ],
+    }),
+  );
+
+  assert.equal(parsed.profileKey, "loft-monthly-sellout");
+  assert.equal(parsed.retailer, "ロフト");
+  assert.equal(parsed.periodStart, "2026-09-30");
+  // 全店（集計行）は店舗CDヘッダーが無くても店名ラベルで飛ばす
+  assert.equal(parsed.entries.length, 1);
+  assert.equal(parsed.entries[0].storeName, "池袋ロフト");
+  assert.equal(parsed.entries[0].qty, 8);
+  assert.equal(parsed.entries[0].amount, 19840);
+  assert.equal(parsed.entries[0].stock, 5);
+});
+
 test("ドン・キホーテの店舗軸クロス表を取り込む", () => {
   const parsed = parseSelloutWorkbook(
     buildWorkbook({

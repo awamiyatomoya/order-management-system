@@ -43,7 +43,7 @@ const AMOUNT_HEADERS = ["売上金額", "販売金額", "売上額", "金額"];
 const JAN_HEADERS = new Set(["jan", "janコード", "jancd", "商品コード"]);
 const PRODUCT_HEADERS = new Set(["商品名", "商品", "品名"]);
 const DATE_HEADERS = new Set(["日付", "売上日付", "売上日", "年月日", "対象日", "伝票日", "日別日付"]);
-const SKIP_LABELS = new Set(["合計", "総計", "総合計", "全社計", "計", "小計", "通販"]);
+const SKIP_LABELS = new Set(["合計", "総計", "総合計", "全社計", "全店", "全店計", "計", "小計", "通販"]);
 
 const RETAILER_RULES: Array<{ name: string; patterns: RegExp[]; weight: number }> = [
   {

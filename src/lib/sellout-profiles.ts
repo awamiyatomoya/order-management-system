@@ -62,11 +62,12 @@ export const selloutImportProfiles: SelloutImportProfile[] = [
 
       const headerRow = sheetToRows(sheet)[0] ?? [];
       const normalized = headerRow.map(normalizeHeaderCell);
+      // 旧形式は「店舗CD」ヘッダーがあるが、新形式では空欄のため必須にしない
       return (
-        normalized.includes("店舗cd") &&
         normalized.includes("店舗") &&
         normalized.includes("jan") &&
-        normalized.includes("売上")
+        normalized.includes("売上") &&
+        normalized.includes("金額")
       );
     },
     rowList: {
