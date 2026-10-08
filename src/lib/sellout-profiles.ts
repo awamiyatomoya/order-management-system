@@ -171,6 +171,33 @@ export const selloutImportProfiles: SelloutImportProfile[] = [
     },
   },
   {
+    // アットコスメ（istyle）のPOS一覧。店名に「@cosme」が含まれない店舗だけでも、
+    // ヘッダー構成（店舗名称・登録単価・売上数など）がこの形式特有なので形式で判別する。
+    profileKey: "atcosme-monthly-sellout",
+    retailer: "@cosme STORE",
+    layoutType: "row-list",
+    detect: (workbook) => {
+      const required = ["店舗名称", "jan", "品名", "登録単価", "売上数", "売上金額"];
+      return workbook.SheetNames.some((sheetName) => {
+        const sheet = workbook.Sheets[sheetName];
+        if (!sheet) {
+          return false;
+        }
+
+        const rows = sheetToRows(sheet);
+        return rows.slice(0, 5).some((row) => {
+          const normalized = (row ?? []).map(normalizeHeaderCell);
+          return required.every((header) => normalized.includes(header));
+        });
+      });
+    },
+    rowListAutoDetect: true,
+    rowList: {
+      headerRow: 1,
+      columns: {},
+    },
+  },
+  {
     // インキューブのPOSをExcelピボットに集計した形式（明細シートなし・JAN列なし）。
     // JANは取込時に過去取込・商品マスタの商品名から補完する。
     profileKey: "incube-pivot-sellout",

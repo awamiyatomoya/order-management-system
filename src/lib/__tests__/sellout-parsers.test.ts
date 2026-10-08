@@ -114,6 +114,7 @@ test("アットコスメの月次一覧を取り込む", () => {
     }),
   );
 
+  assert.equal(parsed.profileKey, "atcosme-monthly-sellout");
   assert.equal(parsed.retailer, "@cosme STORE");
   assert.equal(parsed.periodStart, "2026-08-01");
   assert.equal(parsed.periodEnd, "2026-08-31");
@@ -149,6 +150,27 @@ test("インキューブの日別POS（売上データ照会）を取り込む",
   assert.equal(parsed.entries[0].qty, 1);
   assert.equal(parsed.entries[0].amount, 2480);
   assert.equal(parsed.entries[1].periodStart, "2026-08-15");
+});
+
+test("店名に@cosmeを含まないアットコスメPOSも形式で判別する", () => {
+  const parsed = parseSelloutWorkbook(
+    buildWorkbook({
+      Sheet1: [
+        ["売上日付", "店舗CD", "店舗名称", "小分類ＣＤ", "小分類名", "メーカーＣＤ", "メーカー名", "ＪＡＮ", "メーカー品番", "品名", "登録単価", "売上数", "売上金額"],
+        ["2026-09", 600, "天満橋京阪シティモール店", 20201, "美容液", 41494, "ESIENCE", "4573587783667", "4573587783667", "C×AZ ﾀﾞｰﾏｲﾝｼｮｯﾄ  14包", 2480, 6, 14880],
+      ],
+    }),
+  );
+
+  assert.equal(parsed.profileKey, "atcosme-monthly-sellout");
+  assert.equal(parsed.retailer, "@cosme STORE");
+  assert.equal(parsed.periodStart, "2026-09-01");
+  assert.equal(parsed.periodEnd, "2026-09-30");
+  assert.equal(parsed.entries.length, 1);
+  assert.equal(parsed.entries[0].storeName, "天満橋京阪シティモール店");
+  assert.equal(parsed.entries[0].jan, "4573587783667");
+  assert.equal(parsed.entries[0].qty, 6);
+  assert.equal(parsed.entries[0].amount, 14880);
 });
 
 test("インキューブのピボット形式（店舗×商品の入れ子）を取り込む", () => {
