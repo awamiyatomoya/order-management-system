@@ -1,7 +1,11 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import { parseSelloutWorkbook, summarizeSelloutEntries } from "@/lib/sellout-parsers";
+import {
+  normalizeSelloutProductNameKey,
+  parseSelloutWorkbook,
+  summarizeSelloutEntries,
+} from "@/lib/sellout-parsers";
 import {
   buildStoreLocationLookup,
   resolveStoreLocationMatch,
@@ -63,6 +67,36 @@ export async function importSelloutWorkbook(formData: FormData): Promise<ImportS
       ok: false,
       message: error instanceof Error ? error.message : "セルアウトファイルを読み取れませんでした。",
     };
+  }
+
+  // JAN列のないピボット形式は、過去取込と商品マスタの商品名からJANを補完する
+  if (parsed.entries.some((entry) => !entry.jan) && hasSupabaseServerEnv()) {
+    const janByName = await readSelloutJanByProductName(clientId, parsed.retailer);
+    parsed = {
+      ...parsed,
+      entries: parsed.entries.map((entry) =>
+        entry.jan
+          ? entry
+          : {
+              ...entry,
+              jan: janByName.get(normalizeSelloutProductNameKey(entry.productName)) ?? "",
+            },
+      ),
+    };
+
+    const unresolvedNames = [
+      ...new Set(
+        parsed.entries
+          .filter((entry) => !entry.jan)
+          .map((entry) => entry.productName.trim() || "（商品名なし）"),
+      ),
+    ];
+    if (unresolvedNames.length > 0) {
+      return {
+        ok: false,
+        message: `JANを特定できない商品があるため取り込みません: ${unresolvedNames.slice(0, 5).join("、")}。このファイルにはJAN列がないため、同じ商品名でJAN付きの明細（売上データ照会シート）を先に取り込むか、商品マスタの商品名をPOSの表記に合わせてください。`,
+      };
+    }
   }
 
   if (hasSupabaseServerEnv()) {
@@ -251,6 +285,56 @@ export async function importSelloutWorkbook(formData: FormData): Promise<ImportS
     entries,
     message: `${importBatch.retailer}（${periodLabel}）として ${summary.entryCount}件 / ${summary.storeCount}店舗を取り込みました。`,
   };
+}
+
+/**
+ * 商品名→JANの対応表。商品マスタと、この小売の過去取込（JAN付き明細）から作る。
+ * 同じ名前が複数のJANを指す場合は誤割当を避けるため対応から外す。
+ */
+async function readSelloutJanByProductName(clientId: string, retailer: string) {
+  const map = new Map<string, string>();
+  const ambiguousKeys = new Set<string>();
+
+  const assign = (name: string | null, jan: string | null) => {
+    const key = normalizeSelloutProductNameKey(String(name ?? ""));
+    const janValue = String(jan ?? "").trim();
+    if (!key || !janValue) {
+      return;
+    }
+
+    const current = map.get(key);
+    if (current && current !== janValue) {
+      ambiguousKeys.add(key);
+      return;
+    }
+
+    map.set(key, janValue);
+  };
+
+  const supabase = createServerSupabaseClient();
+  const [productsResult, entriesResult] = await Promise.all([
+    supabase.from("products").select("name, jan").eq("client_id", clientId),
+    supabase
+      .from("sellout_entries")
+      .select("product_name, jan")
+      .eq("client_id", clientId)
+      .eq("retailer", retailer)
+      .neq("jan", "")
+      .limit(10000),
+  ]);
+
+  for (const row of productsResult.data ?? []) {
+    assign(row.name, row.jan);
+  }
+  for (const row of entriesResult.data ?? []) {
+    assign(row.product_name, row.jan);
+  }
+
+  for (const key of ambiguousKeys) {
+    map.delete(key);
+  }
+
+  return map;
 }
 
 async function readSelloutProductCatalog() {

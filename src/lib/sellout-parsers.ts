@@ -1,9 +1,11 @@
 import * as XLSX from "xlsx";
 import {
   findGenericRowListLayout,
+  findRowLabelPivotSheet,
   findStoreProductMatrixLayout,
   inferSelloutRetailer,
   isSkipStoreLabel,
+  normalizeHeaderCell as normalizeLayoutHeaderCell,
   parseYearMonthPeriod,
   sheetToRows,
 } from "@/lib/sellout-layout";
@@ -54,6 +56,10 @@ export function parseSelloutWorkbook(
     throw new Error(
       "セルアウトファイルの形式を判別できませんでした。店舗コード／店名と売上数量・売上金額がある一覧か、対応済みチェーン（ロフト・ハンズ・ドン・キホーテ）のファイルか確認してください。",
     );
+  }
+
+  if (resolvedProfile.rowLabelPivot) {
+    return parseRowLabelPivotWorkbook(workbook, resolvedProfile);
   }
 
   if (resolvedProfile.rowListAutoDetect) {
@@ -285,6 +291,185 @@ function parseStoreProductMatrixWorkbook(
     periodEnd: layout.period.end,
     entries: entries.map((entry) => ({ ...entry, retailer })),
   };
+}
+
+type PivotRow = { label: string; qty: number; amount: number };
+
+/** シート名（「9月」「2026年9月」など）から対象月の期間を求める。年がなければ今日以前の直近の該当月とみなす。 */
+export function resolvePivotMonthPeriod(sheetName: string, now = new Date()) {
+  const match = sheetName.normalize("NFKC").match(/(?:(\d{4})年)?(\d{1,2})月/);
+  if (!match) {
+    return null;
+  }
+
+  const month = Number(match[2]);
+  if (month < 1 || month > 12) {
+    return null;
+  }
+
+  let year = match[1] ? Number(match[1]) : now.getFullYear();
+  if (!match[1] && month > now.getMonth() + 1) {
+    year -= 1;
+  }
+
+  return parseYearMonthPeriod(`${year}-${String(month).padStart(2, "0")}`);
+}
+
+function parseRowLabelPivotWorkbook(
+  workbook: XLSX.WorkBook,
+  profile: SelloutImportProfile,
+): ParsedSelloutWorkbook {
+  const layout = findRowLabelPivotSheet(workbook);
+  if (!layout) {
+    throw new Error("ピボット形式のセルアウト表を読み取れませんでした。");
+  }
+
+  const period = resolvePivotMonthPeriod(layout.sheetName);
+  if (!period) {
+    throw new Error(
+      "対象月を読み取れませんでした。シート名を「9月」「2026年9月」のように月が分かる名前にしてください。",
+    );
+  }
+
+  const sheet = workbook.Sheets[layout.sheetName];
+  if (!sheet) {
+    throw new Error("対象シートが見つかりませんでした。");
+  }
+
+  const rows = sheetToRows(sheet);
+  const dataRows: PivotRow[] = [];
+  let grandTotal: PivotRow | null = null;
+
+  for (let rowIndex = layout.headerRowIndex + 1; rowIndex < rows.length; rowIndex += 1) {
+    const row = rows[rowIndex] ?? [];
+    const label = readCell(row, layout.labelCol);
+    const qty = parseOptionalIntegerValue(row[layout.qtyCol]);
+    const amount = parseOptionalIntegerValue(row[layout.amountCol]);
+
+    if (!label || label === "(空白)" || (qty === null && amount === null)) {
+      continue;
+    }
+
+    const resolved = { label, qty: qty ?? 0, amount: amount ?? 0 };
+    if (normalizeLayoutHeaderCell(label) === "総計") {
+      grandTotal = resolved;
+      continue;
+    }
+
+    if (isSkipStoreLabel(label) || (resolved.qty === 0 && resolved.amount === 0)) {
+      continue;
+    }
+
+    dataRows.push(resolved);
+  }
+
+  if (dataRows.length === 0) {
+    throw new Error("セルアウトデータが1件も見つかりませんでした。");
+  }
+
+  const storeEntries =
+    tryParseNestedPivotRows(dataRows, grandTotal) ?? parseFlatPivotRows(dataRows, grandTotal);
+
+  const entries: ParsedSelloutEntry[] = storeEntries.map((item) => ({
+    periodStart: period.start,
+    periodEnd: period.end,
+    retailer: profile.retailer,
+    storeCode: "",
+    storeName: item.storeName,
+    jan: "",
+    productName: item.productName,
+    qty: item.qty,
+    amount: item.amount,
+    stock: null,
+  }));
+
+  return {
+    profileKey: profile.profileKey,
+    retailer: profile.retailer,
+    layoutType: profile.layoutType,
+    periodStart: period.start,
+    periodEnd: period.end,
+    entries,
+  };
+}
+
+type PivotStoreEntry = { storeName: string; productName: string; qty: number; amount: number };
+
+/**
+ * ピボットの「店舗行 → その店舗の商品行（数量・金額の合計が店舗行と一致）」の入れ子を復元する。
+ * 構造が合わなければ null（フラットな店舗一覧として扱う）。
+ */
+function tryParseNestedPivotRows(
+  rows: PivotRow[],
+  grandTotal: PivotRow | null,
+): PivotStoreEntry[] | null {
+  const result: PivotStoreEntry[] = [];
+  let storeQtyTotal = 0;
+  let storeAmountTotal = 0;
+  let index = 0;
+
+  while (index < rows.length) {
+    const store = rows[index];
+    index += 1;
+
+    let qtySum = 0;
+    let amountSum = 0;
+    const products: PivotRow[] = [];
+
+    while (index < rows.length && (qtySum < store.qty || amountSum < store.amount)) {
+      const product = rows[index];
+      qtySum += product.qty;
+      amountSum += product.amount;
+      products.push(product);
+      index += 1;
+    }
+
+    if (products.length === 0 || qtySum !== store.qty || amountSum !== store.amount) {
+      return null;
+    }
+
+    storeQtyTotal += store.qty;
+    storeAmountTotal += store.amount;
+    products.forEach((product) => {
+      result.push({
+        storeName: store.label.trim(),
+        productName: product.label.trim(),
+        qty: product.qty,
+        amount: product.amount,
+      });
+    });
+  }
+
+  if (grandTotal && (storeQtyTotal !== grandTotal.qty || storeAmountTotal !== grandTotal.amount)) {
+    return null;
+  }
+
+  return result;
+}
+
+/** 店舗だけが並ぶフラットなピボット。総計行があれば合計の整合を確認する。 */
+function parseFlatPivotRows(rows: PivotRow[], grandTotal: PivotRow | null): PivotStoreEntry[] {
+  if (grandTotal) {
+    const qtyTotal = rows.reduce((sum, row) => sum + row.qty, 0);
+    const amountTotal = rows.reduce((sum, row) => sum + row.amount, 0);
+    if (qtyTotal !== grandTotal.qty || amountTotal !== grandTotal.amount) {
+      throw new Error(
+        "ピボット表の構造を読み取れませんでした。店舗別（または店舗別×商品別）の集計になっているか確認してください。",
+      );
+    }
+  }
+
+  return rows.map((row) => ({
+    storeName: row.label.trim(),
+    productName: "",
+    qty: row.qty,
+    amount: row.amount,
+  }));
+}
+
+/** 商品名からJANを引くためのキー（全半角・空白・大文字小文字の揺れを吸収） */
+export function normalizeSelloutProductNameKey(value: string) {
+  return value.normalize("NFKC").replace(/\s+/g, "").toLowerCase();
 }
 
 function parseAutoRowListWorkbook(

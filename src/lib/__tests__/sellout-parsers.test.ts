@@ -1,7 +1,11 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import * as XLSX from "xlsx";
-import { parseSelloutWorkbook } from "@/lib/sellout-parsers";
+import {
+  normalizeSelloutProductNameKey,
+  parseSelloutWorkbook,
+  resolvePivotMonthPeriod,
+} from "@/lib/sellout-parsers";
 
 function buildWorkbook(sheets: Record<string, (string | number | Date)[][]>) {
   const workbook = XLSX.utils.book_new();
@@ -145,6 +149,83 @@ test("インキューブの日別POS（売上データ照会）を取り込む",
   assert.equal(parsed.entries[0].qty, 1);
   assert.equal(parsed.entries[0].amount, 2480);
   assert.equal(parsed.entries[1].periodStart, "2026-08-15");
+});
+
+test("インキューブのピボット形式（店舗×商品の入れ子）を取り込む", () => {
+  const parsed = parseSelloutWorkbook(
+    buildWorkbook({
+      "2026年9月": [
+        ["行ラベル", "合計 / 売上数量", "合計 / 売上金額"],
+        ["天神店　　", 3, 7440],
+        ["エシエンスＣＡＺダーマＳ    ", 3, 7440],
+        // 2商品ある店舗: 店舗行は商品行の合計
+        ["久留米店", 5, 12280],
+        ["エシエンスＣＡＺダーマＳ    ", 4, 9920],
+        ["エシエンスミスト", 1, 2360],
+        ["(空白)", "", ""],
+        ["総計", 8, 19720],
+      ],
+    }),
+  );
+
+  assert.equal(parsed.profileKey, "incube-pivot-sellout");
+  assert.equal(parsed.retailer, "インキューブ");
+  assert.equal(parsed.periodStart, "2026-09-01");
+  assert.equal(parsed.periodEnd, "2026-09-30");
+  // 店舗行・総計・(空白)は明細にしない。商品行だけが明細になる
+  assert.equal(parsed.entries.length, 3);
+  assert.deepEqual(
+    parsed.entries.map((entry) => [entry.storeName, entry.productName, entry.qty, entry.amount]),
+    [
+      ["天神店", "エシエンスＣＡＺダーマＳ", 3, 7440],
+      ["久留米店", "エシエンスＣＡＺダーマＳ", 4, 9920],
+      ["久留米店", "エシエンスミスト", 1, 2360],
+    ],
+  );
+  // JANはファイルに無いので空のまま（取込時に商品名から補完する）
+  assert.equal(parsed.entries[0].jan, "");
+});
+
+test("店舗だけのフラットなピボットは店舗単位で取り込む", () => {
+  const parsed = parseSelloutWorkbook(
+    buildWorkbook({
+      "9月": [
+        ["行ラベル", "合計 / 売上数量", "合計 / 売上金額"],
+        ["天神店", 3, 7440],
+        ["久留米店", 5, 12400],
+        ["草津店", 2, 4960],
+        ["総計", 10, 24800],
+      ],
+    }),
+  );
+
+  assert.equal(parsed.profileKey, "incube-pivot-sellout");
+  assert.equal(parsed.entries.length, 3);
+  assert.equal(parsed.entries[0].productName, "");
+  assert.equal(parsed.entries[0].qty, 3);
+});
+
+test("ピボットのシート名から対象月を解決する（年なしは直近の該当月）", () => {
+  const now = new Date(2026, 9, 8); // 2026年10月
+  assert.deepEqual(resolvePivotMonthPeriod("9月", now), {
+    start: "2026-09-01",
+    end: "2026-09-30",
+  });
+  // 年なしで未来の月なら前年とみなす
+  assert.deepEqual(resolvePivotMonthPeriod("12月", now), {
+    start: "2025-12-01",
+    end: "2025-12-31",
+  });
+  assert.deepEqual(resolvePivotMonthPeriod("2026年9月", now), {
+    start: "2026-09-01",
+    end: "2026-09-30",
+  });
+  assert.equal(resolvePivotMonthPeriod("実績", now), null);
+
+  assert.equal(
+    normalizeSelloutProductNameKey("エシエンスＣＡＺダーマＳ    "),
+    normalizeSelloutProductNameKey("エシエンスCAZダーマS"),
+  );
 });
 
 test("判別できないファイルは取込エラーにする", () => {

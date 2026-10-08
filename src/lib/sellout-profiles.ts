@@ -2,6 +2,7 @@ import type * as XLSX from "xlsx";
 import * as XLSXUtils from "xlsx";
 import {
   findGenericRowListLayout,
+  findRowLabelPivotSheet,
   findStoreProductMatrixLayout,
 } from "@/lib/sellout-layout";
 import type { SelloutLayoutType } from "./types";
@@ -47,6 +48,8 @@ export type SelloutImportProfile = {
     sheetNamePattern?: RegExp;
   };
   rowListAutoDetect?: boolean;
+  /** Excelピボット（行ラベル＋合計列）形式。店舗→商品の入れ子を構造から復元する */
+  rowLabelPivot?: boolean;
 };
 
 export const selloutImportProfiles: SelloutImportProfile[] = [
@@ -166,6 +169,15 @@ export const selloutImportProfiles: SelloutImportProfile[] = [
       headerRow: 1,
       columns: {},
     },
+  },
+  {
+    // インキューブのPOSをExcelピボットに集計した形式（明細シートなし・JAN列なし）。
+    // JANは取込時に過去取込・商品マスタの商品名から補完する。
+    profileKey: "incube-pivot-sellout",
+    retailer: "インキューブ",
+    layoutType: "row-list",
+    detect: (workbook) => Boolean(findRowLabelPivotSheet(workbook)),
+    rowLabelPivot: true,
   },
   {
     profileKey: "heuristic-store-product",

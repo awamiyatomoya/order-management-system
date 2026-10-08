@@ -19,6 +19,14 @@ export type StoreProductMatrixLayout = {
   metadataText: string;
 };
 
+export type RowLabelPivotLayout = {
+  sheetName: string;
+  headerRowIndex: number;
+  labelCol: number;
+  qtyCol: number;
+  amountCol: number;
+};
+
 export type GenericRowListLayout = {
   sheetName: string;
   headerRowIndex: number;
@@ -195,6 +203,35 @@ export function findStoreProductMatrixLayout(
     const layout = findStoreProductMatrixInRows(sheetName, sheetToRows(sheet));
     if (layout) {
       return layout;
+    }
+  }
+
+  return null;
+}
+
+/** Excelピボット（行ラベル / 合計 売上数量 / 合計 売上金額）のシートを探す */
+export function findRowLabelPivotSheet(workbook: XLSX.WorkBook): RowLabelPivotLayout | null {
+  for (const sheetName of workbook.SheetNames) {
+    const sheet = workbook.Sheets[sheetName];
+    if (!sheet) {
+      continue;
+    }
+
+    const rows = sheetToRows(sheet);
+    for (let rowIndex = 0; rowIndex < Math.min(rows.length, 10); rowIndex += 1) {
+      const keys = (rows[rowIndex] ?? []).map(normalizeHeaderCell);
+      const labelCol = keys.findIndex((key) => key === "行ラベル");
+      if (labelCol < 0) {
+        continue;
+      }
+
+      const qtyCol = keys.findIndex((key) => key.includes("売上数量"));
+      const amountCol = keys.findIndex((key) => key.includes("売上金額"));
+      if (qtyCol < 0 || amountCol < 0) {
+        continue;
+      }
+
+      return { sheetName, headerRowIndex: rowIndex, labelCol, qtyCol, amountCol };
     }
   }
 
