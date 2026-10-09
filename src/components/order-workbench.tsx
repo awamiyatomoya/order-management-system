@@ -5403,6 +5403,7 @@ function WorkbenchPageIntro({ view }: { view: WorkbenchView }) {
 const sidebarGroupViews: Record<string, WorkbenchView[]> = {
   master: ["clients", "products", "deliveryDestinations", "stores"],
   retail: ["storeIntroductions", "sellIn", "sellOut", "sellOutFiles"],
+  sellOut: ["sellOut", "sellOutFiles"],
   orders: ["orderFiles", "history"],
 };
 
@@ -5588,7 +5589,7 @@ function MasterSidebar({
   const groupViews = sidebarGroupViews;
 
   const [openGroups, setOpenGroups] = useState<Record<string, boolean>>(() => {
-    const initial = { master: false, retail: false, orders: false };
+    const initial = { master: false, retail: false, sellOut: false, orders: false };
 
     Object.entries(groupViews).forEach(([groupId, views]) => {
       if (views.includes(currentView)) {
@@ -5663,33 +5664,43 @@ function MasterSidebar({
                 <div className="flex flex-col gap-1 border-l border-sidebar-border/70 pl-2">
                   {item.links.map((link) => {
                     if (link.type === "subgroup") {
+                      const isSubgroupOpen = openGroups[link.id] ?? false;
                       const hasActiveSubChild = link.links.some(
                         (child) => child.view === currentView,
                       );
 
                       return (
                         <div key={link.id} className="flex flex-col gap-1">
-                          <div
-                            className={`px-3 py-1.5 text-xs font-medium ${
+                          <button
+                            type="button"
+                            aria-expanded={isSubgroupOpen}
+                            onClick={() => toggleGroup(link.id)}
+                            className={`flex w-full items-center justify-between rounded-md px-3 py-1.5 text-left transition-colors ${
                               hasActiveSubChild
                                 ? "text-sidebar-accent-foreground"
-                                : "text-sidebar-foreground/60"
+                                : "text-sidebar-foreground/60 hover:bg-sidebar-accent/70 hover:text-sidebar-accent-foreground"
                             }`}
                           >
-                            {link.title}
-                          </div>
-                          <div className="flex flex-col gap-1 border-l border-sidebar-border/50 pl-2">
-                            {link.links.map((child) => (
-                              <SidebarLink
-                                key={child.href}
-                                href={child.href}
-                                label={child.label}
-                                isActive={currentView === child.view}
-                                selectedClientId={selectedClientId}
-                                nested
-                              />
-                            ))}
-                          </div>
+                            <span>{link.title}</span>
+                            <ChevronDown
+                              className={`h-4 w-4 shrink-0 transition-transform ${isSubgroupOpen ? "" : "-rotate-90"}`}
+                              aria-hidden="true"
+                            />
+                          </button>
+                          {isSubgroupOpen ? (
+                            <div className="flex flex-col gap-1 border-l border-sidebar-border/50 pl-2">
+                              {link.links.map((child) => (
+                                <SidebarLink
+                                  key={child.href}
+                                  href={child.href}
+                                  label={child.label}
+                                  isActive={currentView === child.view}
+                                  selectedClientId={selectedClientId}
+                                  nested
+                                />
+                              ))}
+                            </div>
+                          ) : null}
                         </div>
                       );
                     }
